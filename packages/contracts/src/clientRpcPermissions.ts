@@ -7,9 +7,11 @@ import {
   type AuthEnvironmentScope,
 } from "./auth.ts";
 import { WS_METHODS } from "./rpc.ts";
+import { PLUGIN_GUARDED_RPC_SCOPES } from "./plugins/host.ts";
 
 /** Incremental client enforcement; the server still authorizes every request. */
 export const CLIENT_GUARDED_RPC_SCOPES = {
+  ...PLUGIN_GUARDED_RPC_SCOPES,
   [WS_METHODS.serverRunStorageCleanup]: AuthSettingsWriteScope,
   [WS_METHODS.pullRequestsRunAction]: AuthSourceControlWriteScope,
   [WS_METHODS.pullRequestsUpdate]: AuthSourceControlWriteScope,
