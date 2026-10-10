@@ -26,7 +26,9 @@ const noTokenEnvironment = {
 
 /**
  * A stand-in for the Copilot CLI: `--version` prints a canned banner and
- * `--acp --stdio` runs a one-method ACP agent that answers `initialize`.
+ * `--acp` runs a one-method ACP agent that answers `initialize`. The shape
+ * mirrors Copilot CLI 1.0.95, which negotiates ACP v1 and advertises a
+ * terminal-only `copilot-login` auth method.
  */
 const ACP_AGENT_SOURCE = [
   'import * as NodeReadline from "node:readline";',
@@ -35,7 +37,7 @@ const ACP_AGENT_SOURCE = [
   '  process.stdout.write("GitHub Copilot CLI 1.0.95\\n");',
   "  process.exit(0);",
   "}",
-  'if (args[0] !== "--acp" || args[1] !== "--stdio") process.exit(1);',
+  'if (args.join(" ") !== "--acp") process.exit(1);',
   "for await (const line of NodeReadline.createInterface({ input: process.stdin })) {",
   "  const request = JSON.parse(line);",
   "  if (request.id === undefined) continue;",
@@ -49,9 +51,9 @@ const ACP_AGENT_SOURCE = [
   "      id: request.id,",
   "      result: {",
   "        protocolVersion: 1,",
-  '        agentInfo: { name: "copilot", version: "1.0.95" },',
-  "        agentCapabilities: { loadSession: true },",
-  '        authMethods: [{ id: "github-oauth", name: "Sign in with GitHub" }],',
+  '        agentInfo: { name: "Copilot", title: "Copilot", version: "1.0.95" },',
+  "        agentCapabilities: { loadSession: true, promptCapabilities: { image: true } },",
+  '        authMethods: [{ id: "copilot-login", name: "Log in with Copilot CLI" }],',
   "      },",
   '    }) + "\\n",',
   "  );",

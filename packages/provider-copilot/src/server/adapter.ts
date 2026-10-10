@@ -42,6 +42,26 @@ import {
 const COPILOT_PROVIDER = ProviderDriverKind.make("copilot");
 const DEFAULT_COPILOT_SETTINGS = Schema.decodeSync(CopilotSettings)({});
 const isAcpRequestError = Schema.is(EffectAcpErrors.AcpRequestError);
+// ACP's auth-required code. Copilot answers `session/new` and `authenticate`
+// with it while signed out; its only sign-in method is `copilot login` in a
+// terminal, which T3 cannot run from a headless session.
+const ACP_AUTH_REQUIRED_CODE = -32000;
+export const COPILOT_SIGNED_OUT_MESSAGE =
+  "GitHub Copilot CLI is not signed in. Run `copilot login` on the machine running T3 Code.";
+
+/** Turns Copilot's prompt errors into T3 failures, naming the sign-in fix for auth errors. */
+export function copilotPromptFailure(cause: unknown) {
+  if (!isAcpRequestError(cause)) {
+    return makeProviderFailure({ cause, class: "provider_error" });
+  }
+  const signedOut = cause.code === ACP_AUTH_REQUIRED_CODE;
+  return makeProviderFailure({
+    cause,
+    message: signedOut ? COPILOT_SIGNED_OUT_MESSAGE : cause.errorMessage,
+    code: String(cause.code),
+    class: signedOut ? "permission_error" : "provider_error",
+  });
+}
 
 /**
  * Copilot follows the ACP spec without extensions, so the shared defaults
@@ -101,13 +121,7 @@ function makeCopilotAcpAdapterFlavor(options: CopilotAdapterV2Options): AcpAdapt
           environment: { ...options.environment, ...processEnvironment },
           runtimeMode: copilotLaunchRuntimeMode(runtimePolicy),
         })),
-    promptFailure: (cause) =>
-      makeProviderFailure({
-        cause,
-        ...(isAcpRequestError(cause)
-          ? { message: cause.errorMessage, code: String(cause.code), class: "provider_error" }
-          : { class: "provider_error" }),
-      }),
+    promptFailure: copilotPromptFailure,
     ...(options.assertComplete === undefined ? {} : { assertComplete: options.assertComplete }),
   };
 }

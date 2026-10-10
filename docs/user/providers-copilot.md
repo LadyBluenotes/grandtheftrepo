@@ -16,8 +16,8 @@ recommended.
    Set **Binary path** if `copilot` is not on the host's `PATH`, then refresh
    provider status.
 
-Provider status does not check your login. If you are signed out, messages fail
-until you run `copilot login` on the host.
+Provider status does not check your login. If you are signed out, the first
+message fails with a sign-in error until you run `copilot login` on the host.
 
 ## Sign-in and tokens
 

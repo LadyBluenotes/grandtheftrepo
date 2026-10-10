@@ -54,13 +54,13 @@ interface CopilotAcpRuntimeInput extends Omit<
 }
 
 /**
- * Launch argv for a runtime mode. Permission flags are process-wide in
- * Copilot's ACP server, so a mode change reopens the session on a fresh
- * process. Every mode but Full access launches asking.
+ * Launch argv for a runtime mode. `--acp` alone is stdio mode (the CLI infers
+ * it; `--stdio` is accepted but undocumented in `copilot help`). Permission
+ * flags are process-wide in Copilot's ACP server, so a mode change reopens the
+ * session on a fresh process. Every mode but Full access launches asking.
  */
 export function copilotAcpSpawnArgs(runtimeMode?: RuntimeMode): ReadonlyArray<string> {
-  const base = ["--acp", "--stdio"];
-  return runtimeMode === "full-access" ? [...base, "--allow-all"] : base;
+  return runtimeMode === "full-access" ? ["--acp", "--allow-all"] : ["--acp"];
 }
 
 /**
@@ -141,31 +141,39 @@ export function resolveCopilotAcpModelId(model: string | null | undefined): stri
 
 /**
  * Apply a model selection to a freshly started session. T3's default slug and
- * Copilot's own `auto` keep the session's current model. A named model is sent
- * through the session's model config option; a session that advertises none
- * keeps its model rather than failing the turn.
+ * Copilot's own `auto` keep the session's current model. A named model goes
+ * through whichever switch the session advertised: the v2 model config option
+ * or the v1 `session/set_model` model state (Copilot 1.0 negotiates ACP v1).
+ * A session that advertises neither keeps its model rather than failing the turn.
  */
 export function applyCopilotAcpModelSelection<E>(input: {
-  readonly runtime: Pick<AcpSessionRuntime.AcpSessionRuntime["Service"], "setModel">;
+  readonly runtime: Pick<
+    AcpSessionRuntime.AcpSessionRuntime["Service"],
+    "setModel" | "setSessionModel"
+  >;
   readonly startResult: Pick<AcpSessionRuntime.AcpSessionRuntimeStartResult, "sessionSetupResult">;
   readonly requestedModelId: string;
   readonly mapError: (cause: EffectAcpErrors.AcpError) => E;
 }): Effect.Effect<string | undefined, E> {
-  const current = currentCopilotModelIdFromSessionSetup(input.startResult.sessionSetupResult);
+  const setup = input.startResult.sessionSetupResult;
+  const current = currentCopilotModelIdFromSessionSetup(setup);
   const requested = input.requestedModelId;
   if (requested === COPILOT_DEFAULT_MODEL_SLUG || requested === "auto" || requested === current) {
     return Effect.succeed(current);
   }
   const hasModelConfig =
-    input.startResult.sessionSetupResult.configOptions?.some(
-      (option) => option.category === "model",
-    ) === true;
-  if (!hasModelConfig) {
-    return Effect.succeed(current);
+    setup.configOptions?.some((option) => option.category === "model") === true;
+  if (hasModelConfig) {
+    return input.runtime
+      .setModel(requested)
+      .pipe(Effect.mapError(input.mapError), Effect.as(requested));
   }
-  return input.runtime
-    .setModel(requested)
-    .pipe(Effect.mapError(input.mapError), Effect.as(requested));
+  if (setup.models !== undefined && setup.models !== null) {
+    return input.runtime
+      .setSessionModel(requested)
+      .pipe(Effect.mapError(input.mapError), Effect.as(requested));
+  }
+  return Effect.succeed(current);
 }
 
 export function currentCopilotModelIdFromSessionSetup(

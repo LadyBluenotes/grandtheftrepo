@@ -15,14 +15,14 @@ import {
 
 describe("copilotAcpSpawnArgs", () => {
   it("launches the stdio ACP server asking unless T3 runs Full access", () => {
-    expect(copilotAcpSpawnArgs()).toEqual(["--acp", "--stdio"]);
-    expect(copilotAcpSpawnArgs("approval-required")).toEqual(["--acp", "--stdio"]);
-    expect(copilotAcpSpawnArgs("auto-accept-edits")).toEqual(["--acp", "--stdio"]);
-    expect(copilotAcpSpawnArgs("auto")).toEqual(["--acp", "--stdio"]);
+    expect(copilotAcpSpawnArgs()).toEqual(["--acp"]);
+    expect(copilotAcpSpawnArgs("approval-required")).toEqual(["--acp"]);
+    expect(copilotAcpSpawnArgs("auto-accept-edits")).toEqual(["--acp"]);
+    expect(copilotAcpSpawnArgs("auto")).toEqual(["--acp"]);
   });
 
   it("maps Full access to Copilot's allow-all switch", () => {
-    expect(copilotAcpSpawnArgs("full-access")).toEqual(["--acp", "--stdio", "--allow-all"]);
+    expect(copilotAcpSpawnArgs("full-access")).toEqual(["--acp", "--allow-all"]);
   });
 });
 
@@ -66,7 +66,7 @@ describe("buildCopilotAcpSpawnInput", () => {
       }),
     ).toEqual({
       command: "/opt/copilot/bin/copilot",
-      args: ["--acp", "--stdio"],
+      args: ["--acp"],
       cwd: "/tmp/project",
       env: { GH_TOKEN: "github_pat_test", COPILOT_AUTO_UPDATE: "false" },
     });
@@ -80,7 +80,7 @@ describe("buildCopilotAcpSpawnInput", () => {
       "full-access",
     );
     expect(spawn.command).toBe("copilot");
-    expect(spawn.args).toEqual(["--acp", "--stdio", "--allow-all"]);
+    expect(spawn.args).toEqual(["--acp", "--allow-all"]);
   });
 });
 
@@ -132,14 +132,21 @@ describe("currentCopilotModelIdFromSessionSetup", () => {
 describe("applyCopilotAcpModelSelection", () => {
   const makeRecordingRuntime = (failure?: EffectAcpErrors.AcpError) => {
     const modelCalls: Array<string> = [];
+    const sessionModelCalls: Array<string> = [];
     const runtime = {
       setModel: (model: string) =>
         Effect.gen(function* () {
           modelCalls.push(model);
           if (failure) return yield* failure;
         }),
+      setSessionModel: (modelId: string) =>
+        Effect.gen(function* () {
+          sessionModelCalls.push(modelId);
+          if (failure) return yield* failure;
+          return {};
+        }),
     };
-    return { runtime, modelCalls };
+    return { runtime, modelCalls, sessionModelCalls };
   };
 
   it.effect("sets a named model through the session's model config option", () =>
@@ -171,6 +178,28 @@ describe("applyCopilotAcpModelSelection", () => {
         ).toBe("gpt-5.3-codex");
       }
       expect(modelCalls).toEqual([]);
+    }),
+  );
+
+  it.effect("uses session/set_model when a v1 session advertises model state", () =>
+    Effect.gen(function* () {
+      const { runtime, modelCalls, sessionModelCalls } = makeRecordingRuntime();
+      const applied = yield* applyCopilotAcpModelSelection({
+        runtime,
+        startResult: {
+          sessionSetupResult: {
+            models: {
+              currentModelId: "gpt-5.3-codex",
+              availableModels: [{ modelId: "gpt-5.3-codex", name: "GPT-5.3 Codex" }],
+            },
+          },
+        },
+        requestedModelId: "claude-sonnet-4.5",
+        mapError: (cause) => cause.message,
+      });
+      expect(modelCalls).toEqual([]);
+      expect(sessionModelCalls).toEqual(["claude-sonnet-4.5"]);
+      expect(applied).toBe("claude-sonnet-4.5");
     }),
   );
 

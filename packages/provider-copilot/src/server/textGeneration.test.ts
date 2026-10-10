@@ -18,7 +18,7 @@ import { declineCopilotPermission, makeCopilotTextGeneration } from "./textGener
 const decodeCopilotSettings = Schema.decodeSync(CopilotSettings);
 
 /**
- * A fake `copilot --acp --stdio`: an ACP v2 agent whose `session/new`
+ * A fake `copilot --acp`: an ACP v2 agent whose `session/new`
  * advertises a model config option (v2 wire shape, `configId`), asks
  * permission for a tool call on every prompt, and then streams
  * `T3_ACP_PROMPT_RESPONSE_TEXT`. Under v2 `session/prompt` only acknowledges the
@@ -28,7 +28,7 @@ const TEXT_AGENT_SOURCE = [
   'import * as NodeFS from "node:fs";',
   'import * as NodeReadline from "node:readline";',
   "const args = process.argv.slice(2);",
-  'if (args[0] !== "--acp" || args[1] !== "--stdio") process.exit(1);',
+  'if (args.join(" ") !== "--acp") process.exit(1);',
   'const sessionId = "copilot-text-session";',
   'let currentModel = "gpt-5.3-codex";',
   "let nextId = 1000;",
