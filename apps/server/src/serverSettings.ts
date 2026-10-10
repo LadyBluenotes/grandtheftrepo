@@ -484,11 +484,11 @@ const TEXT_GENERATION_FALLBACK_DRIVERS = [
   "claudeAgent",
   "cursor",
   "grok",
-  "copilot",
   "muse",
   "pi",
   "opencode",
   "antigravity",
+  "copilot",
 ].map((driver) => ProviderDriverKind.make(driver));
 
 /** ACP Registry instances reject every application text-generation operation. */

@@ -1,4 +1,3 @@
-import { makeProviderFailure } from "@t3tools/provider-core/server/failure";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import { resolveSelfInvocation, type SelfInvocation } from "@t3tools/shared/nodeRuntime";
 import { ProviderDriverKind, type OrchestrationV2ProviderCapabilities } from "@t3tools/contracts";
@@ -7,14 +6,12 @@ import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
-import type * as Scope from "effect/Scope";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
-import * as EffectAcpErrors from "effect-acp/errors";
 
 import * as McpProviderSessions from "@t3tools/provider-core/server/McpProviderSessions";
 import * as ProviderHost from "@t3tools/provider-core/server/ProviderHost";
 import { makeAcpNativeLoggerFactory } from "@t3tools/provider-acp/server/nativeLogging";
-import * as AcpSessionRuntime from "@t3tools/provider-acp/server/AcpSessionRuntime";
+import type * as AcpSessionRuntime from "@t3tools/provider-acp/server/AcpSessionRuntime";
 import * as ProviderEventLoggers from "@t3tools/provider-core/server/ProviderEventLoggers";
 import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
 import * as ProviderContinuationRequests from "@t3tools/provider-core/server/ProviderContinuationRequests";
@@ -28,7 +25,6 @@ import {
   AcpProviderCapabilitiesV2,
   makeAcpAdapterV2,
   type AcpAdapterV2Flavor,
-  type AcpAdapterV2RuntimeInput,
 } from "@t3tools/provider-acp/server/adapter";
 
 import { CopilotSettings } from "../settings.ts";
@@ -41,33 +37,11 @@ import {
 
 const COPILOT_PROVIDER = ProviderDriverKind.make("copilot");
 const DEFAULT_COPILOT_SETTINGS = Schema.decodeSync(CopilotSettings)({});
-const isAcpRequestError = Schema.is(EffectAcpErrors.AcpRequestError);
-// ACP's auth-required code. Copilot answers `session/new` and `authenticate`
-// with it while signed out; its only sign-in method is `copilot login` in a
-// terminal, which T3 cannot run from a headless session.
-const ACP_AUTH_REQUIRED_CODE = -32000;
-export const COPILOT_SIGNED_OUT_MESSAGE =
-  "GitHub Copilot CLI is not signed in. Run `copilot login` on the machine running T3 Code.";
-
-/** Turns Copilot's prompt errors into T3 failures, naming the sign-in fix for auth errors. */
-export function copilotPromptFailure(cause: unknown) {
-  if (!isAcpRequestError(cause)) {
-    return makeProviderFailure({ cause, class: "provider_error" });
-  }
-  const signedOut = cause.code === ACP_AUTH_REQUIRED_CODE;
-  return makeProviderFailure({
-    cause,
-    message: signedOut ? COPILOT_SIGNED_OUT_MESSAGE : cause.errorMessage,
-    code: String(cause.code),
-    class: signedOut ? "permission_error" : "provider_error",
-  });
-}
 
 /**
  * Copilot follows the ACP spec without extensions, so the shared defaults
- * mostly hold. It receives T3's MCP server on `session/new` and calls its
- * tools (as `t3-code-<tool>`), and it switches models in a running session
- * through its model config option or v1 model state.
+ * mostly hold. It receives T3's MCP server on `session/new`, and it switches
+ * models in a running session through its model config option or v1 model state.
  */
 const CopilotProviderCapabilitiesV2 = {
   ...AcpProviderCapabilitiesV2,
@@ -88,17 +62,10 @@ export interface CopilotAdapterV2Options {
   readonly selfInvocation: SelfInvocation;
   readonly nativeLogging?: Parameters<typeof makeAcpAdapterV2>[0]["nativeLogging"];
   readonly continuationRequests?: Parameters<typeof makeAcpAdapterV2>[0]["continuationRequests"];
-  readonly testHooks?: Parameters<typeof makeAcpAdapterV2>[0]["testHooks"];
-  /** Receives each session's live options so the driver can publish Copilot's catalog. */
-  readonly onSessionConfigurationUpdate?: AcpAdapterV2Flavor["onSessionConfigurationUpdate"];
-  readonly makeRuntime?: (
-    input: AcpAdapterV2RuntimeInput,
-  ) => Effect.Effect<
-    AcpSessionRuntime.AcpSessionRuntime["Service"],
-    EffectAcpErrors.AcpError,
-    ChildProcessSpawner.ChildProcessSpawner | Crypto.Crypto | Scope.Scope
-  >;
-  readonly assertComplete?: Effect.Effect<void, EffectAcpErrors.AcpError>;
+  /** Sees each new session's setup, which is where Copilot first lists its models and options. */
+  readonly onSessionSetup?: (
+    setup: AcpSessionRuntime.AcpSessionRuntimeStartResult["sessionSetupResult"],
+  ) => Effect.Effect<void>;
 }
 
 /** The flavor runs the Copilot CLI's ACP server through the adapter's spawner. */
@@ -111,28 +78,23 @@ function makeCopilotAcpAdapterFlavor(options: CopilotAdapterV2Options): AcpAdapt
     supportsCompaction: true,
     resolveModelId: (selection) => resolveCopilotAcpModelId(selection.model),
     applyModelSelection: ({ runtime, startResult, modelSelection }) =>
-      applyCopilotAcpModelSelection({
-        runtime,
-        startResult,
-        requestedModelId: resolveCopilotAcpModelId(modelSelection.model),
-        mapError: (cause) => cause,
+      (options.onSessionSetup?.(startResult.sessionSetupResult) ?? Effect.void).pipe(
+        Effect.andThen(
+          applyCopilotAcpModelSelection({
+            runtime,
+            startResult,
+            requestedModelId: resolveCopilotAcpModelId(modelSelection.model),
+            mapError: (cause) => cause,
+          }),
+        ),
+      ),
+    makeRuntime: ({ runtimePolicy, ...input }) =>
+      makeCopilotAcpRuntime({
+        ...input,
+        copilotSettings: options.settings,
+        environment: options.environment,
+        runtimeMode: copilotLaunchRuntimeMode(runtimePolicy),
       }),
-    makeRuntime:
-      options.makeRuntime ??
-      (({ runtimePolicy, processEnvironment, ...input }) =>
-        makeCopilotAcpRuntime({
-          ...input,
-          copilotSettings: options.settings,
-          // Scoped MCP credentials ride along so Copilot's shell can reach T3's
-          // tools when the agent drops the `mcpServers` it was handed.
-          environment: { ...options.environment, ...processEnvironment },
-          runtimeMode: copilotLaunchRuntimeMode(runtimePolicy),
-        })),
-    promptFailure: copilotPromptFailure,
-    ...(options.onSessionConfigurationUpdate === undefined
-      ? {}
-      : { onSessionConfigurationUpdate: options.onSessionConfigurationUpdate }),
-    ...(options.assertComplete === undefined ? {} : { assertComplete: options.assertComplete }),
   };
 }
 
@@ -147,7 +109,6 @@ const makeCopilotAdapterV2 = Effect.fn("makeCopilotAdapterV2")(function* (
     ...(options.continuationRequests === undefined
       ? {}
       : { continuationRequests: options.continuationRequests }),
-    ...(options.testHooks === undefined ? {} : { testHooks: options.testHooks }),
   });
 });
 
@@ -164,7 +125,7 @@ export type CopilotAdapterV2DriverEnv =
 /** The instance adapter; the driver adds its catalog hook, the registry entry has none. */
 export const createCopilotAdapterV2 = Effect.fn("createCopilotAdapterV2")(function* (
   input: ProviderAdapterDriverCreateInput<CopilotSettings>,
-  hooks: Pick<CopilotAdapterV2Options, "onSessionConfigurationUpdate"> = {},
+  hooks: Pick<CopilotAdapterV2Options, "onSessionSetup"> = {},
 ) {
   const hostEnvironment = yield* HostProcess.Environment;
   const selfInvocation = yield* resolveSelfInvocation();

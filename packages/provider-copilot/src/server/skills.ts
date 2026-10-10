@@ -32,7 +32,7 @@ const CopilotSkillList = Schema.fromJsonString(
 );
 const decodeCopilotSkillList = Schema.decodeUnknownOption(CopilotSkillList);
 
-export class CopilotSkillsProbeError extends Schema.TaggedError<CopilotSkillsProbeError>()(
+class CopilotSkillsProbeError extends Schema.TaggedError<CopilotSkillsProbeError>()(
   "CopilotSkillsProbeError",
   {
     stage: Schema.Literals(["spawn", "timeout", "exit", "decode"]),

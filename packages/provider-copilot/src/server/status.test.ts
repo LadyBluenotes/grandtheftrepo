@@ -11,25 +11,17 @@ import {
   buildInitialCopilotProviderSnapshot,
   checkCopilotProviderStatus,
   copilotAcpFailureMessage,
-  copilotAuthFromEnvironment,
   copilotModelsFromSettings,
 } from "./status.ts";
 
 const decodeCopilotSettings = Schema.decodeSync(CopilotSettings);
 
-/** Environment with every token variable cleared, so the host's own tokens cannot leak in. */
-const noTokenEnvironment = {
-  ...process.env,
-  COPILOT_GITHUB_TOKEN: "",
-  GH_TOKEN: "",
-  GITHUB_TOKEN: "",
-};
-
 /**
  * A stand-in for the Copilot CLI: `--version` prints a canned banner and
- * `--acp` runs a one-method ACP agent that answers `initialize`. The shape
- * mirrors Copilot CLI 1.0.95, which negotiates ACP v1 and advertises a
- * terminal-only `copilot-login` auth method.
+ * `--acp` runs an ACP agent that answers `initialize` and `authenticate`. The
+ * shape mirrors Copilot CLI 1.0.95, which negotiates ACP v1, advertises a
+ * `copilot-login` auth method, and answers `authenticate` with -32000 while
+ * signed out (`T3_COPILOT_SIGNED_OUT=1`).
  */
 const ACP_AGENT_SOURCE = [
   'import * as NodeReadline from "node:readline";',
@@ -46,6 +38,12 @@ const ACP_AGENT_SOURCE = [
   "for await (const line of NodeReadline.createInterface({ input: process.stdin })) {",
   "  const request = JSON.parse(line);",
   "  if (request.id === undefined) continue;",
+  '  if (request.method === "authenticate") {',
+  "    process.stdout.write(JSON.stringify(process.env.T3_COPILOT_SIGNED_OUT",
+  '      ? { jsonrpc: "2.0", id: request.id, error: { code: -32000, message: "Authentication required" } }',
+  '      : { jsonrpc: "2.0", id: request.id, result: {} }) + "\\n");',
+  "    continue;",
+  "  }",
   '  if (request.method !== "initialize") {',
   '    process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id: request.id, error: { code: -32601, message: "Method not found" } }) + "\\n");',
   "    continue;",
@@ -66,19 +64,8 @@ const ACP_AGENT_SOURCE = [
   "",
 ].join("\n");
 
-describe("copilotAuthFromEnvironment", () => {
-  it("reports a token variable as API-key auth and otherwise stays unknown", () => {
-    expect(copilotAuthFromEnvironment({ GH_TOKEN: "github_pat_test" })).toEqual({
-      status: "authenticated",
-      type: "api_key",
-      label: "GitHub token",
-    });
-    expect(copilotAuthFromEnvironment({ GH_TOKEN: "" })).toEqual({ status: "unknown" });
-  });
-});
-
 describe("copilotModelsFromSettings", () => {
-  it("replaces the default sentinel with discovered models and shares their options", () => {
+  it("keeps the default sentinel first and shares the session's options with every model", () => {
     const capabilities = {
       optionDescriptors: [
         {
@@ -90,16 +77,19 @@ describe("copilotModelsFromSettings", () => {
       ],
     };
     const models = copilotModelsFromSettings(["my-custom"], {
-      models: [
-        { slug: "gpt-5.4", name: "GPT-5.4", isCustom: false, isDefault: true, capabilities },
-      ],
+      models: [{ slug: "gpt-5.4", name: "GPT-5.4", isCustom: false, capabilities }],
       capabilities,
     });
     expect(models.map((model) => [model.slug, model.isDefault ?? false, model.isCustom])).toEqual([
-      ["gpt-5.4", true, false],
+      ["default", true, false],
+      ["gpt-5.4", false, false],
       ["my-custom", false, true],
     ]);
-    expect(models[1]?.capabilities).toEqual(capabilities);
+    expect(models.map((model) => model.capabilities)).toEqual([
+      capabilities,
+      capabilities,
+      capabilities,
+    ]);
   });
 });
 
@@ -147,7 +137,7 @@ it.layer(NodeServices.layer)("checkCopilotProviderStatus", (it) => {
           enabled: true,
           binaryPath: "/definitely/not/installed/copilot-binary",
         }),
-        noTokenEnvironment,
+        process.env,
       );
       expect(snapshot.installed).toBe(false);
       expect(snapshot.status).toBe("error");
@@ -173,7 +163,7 @@ it.layer(NodeServices.layer)("checkCopilotProviderStatus", (it) => {
           });
           return yield* checkCopilotProviderStatus(
             decodeCopilotSettings({ enabled: true, binaryPath }),
-            noTokenEnvironment,
+            process.env,
           );
         }),
       );
@@ -184,7 +174,7 @@ it.layer(NodeServices.layer)("checkCopilotProviderStatus", (it) => {
     }),
   );
 
-  it.effect("reports ready once the ACP server answers initialize, without opening a session", () =>
+  it.effect("reports ready and signed in once the ACP server accepts authenticate", () =>
     Effect.gen(function* () {
       const snapshot = yield* Effect.scoped(
         Effect.gen(function* () {
@@ -197,14 +187,17 @@ it.layer(NodeServices.layer)("checkCopilotProviderStatus", (it) => {
           });
           return yield* checkCopilotProviderStatus(
             decodeCopilotSettings({ enabled: true, binaryPath, customModels: ["gpt-5.3-codex"] }),
-            noTokenEnvironment,
+            { ...process.env, T3_COPILOT_SIGNED_OUT: "" },
           );
         }),
       );
       expect(snapshot.status).toBe("ready");
       expect(snapshot.version).toBe("1.0.95");
-      // Only a session can tell whether `copilot login` ran; the probe never opens one.
-      expect(snapshot.auth).toEqual({ status: "unknown" });
+      expect(snapshot.auth).toEqual({
+        status: "authenticated",
+        type: "cached_token",
+        label: "GitHub account",
+      });
       expect(snapshot.models.map((model) => [model.slug, model.isDefault ?? false])).toEqual([
         ["default", true],
         ["gpt-5.3-codex", false],
@@ -214,9 +207,7 @@ it.layer(NodeServices.layer)("checkCopilotProviderStatus", (it) => {
         "context",
         "usage",
         "env",
-        "model",
         "mcp",
-        "plan",
         "review",
         "research",
         "session",
@@ -233,12 +224,12 @@ it.layer(NodeServices.layer)("checkCopilotProviderStatus", (it) => {
     }),
   );
 
-  it.effect("treats a token variable as authenticated", () =>
+  it.effect("reports a signed-out CLI as needing `copilot login`", () =>
     Effect.gen(function* () {
       const snapshot = yield* Effect.scoped(
         Effect.gen(function* () {
           const fs = yield* FileSystem.FileSystem;
-          const dir = yield* fs.makeTempDirectoryScoped({ prefix: "t3code-copilot-token-" });
+          const dir = yield* fs.makeTempDirectoryScoped({ prefix: "t3code-copilot-signedout-" });
           const binaryPath = writeFakeCli({
             directory: dir,
             name: "copilot",
@@ -246,16 +237,14 @@ it.layer(NodeServices.layer)("checkCopilotProviderStatus", (it) => {
           });
           return yield* checkCopilotProviderStatus(
             decodeCopilotSettings({ enabled: true, binaryPath }),
-            { ...noTokenEnvironment, COPILOT_GITHUB_TOKEN: "github_pat_test" },
+            { ...process.env, T3_COPILOT_SIGNED_OUT: "1" },
           );
         }),
       );
-      expect(snapshot.status).toBe("ready");
-      expect(snapshot.auth).toEqual({
-        status: "authenticated",
-        type: "api_key",
-        label: "GitHub token",
-      });
+      expect(snapshot.installed).toBe(true);
+      expect(snapshot.status).toBe("error");
+      expect(snapshot.auth).toEqual({ status: "unauthenticated" });
+      expect(snapshot.message).toContain("copilot login");
     }),
   );
 
@@ -280,7 +269,7 @@ it.layer(NodeServices.layer)("checkCopilotProviderStatus", (it) => {
           });
           return yield* checkCopilotProviderStatus(
             decodeCopilotSettings({ enabled: true, binaryPath }),
-            noTokenEnvironment,
+            process.env,
           );
         }),
       );

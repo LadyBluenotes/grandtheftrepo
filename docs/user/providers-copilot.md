@@ -15,8 +15,8 @@ CLI 0.0.397 or newer is required and 1.0 or newer is recommended.
    default; set **Binary path** if `copilot` is not on the host's `PATH`, then
    refresh provider status. Turn the provider off there if you do not use it.
 
-Provider status does not check your login. If you are signed out, the first
-message fails with a sign-in error until you run `copilot login` on the host.
+Provider status reports whether the CLI is signed in. While signed out, Copilot
+shows a sign-in error until you run `copilot login` on the host and refresh.
 
 ## Sign-in and tokens
 
@@ -37,8 +37,8 @@ once a session exists. Until then the picker offers **Copilot default**, the mod
 the CLI is configured with (`COPILOT_MODEL` or its `settings.json`). After signing
 in, use **Refresh provider status** with models in **Settings → Providers**, or
 **Refresh models** in the thread settings on mobile: T3 Code opens a short
-Copilot session, reads its catalog, and closes it. The list also updates on its
-own whenever a Copilot thread runs. Switching models or options applies on the
+Copilot session, reads its catalog, and closes it. The list also fills in on its
+own the first time a Copilot thread runs. Switching models or options applies on the
 next message in the same session. Model IDs Copilot does not list can still be
 added under **Custom models**.
 
@@ -58,8 +58,8 @@ still apply, so those actions do not ask again.
 
 Copilot can use T3 Code's tools. Its project, personal, plugin, and built-in
 skills appear in the composer's `$` menu, and its built-in commands such as
-`/context`, `/usage`, `/model`, `/plan`, and `/review` appear under **Provider**
-in the `/` menu. The Usage page reads Copilot's session logs under `~/.copilot`
+`/context`, `/usage`, and `/review` appear under **Provider** in the `/` menu.
+Use T3 Code's own `/model` and `/plan` instead of Copilot's. The Usage page reads Copilot's session logs under `~/.copilot`
 or `COPILOT_HOME`. Conversation rewind is unavailable: a rollback restores files
 and starts a fresh Copilot session.
 

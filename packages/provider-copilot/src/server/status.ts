@@ -1,10 +1,10 @@
 /**
  * Snapshot and probe layer for the GitHub Copilot CLI. Health is `copilot
- * --version`; ACP support is confirmed with a bare `initialize`, which never
- * opens a session, so it cannot start MCP servers, run hooks, or prompt for
- * login. Copilot reports no models before a session exists, so the picker
- * offers the CLI's configured default until a session's discovery supplies
- * the real list, plus the user's custom model IDs.
+ * --version`; ACP support and sign-in are confirmed with `initialize` plus
+ * `authenticate`, which never open a session, so the probe cannot start MCP
+ * servers or run hooks. Copilot reports no models before a session exists, so
+ * the picker offers the CLI's configured default until a session's discovery
+ * supplies the real list, plus the user's custom model IDs.
  */
 import {
   type CustomModelSetting,
@@ -27,6 +27,7 @@ import * as Result from "effect/Result";
 import * as HttpClient from "effect/http/HttpClient";
 import * as ChildProcess from "effect/process/ChildProcess";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
+import type * as EffectAcpErrors from "effect-acp/errors";
 
 import * as ProviderLatestVersions from "@t3tools/provider-core/server/ProviderLatestVersions";
 import {
@@ -42,12 +43,12 @@ import {
   enrichProviderSnapshotWithVersionAdvisory,
   type ProviderMaintenanceCapabilities,
 } from "@t3tools/provider-core/server/maintenanceResolver";
+import { selectAcpAgentAuthMethod } from "@t3tools/provider-acp/server/AcpSessionRuntime";
 
 import type { CopilotSettings } from "../settings.ts";
 import {
   COPILOT_DEFAULT_MODEL_SLUG,
   COPILOT_SUPPORTED_RUNTIME_MODES,
-  hasCopilotTokenInEnvironment,
   makeCopilotAcpRuntime,
 } from "./acpSupport.ts";
 import type { CopilotDiscovery } from "./discovery.ts";
@@ -66,15 +67,22 @@ const EMPTY_CAPABILITIES: ModelCapabilities = createModelCapabilities({
 });
 
 const VERSION_PROBE_TIMEOUT_MS = 4_000;
-// `initialize` is a single local round trip, so this is generous even on slow machines.
-const COPILOT_ACP_INITIALIZE_TIMEOUT_MS = 8_000;
+// `initialize` and `authenticate` are local round trips; the stored login is
+// checked without a network call, so this is generous even on slow machines.
+const COPILOT_ACP_PROBE_TIMEOUT_MS = 8_000;
 /** The first Copilot CLI release whose `--acp` server shipped (public preview). */
 const COPILOT_MINIMUM_ACP_VERSION = "0.0.397";
+// ACP's auth-required code. Copilot answers `authenticate` and `session/new`
+// with it while signed out; its only sign-in is `copilot login` in a terminal.
+const ACP_AUTH_REQUIRED_CODE = -32000;
+export const COPILOT_SIGNED_OUT_MESSAGE =
+  "GitHub Copilot CLI is not signed in. Run `copilot login` on the machine running T3 Code.";
 
 /**
  * Built-in commands Copilot runs when sent as prompt text over ACP. The CLI
  * advertises the live list only after a session opens, which the probe never
- * does. shortcut: the documented set as of CLI 1.0; replace with
+ * does. shortcut: the documented set as of CLI 1.0 minus `/model` and `/plan`,
+ * which T3's own composer commands cover; replace with
  * `available_commands_update` once a session-backed catalog exists.
  */
 const COPILOT_SLASH_COMMANDS: ReadonlyArray<ServerProviderSlashCommand> = [
@@ -82,17 +90,7 @@ const COPILOT_SLASH_COMMANDS: ReadonlyArray<ServerProviderSlashCommand> = [
   { name: "context", description: "Show context window token usage" },
   { name: "usage", description: "Show session usage metrics per model" },
   { name: "env", description: "Show loaded instructions, MCP servers, skills, and agents" },
-  {
-    name: "model",
-    description: "Show or change the session's model",
-    input: { hint: "[MODEL | auto]" },
-  },
   { name: "mcp", description: "Show MCP servers", input: { hint: "list | show SERVER-NAME" } },
-  {
-    name: "plan",
-    description: "Create an implementation plan before coding",
-    input: { hint: "[PROMPT]" },
-  },
   {
     name: "review",
     description: "Run the code review agent on the current changes",
@@ -160,16 +158,23 @@ export function buildInitialCopilotProviderSnapshot(
   });
 }
 
-/** Discovered models replace the default sentinel; their options ride on custom models too. */
+/**
+ * The default sentinel stays first and selected; discovered models follow it,
+ * then custom IDs. The session's options ride on every entry so the composer
+ * can drive them whichever model is picked.
+ */
 export function copilotModelsFromSettings(
   customModels: ReadonlyArray<CustomModelSetting> | undefined,
   discovery?: CopilotDiscovery,
 ): ReadonlyArray<ServerProviderModel> {
-  const discovered = discovery?.models ?? [];
+  const capabilities = discovery?.capabilities ?? EMPTY_CAPABILITIES;
   return providerModelsFromSettings(
-    discovered.length > 0 ? discovered : COPILOT_BUILT_IN_MODELS,
+    [
+      ...COPILOT_BUILT_IN_MODELS.map((model) => ({ ...model, capabilities })),
+      ...(discovery?.models ?? []),
+    ],
     customModels ?? [],
-    discovery?.capabilities ?? EMPTY_CAPABILITIES,
+    capabilities,
   );
 }
 
@@ -191,14 +196,12 @@ const runCopilotCliCommand = (
   });
 
 /**
- * Confirms the installed CLI speaks ACP. This stops after `initialize`: no
- * `authenticate`, no `session/new`, so the probe cannot open a browser login or
- * boot the workspace's MCP servers.
+ * Confirms the installed CLI speaks ACP and whether it is signed in. Copilot's
+ * `authenticate` only checks its stored login or token variable: it succeeds
+ * when one exists and fails with the auth-required code otherwise, so the
+ * probe never opens a browser, a device-code flow, or a session.
  */
-const probeCopilotAcpInitialize = (
-  copilotSettings: CopilotSettings,
-  environment: NodeJS.ProcessEnv,
-) =>
+const probeCopilotAcp = (copilotSettings: CopilotSettings, environment: NodeJS.ProcessEnv) =>
   Effect.gen(function* () {
     const acp = yield* makeCopilotAcpRuntime({
       copilotSettings,
@@ -206,17 +209,24 @@ const probeCopilotAcpInitialize = (
       cwd: process.cwd(),
       clientInfo: { name: "t3-code-provider-probe", version: "0.0.0" },
     });
-    yield* acp.initialize();
+    const initialized = yield* acp.initialize();
+    const authMethod = selectAcpAgentAuthMethod(initialized.authMethods);
+    if (authMethod === undefined || acp.authenticate === undefined) {
+      return { status: "unknown" } satisfies ServerProviderAuth;
+    }
+    return yield* acp.authenticate(authMethod.id).pipe(
+      Effect.as({
+        status: "authenticated",
+        type: "cached_token",
+        label: "GitHub account",
+      } satisfies ServerProviderAuth),
+      Effect.catchIf(
+        (error: EffectAcpErrors.AcpError) =>
+          error._tag === "AcpRequestError" && error.code === ACP_AUTH_REQUIRED_CODE,
+        () => Effect.succeed({ status: "unauthenticated" } satisfies ServerProviderAuth),
+      ),
+    );
   }).pipe(Effect.scoped);
-
-/** How T3 reports Copilot's sign-in state without opening a session. */
-export function copilotAuthFromEnvironment(environment: NodeJS.ProcessEnv): ServerProviderAuth {
-  // A token variable replaces the stored login. Without one, only a session
-  // can tell whether `copilot login` ran, so the state stays unknown here.
-  return hasCopilotTokenInEnvironment(environment)
-    ? { status: "authenticated", type: "api_key", label: "GitHub token" }
-    : { status: "unknown" };
-}
 
 export function copilotAcpFailureMessage(version: string | null): string {
   return version !== null && compareSemverVersions(version, COPILOT_MINIMUM_ACP_VERSION) < 0
@@ -320,20 +330,17 @@ export const checkCopilotProviderStatus = Effect.fn("checkCopilotProviderStatus"
     });
   }
 
-  const auth = copilotAuthFromEnvironment(environment);
-
   const skills = yield* discoverCopilotSkills(copilotSettings, environment, cwd).pipe(
     Effect.tapError((cause) => Effect.logDebug("Copilot skill discovery failed.", { cause })),
     Effect.orElseSucceed(() => []),
   );
 
-  const acpExit = yield* probeCopilotAcpInitialize(copilotSettings, environment).pipe(
-    Effect.timeoutOption(COPILOT_ACP_INITIALIZE_TIMEOUT_MS),
+  const acpExit = yield* probeCopilotAcp(copilotSettings, environment).pipe(
+    Effect.timeoutOption(COPILOT_ACP_PROBE_TIMEOUT_MS),
     Effect.exit,
   );
-  const acpFailed = Exit.isFailure(acpExit) || Option.isNone(acpExit.value);
-  if (acpFailed) {
-    yield* Effect.logWarning("Copilot ACP initialize probe failed or timed out.", {
+  if (Exit.isFailure(acpExit) || Option.isNone(acpExit.value)) {
+    yield* Effect.logWarning("Copilot ACP probe failed or timed out.", {
       errorTag: Exit.isFailure(acpExit) ? causeErrorTag(acpExit.cause) : "Timeout",
     });
     return buildServerProvider({
@@ -346,8 +353,26 @@ export const checkCopilotProviderStatus = Effect.fn("checkCopilotProviderStatus"
         installed: true,
         version,
         status: "error",
-        auth,
+        auth: { status: "unknown" },
         message: copilotAcpFailureMessage(version),
+      },
+    });
+  }
+
+  const auth = acpExit.value.value;
+  if (auth.status === "unauthenticated") {
+    return buildServerProvider({
+      presentation: COPILOT_PRESENTATION,
+      enabled: true,
+      checkedAt,
+      models,
+      skills,
+      probe: {
+        installed: true,
+        version,
+        status: "error",
+        auth,
+        message: COPILOT_SIGNED_OUT_MESSAGE,
       },
     });
   }

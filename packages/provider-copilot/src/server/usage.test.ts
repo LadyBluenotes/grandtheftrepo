@@ -2,6 +2,15 @@ import { describe, expect, it } from "@effect/vitest";
 
 import { copilotUsageFormat, initialCopilotScanState, parseCopilotLine } from "./usage.ts";
 
+// The envelope carries no session id; it comes from the file's `session.start`.
+const sessionStart = JSON.stringify({
+  type: "session.start",
+  id: "evt-0",
+  parentId: null,
+  timestamp: "2026-10-10T09:59:00.000Z",
+  data: { sessionId: "session-1", version: 1 },
+});
+
 const checkpoint = (
   timestamp: string,
   metrics: ReadonlyArray<{ modelId: string | null; usage?: Record<string, number> }>,
@@ -11,7 +20,6 @@ const checkpoint = (
     id: "evt",
     parentId: null,
     timestamp,
-    sessionId: "session-1",
     data: {
       totalNanoAiu: 0,
       providerModelMetrics: metrics.map((entry) => ({
@@ -25,6 +33,7 @@ const checkpoint = (
 describe("parseCopilotLine", () => {
   it("reports each checkpoint as the growth since the previous one per model", () => {
     const state = initialCopilotScanState();
+    expect(parseCopilotLine(sessionStart, state)).toEqual([]);
     const first = parseCopilotLine(
       checkpoint("2026-10-10T10:00:00.000Z", [
         {
@@ -135,6 +144,7 @@ describe("parseCopilotLine", () => {
       parseCopilotLine(checkpoint("2026-10-10T10:00:00.000Z", [{ modelId: "gpt-5.4" }]), state),
     ).toEqual([]);
     expect(copilotUsageFormat.mightCarryUsage('{"type":"session.usage_checkpoint"}')).toBe(true);
+    expect(copilotUsageFormat.mightCarryUsage(sessionStart)).toBe(true);
     expect(copilotUsageFormat.mightCarryUsage('{"type":"assistant.usage"}')).toBe(false);
   });
 });

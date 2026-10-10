@@ -34,13 +34,14 @@ const CumulativeUsage = Schema.Struct({
 });
 type CumulativeUsage = typeof CumulativeUsage.Type;
 
-/** Last cumulative totals seen per model id in the file being read. */
+/** The file's session id (from its `session.start`) and the last cumulative totals per model. */
 export const CopilotScanState = Schema.Struct({
+  sessionId: Schema.mutableKey(Schema.String),
   models: Schema.mutableKey(Schema.Record(Schema.String, CumulativeUsage)),
 });
 export type CopilotScanState = typeof CopilotScanState.Type;
 
-export const initialCopilotScanState = (): CopilotScanState => ({ models: {} });
+export const initialCopilotScanState = (): CopilotScanState => ({ sessionId: "", models: {} });
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -70,11 +71,14 @@ function usageDelta(
   ) as unknown as CumulativeUsage;
 }
 
+/**
+ * Copilot does not say whether `inputTokens` includes the cached tokens. This
+ * assumes it does when the count is large enough to, and that a smaller count
+ * already excludes them. Both halves are a guess until a signed-in log confirms it.
+ */
 function deltaToTotals(delta: CumulativeUsage): UsageTokenTotals {
   const cached = delta.cacheReadTokens + delta.cacheWriteTokens;
   return {
-    // Copilot's input count includes the cached part when it is large enough to;
-    // a count below the cache figures already excludes it.
     uncachedInputTokens:
       delta.inputTokens >= cached ? delta.inputTokens - cached : delta.inputTokens,
     cachedInputTokens: delta.cacheReadTokens,
@@ -85,12 +89,15 @@ function deltaToTotals(delta: CumulativeUsage): UsageTokenTotals {
 }
 
 function parseCopilotRecord(parsed: unknown, state: CopilotScanState): readonly UsageRecord[] {
-  if (!isRecord(parsed) || parsed.type !== "session.usage_checkpoint") return [];
-  const timestampMs = parseTimestampMs(parsed.timestamp);
+  if (!isRecord(parsed) || !isRecord(parsed.data)) return [];
   const data = parsed.data;
-  if (timestampMs === null || !isRecord(data) || !Array.isArray(data.providerModelMetrics)) {
+  if (parsed.type === "session.start") {
+    if (typeof data.sessionId === "string") state.sessionId = data.sessionId;
     return [];
   }
+  if (parsed.type !== "session.usage_checkpoint") return [];
+  const timestampMs = parseTimestampMs(parsed.timestamp);
+  if (timestampMs === null || !Array.isArray(data.providerModelMetrics)) return [];
   const records: UsageRecord[] = [];
   for (const entry of data.providerModelMetrics) {
     if (!isRecord(entry) || typeof entry.modelId !== "string") continue;
@@ -104,7 +111,7 @@ function parseCopilotRecord(parsed: unknown, state: CopilotScanState): readonly 
       provider: "copilot",
       timestampMs,
       model,
-      sessionId: typeof parsed.sessionId === "string" ? parsed.sessionId : "",
+      sessionId: state.sessionId,
       totals,
       // Copilot accounts in AI credits, not dollars; T3 prices the tokens itself.
       reportedCostUsd: null,
@@ -129,10 +136,10 @@ export const copilotUsageFormat: TranscriptUsageFormat<CopilotScanState> = {
   selectFields: {
     type: true,
     timestamp: true,
-    sessionId: true,
-    data: { providerModelMetrics: true },
+    data: { sessionId: true, providerModelMetrics: true },
   },
-  mightCarryUsage: (line) => line.includes('"session.usage_checkpoint"'),
+  mightCarryUsage: (line) =>
+    line.includes('"session.usage_checkpoint"') || line.includes('"session.start"'),
   parseLine: parseCopilotLine,
   parseProjected: parseCopilotRecord,
   state: { initial: initialCopilotScanState, schema: CopilotScanState },

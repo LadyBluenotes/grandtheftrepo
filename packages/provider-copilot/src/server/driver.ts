@@ -7,7 +7,6 @@
 import { ProviderDriverKind } from "@t3tools/contracts";
 import * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
-import * as Equal from "effect/Equal";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 import * as Ref from "effect/Ref";
@@ -41,11 +40,7 @@ import {
 } from "@t3tools/provider-core/server/snapshotSettings";
 
 import { CopilotSettings } from "../settings.ts";
-import {
-  COPILOT_SIGNED_OUT_MESSAGE,
-  createCopilotAdapterV2,
-  type CopilotAdapterV2DriverEnv,
-} from "./adapter.ts";
+import { createCopilotAdapterV2, type CopilotAdapterV2DriverEnv } from "./adapter.ts";
 import {
   copilotDiscoveryFromSession,
   discoverCopilotSession,
@@ -54,6 +49,7 @@ import {
 import {
   buildInitialCopilotProviderSnapshot,
   checkCopilotProviderStatus,
+  COPILOT_SIGNED_OUT_MESSAGE,
   enrichCopilotSnapshot,
 } from "./status.ts";
 import { discoverCopilotSkills } from "./skills.ts";
@@ -142,39 +138,11 @@ export const CopilotDriver: ProviderDriver<CopilotSettings, CopilotDriverEnv, Pa
           Effect.provideService(Path.Path, path),
         ),
       );
-      // Copilot's catalog is only visible from a session. The last one seen
-      // (a live session's options or an explicit refresh) feeds every snapshot.
-      const discoveryRef = yield* Ref.make<CopilotDiscovery | undefined>(undefined);
-      let refreshSnapshot: Effect.Effect<void> = Effect.void;
-      const publishDiscovery = (discovery: CopilotDiscovery) =>
-        Ref.modify(discoveryRef, (previous) =>
-          Equal.equals(previous, discovery) ? [false, previous] : [true, discovery],
-        ).pipe(Effect.flatMap((changed) => (changed ? refreshSnapshot : Effect.void)));
-      const orchestrationAdapter = yield* createCopilotAdapterV2(
-        { instanceId, displayName, accentColor, environment, enabled, config },
-        {
-          onSessionConfigurationUpdate: (configOptions, modeState) => {
-            const discovery = copilotDiscoveryFromSession({
-              setup: { configOptions },
-              configOptions,
-              modeState,
-            });
-            return discovery.models.length === 0 ? Effect.void : publishDiscovery(discovery);
-          },
-        },
-      ).pipe(
-        Effect.mapError(
-          (cause) =>
-            new ProviderDriverError({
-              driver: DRIVER_KIND,
-              instanceId,
-              detail: "Failed to build Copilot orchestration adapter.",
-              cause,
-            }),
-        ),
-      );
       const textGeneration = yield* makeCopilotTextGeneration(effectiveConfig, processEnv);
 
+      // Copilot's catalog is only visible from a session. The first thread's
+      // session seeds it; an explicit refresh replaces it.
+      const discoveryRef = yield* Ref.make<CopilotDiscovery | undefined>(undefined);
       const { cwd } = host.paths;
       const checkProvider = Ref.get(discoveryRef).pipe(
         Effect.flatMap((discovery) =>
@@ -224,7 +192,34 @@ export const CopilotDriver: ProviderDriver<CopilotSettings, CopilotDriverEnv, Pa
         ),
       );
 
-      refreshSnapshot = snapshot.refresh.pipe(Effect.asVoid);
+      const scope = yield* Effect.scope;
+      const orchestrationAdapter = yield* createCopilotAdapterV2(
+        { instanceId, displayName, accentColor, environment, enabled, config },
+        {
+          onSessionSetup: (setup) => {
+            const discovery = copilotDiscoveryFromSession(setup);
+            if (discovery.models.length === 0) return Effect.void;
+            return Ref.modify(discoveryRef, (previous) =>
+              previous === undefined ? [true, discovery] : [false, previous],
+            ).pipe(
+              // The re-probe runs the CLI three times; it must not hold up the turn.
+              Effect.flatMap((seeded) =>
+                seeded ? snapshot.refresh.pipe(Effect.forkIn(scope), Effect.asVoid) : Effect.void,
+              ),
+            );
+          },
+        },
+      ).pipe(
+        Effect.mapError(
+          (cause) =>
+            new ProviderDriverError({
+              driver: DRIVER_KIND,
+              instanceId,
+              detail: "Failed to build Copilot orchestration adapter.",
+              cause,
+            }),
+        ),
+      );
 
       // Explicit "refresh models": a disposable session reads Copilot's catalog.
       const refreshModels = () =>

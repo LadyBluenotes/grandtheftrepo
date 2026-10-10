@@ -20,13 +20,6 @@ import type { CopilotSettings } from "../settings.ts";
 
 const COPILOT_DRIVER_KIND = ProviderDriverKind.make("copilot");
 
-/** Token variables the CLI reads. Any one of them replaces the `copilot login` credential. */
-const COPILOT_TOKEN_ENVIRONMENT_VARIABLES = [
-  "COPILOT_GITHUB_TOKEN",
-  "GH_TOKEN",
-  "GITHUB_TOKEN",
-] as const;
-
 /**
  * Copilot asks through `session/request_permission`; T3 answers by mode.
  * Copilot has no approval reviewer, so Auto approves every request, like Full
@@ -56,7 +49,7 @@ interface CopilotAcpRuntimeInput extends Omit<
  * flags are process-wide in Copilot's ACP server, so a mode change reopens the
  * session on a fresh process. Every mode but Full access launches asking.
  */
-export function copilotAcpSpawnArgs(runtimeMode?: RuntimeMode): ReadonlyArray<string> {
+function copilotAcpSpawnArgs(runtimeMode?: RuntimeMode): ReadonlyArray<string> {
   return runtimeMode === "full-access" ? ["--acp", "--allow-all"] : ["--acp"];
 }
 
@@ -73,7 +66,7 @@ export function copilotLaunchRuntimeMode(
     : "approval-required";
 }
 
-export function buildCopilotAcpSpawnInput(
+function buildCopilotAcpSpawnInput(
   copilotSettings: CopilotAcpRuntimeCopilotSettings | null | undefined,
   cwd: string,
   environment?: NodeJS.ProcessEnv,
@@ -83,18 +76,8 @@ export function buildCopilotAcpSpawnInput(
     command: copilotSettings?.binaryPath || "copilot",
     args: [...copilotAcpSpawnArgs(runtimeMode)],
     cwd,
-    env: {
-      ...environment,
-      // T3 owns updates (`copilot update` from the provider card). A child
-      // replacing its own binary under a running ACP session would cut it off.
-      COPILOT_AUTO_UPDATE: "false",
-    },
+    ...(environment === undefined ? {} : { env: environment }),
   };
-}
-
-/** Whether the CLI would authenticate with a token variable instead of its stored login. */
-export function hasCopilotTokenInEnvironment(environment: NodeJS.ProcessEnv | undefined): boolean {
-  return COPILOT_TOKEN_ENVIRONMENT_VARIABLES.some((name) => Boolean(environment?.[name]?.trim()));
 }
 
 export const makeCopilotAcpRuntime = (

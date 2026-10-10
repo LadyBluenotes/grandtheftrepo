@@ -15,7 +15,8 @@ Select a model under **Breakdown** to see its trend, cache hit rate, and cost pe
 
 Totals depend on the history available on each server. Grok turns without a saved completed-turn
 record are missing from the totals. Copilot totals come from the usage checkpoints in its session
-logs, so a session that ended before its first checkpoint contributes nothing.
+logs, so a session that ended before its first checkpoint contributes nothing, and its split between
+cached and uncached input is an estimate.
 
 OpenCode reads its SQLite database and older JSON history. Antigravity reads local conversation
 databases, including T3-managed profiles. Set `OPENCODE_DATA_DIR` or `ANTIGRAVITY_DATA_DIR` on the

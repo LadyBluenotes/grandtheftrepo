@@ -38,16 +38,11 @@ const allowAllOption: EffectAcpSchema.SessionConfigOption = {
 };
 
 describe("copilotDiscoveryFromSession", () => {
-  it("lists the model option's choices, marks the current one, and keeps tuning options", () => {
+  it("lists the model option's choices and keeps tuning options", () => {
     const discovery = copilotDiscoveryFromSession({
-      setup: { configOptions: [modelOption, effortOption, allowAllOption] },
       configOptions: [modelOption, effortOption, allowAllOption],
-      modeState: undefined,
     });
-    expect(discovery.models.map((model) => [model.slug, model.isDefault ?? false])).toEqual([
-      ["gpt-5.4", false],
-      ["claude-sonnet-4.6", true],
-    ]);
+    expect(discovery.models.map((model) => model.slug)).toEqual(["gpt-5.4", "claude-sonnet-4.6"]);
     // Reasoning effort rides on every model; Copilot's permission switch stays with T3's modes.
     expect(discovery.capabilities.optionDescriptors?.map((option) => option.id)).toEqual([
       "reasoning_effort",
@@ -57,25 +52,20 @@ describe("copilotDiscoveryFromSession", () => {
 
   it("falls back to ACP v1 model state when no model option exists", () => {
     const discovery = copilotDiscoveryFromSession({
-      setup: {
-        models: {
-          currentModelId: "gpt-5.4",
-          availableModels: [
-            { modelId: "gpt-5.4", name: "GPT-5.4" },
-            { modelId: "gpt-5.4", name: "duplicate" },
-            { modelId: " ", name: "blank" },
-          ],
-        },
+      models: {
+        currentModelId: "gpt-5.4",
+        availableModels: [
+          { modelId: "gpt-5.4", name: "GPT-5.4" },
+          { modelId: "gpt-5.4", name: "duplicate" },
+          { modelId: " ", name: "blank" },
+        ],
       },
-      configOptions: [],
-      modeState: undefined,
     });
     expect(discovery.models).toEqual([
       {
         slug: "gpt-5.4",
         name: "GPT-5.4",
         isCustom: false,
-        isDefault: true,
         capabilities: { optionDescriptors: [] },
       },
     ]);
@@ -83,7 +73,9 @@ describe("copilotDiscoveryFromSession", () => {
 });
 
 it.layer(NodeServices.layer)("discoverCopilotSession", (it) => {
-  it.effect("opens one session, reads its options, and closes it", () =>
+  // Copilot CLI 1.0 negotiates ACP v1: models arrive as `session/new` model
+  // state and tuning options as v1 config options.
+  it.effect("opens one v1 session, reads its catalog, and closes it", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const dir = yield* fs.makeTempDirectoryScoped({ prefix: "t3code-copilot-discovery-" });
@@ -93,17 +85,21 @@ it.layer(NodeServices.layer)("discoverCopilotSession", (it) => {
         source: [
           'import * as NodeReadline from "node:readline";',
           'if (process.argv.slice(2).join(" ") !== "--acp") process.exit(1);',
-          `const configOptions = ${JSON.stringify([
-            { ...modelOption, configId: "model" },
-            { ...effortOption, configId: "reasoning_effort" },
-          ]).replaceAll('"id":', '"_id":')};`,
+          `const configOptions = ${JSON.stringify([effortOption])};`,
+          `const models = ${JSON.stringify({
+            currentModelId: "claude-sonnet-4.6",
+            availableModels: [
+              { modelId: "gpt-5.4", name: "GPT-5.4" },
+              { modelId: "claude-sonnet-4.6", name: "Claude Sonnet 4.6" },
+            ],
+          })};`,
           "const write = (message) => process.stdout.write(JSON.stringify(message) + '\\n');",
           "for await (const line of NodeReadline.createInterface({ input: process.stdin })) {",
           "  const request = JSON.parse(line);",
           "  if (request.id === undefined) continue;",
           "  const result =",
-          '    request.method === "initialize" ? { protocolVersion: 2, info: { name: "copilot", version: "1.0.95" }, capabilities: { session: { close: {} } } }',
-          '    : request.method === "session/new" ? { sessionId: "discovery-session", configOptions }',
+          '    request.method === "initialize" ? { protocolVersion: 1, agentInfo: { name: "Copilot", version: "1.0.95" }, agentCapabilities: { sessionCapabilities: { close: {} } } }',
+          '    : request.method === "session/new" ? { sessionId: "discovery-session", configOptions, models }',
           '    : request.method === "session/close" ? {}',
           "    : undefined;",
           '  if (result === undefined) write({ jsonrpc: "2.0", id: request.id, error: { code: -32601, message: "Method not found" } });',
