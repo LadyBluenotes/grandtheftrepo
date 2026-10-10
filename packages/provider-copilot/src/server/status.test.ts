@@ -12,6 +12,7 @@ import {
   checkCopilotProviderStatus,
   copilotAcpFailureMessage,
   copilotAuthFromEnvironment,
+  copilotModelsFromSettings,
 } from "./status.ts";
 
 const decodeCopilotSettings = Schema.decodeSync(CopilotSettings);
@@ -76,6 +77,32 @@ describe("copilotAuthFromEnvironment", () => {
   });
 });
 
+describe("copilotModelsFromSettings", () => {
+  it("replaces the default sentinel with discovered models and shares their options", () => {
+    const capabilities = {
+      optionDescriptors: [
+        {
+          id: "reasoning_effort",
+          label: "Reasoning effort",
+          type: "select" as const,
+          options: [{ id: "high", label: "High" }],
+        },
+      ],
+    };
+    const models = copilotModelsFromSettings(["my-custom"], {
+      models: [
+        { slug: "gpt-5.4", name: "GPT-5.4", isCustom: false, isDefault: true, capabilities },
+      ],
+      capabilities,
+    });
+    expect(models.map((model) => [model.slug, model.isDefault ?? false, model.isCustom])).toEqual([
+      ["gpt-5.4", true, false],
+      ["my-custom", false, true],
+    ]);
+    expect(models[1]?.capabilities).toEqual(capabilities);
+  });
+});
+
 describe("copilotAcpFailureMessage", () => {
   it("blames a pre-ACP release only when the version is known to predate it", () => {
     expect(copilotAcpFailureMessage("0.0.350")).toContain("predates ACP support");
@@ -96,8 +123,10 @@ describe("buildInitialCopilotProviderSnapshot", () => {
       expect(pending.supportedRuntimeModes).toEqual([
         "approval-required",
         "auto-accept-edits",
+        "auto",
         "full-access",
       ]);
+      expect(pending.showInteractionModeToggle).toBe(true);
       expect(pending.models.map((model) => model.slug)).toEqual(["default", "gpt-5.3-codex"]);
 
       const disabled = yield* buildInitialCopilotProviderSnapshot(

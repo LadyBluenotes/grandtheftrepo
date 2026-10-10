@@ -7,8 +7,10 @@
 import { ProviderDriverKind } from "@t3tools/contracts";
 import * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
+import * as Equal from "effect/Equal";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
+import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import * as HttpClient from "effect/http/HttpClient";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
@@ -39,7 +41,16 @@ import {
 } from "@t3tools/provider-core/server/snapshotSettings";
 
 import { CopilotSettings } from "../settings.ts";
-import { CopilotAdapterV2Driver, type CopilotAdapterV2DriverEnv } from "./adapter.ts";
+import {
+  COPILOT_SIGNED_OUT_MESSAGE,
+  createCopilotAdapterV2,
+  type CopilotAdapterV2DriverEnv,
+} from "./adapter.ts";
+import {
+  copilotDiscoveryFromSession,
+  discoverCopilotSession,
+  type CopilotDiscovery,
+} from "./discovery.ts";
 import {
   buildInitialCopilotProviderSnapshot,
   checkCopilotProviderStatus,
@@ -47,6 +58,7 @@ import {
 } from "./status.ts";
 import { discoverCopilotSkills } from "./skills.ts";
 import { makeCopilotTextGeneration } from "./textGeneration.ts";
+import { copilotUsageReader } from "./usage.ts";
 
 const decodeCopilotSettings = Schema.decodeSync(CopilotSettings);
 
@@ -89,7 +101,7 @@ export type CopilotDriverEnv =
   | Path.Path
   | ProviderEventLoggers.ProviderEventLoggers;
 
-export const CopilotDriver: ProviderDriver<CopilotSettings, CopilotDriverEnv> = {
+export const CopilotDriver: ProviderDriver<CopilotSettings, CopilotDriverEnv, Path.Path> = {
   driverKind: DRIVER_KIND,
   metadata: {
     displayName: "Copilot",
@@ -97,6 +109,7 @@ export const CopilotDriver: ProviderDriver<CopilotSettings, CopilotDriverEnv> = 
   },
   configSchema: CopilotSettings,
   defaultConfig: (): CopilotSettings => decodeCopilotSettings({}),
+  usage: copilotUsageReader,
   create: ({ instanceId, displayName, accentColor, environment, enabled, config }) =>
     Effect.gen(function* () {
       const crypto = yield* Crypto.Crypto;
@@ -129,14 +142,27 @@ export const CopilotDriver: ProviderDriver<CopilotSettings, CopilotDriverEnv> = 
           Effect.provideService(Path.Path, path),
         ),
       );
-      const orchestrationAdapter = yield* CopilotAdapterV2Driver.create({
-        instanceId,
-        displayName,
-        accentColor,
-        environment,
-        enabled,
-        config,
-      }).pipe(
+      // Copilot's catalog is only visible from a session. The last one seen
+      // (a live session's options or an explicit refresh) feeds every snapshot.
+      const discoveryRef = yield* Ref.make<CopilotDiscovery | undefined>(undefined);
+      let refreshSnapshot: Effect.Effect<void> = Effect.void;
+      const publishDiscovery = (discovery: CopilotDiscovery) =>
+        Ref.modify(discoveryRef, (previous) =>
+          Equal.equals(previous, discovery) ? [false, previous] : [true, discovery],
+        ).pipe(Effect.flatMap((changed) => (changed ? refreshSnapshot : Effect.void)));
+      const orchestrationAdapter = yield* createCopilotAdapterV2(
+        { instanceId, displayName, accentColor, environment, enabled, config },
+        {
+          onSessionConfigurationUpdate: (configOptions, modeState) => {
+            const discovery = copilotDiscoveryFromSession({
+              setup: { configOptions },
+              configOptions,
+              modeState,
+            });
+            return discovery.models.length === 0 ? Effect.void : publishDiscovery(discovery);
+          },
+        },
+      ).pipe(
         Effect.mapError(
           (cause) =>
             new ProviderDriverError({
@@ -150,7 +176,10 @@ export const CopilotDriver: ProviderDriver<CopilotSettings, CopilotDriverEnv> = 
       const textGeneration = yield* makeCopilotTextGeneration(effectiveConfig, processEnv);
 
       const { cwd } = host.paths;
-      const checkProvider = checkCopilotProviderStatus(effectiveConfig, processEnv, cwd).pipe(
+      const checkProvider = Ref.get(discoveryRef).pipe(
+        Effect.flatMap((discovery) =>
+          checkCopilotProviderStatus(effectiveConfig, processEnv, cwd, discovery),
+        ),
         Effect.map(stampIdentity),
         Effect.provideService(Crypto.Crypto, crypto),
         Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
@@ -163,7 +192,12 @@ export const CopilotDriver: ProviderDriver<CopilotSettings, CopilotDriverEnv> = 
         streamSettings: snapshotSettings.streamSettings,
         haveSettingsChanged: haveProviderSnapshotSettingsChanged,
         initialSnapshot: (settings) =>
-          buildInitialCopilotProviderSnapshot(settings.provider).pipe(Effect.map(stampIdentity)),
+          Ref.get(discoveryRef).pipe(
+            Effect.flatMap((discovery) =>
+              buildInitialCopilotProviderSnapshot(settings.provider, discovery),
+            ),
+            Effect.map(stampIdentity),
+          ),
         checkProvider,
         enrichSnapshot: ({ settings, snapshot: currentSnapshot, publishSnapshot }) =>
           resolveMaintenance().pipe(
@@ -189,6 +223,32 @@ export const CopilotDriver: ProviderDriver<CopilotSettings, CopilotDriverEnv> = 
             }),
         ),
       );
+
+      refreshSnapshot = snapshot.refresh.pipe(Effect.asVoid);
+
+      // Explicit "refresh models": a disposable session reads Copilot's catalog.
+      const refreshModels = () =>
+        discoverCopilotSession(effectiveConfig, processEnv, cwd).pipe(
+          Effect.provideService(Crypto.Crypto, crypto),
+          Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+          Effect.timeoutOrElse({
+            duration: "60 seconds",
+            orElse: () => Effect.fail({ _tag: "Timeout" as const }),
+          }),
+          Effect.flatMap((discovery) => Ref.set(discoveryRef, discovery)),
+          Effect.mapError(
+            (cause) =>
+              new ProviderDriverError({
+                driver: DRIVER_KIND,
+                instanceId,
+                detail:
+                  cause._tag === "AcpRequestError" && cause.code === -32000
+                    ? COPILOT_SIGNED_OUT_MESSAGE
+                    : "Could not refresh Copilot models. The previous model list is unchanged.",
+                cause,
+              }),
+          ),
+        );
 
       const snapshotForCwd = (workspaceCwd: string) =>
         !effectiveConfig.enabled
@@ -218,6 +278,7 @@ export const CopilotDriver: ProviderDriver<CopilotSettings, CopilotDriverEnv> = 
         enabled,
         snapshot,
         snapshotForCwd,
+        refreshModels,
         orchestrationAdapter,
         textGeneration,
       } satisfies ProviderInstance;

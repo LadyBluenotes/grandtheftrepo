@@ -3,7 +3,8 @@
  * --version`; ACP support is confirmed with a bare `initialize`, which never
  * opens a session, so it cannot start MCP servers, run hooks, or prompt for
  * login. Copilot reports no models before a session exists, so the picker
- * offers the CLI's configured default plus the user's custom model IDs.
+ * offers the CLI's configured default until a session's discovery supplies
+ * the real list, plus the user's custom model IDs.
  */
 import {
   type CustomModelSetting,
@@ -49,12 +50,15 @@ import {
   hasCopilotTokenInEnvironment,
   makeCopilotAcpRuntime,
 } from "./acpSupport.ts";
+import type { CopilotDiscovery } from "./discovery.ts";
 import { discoverCopilotSkills } from "./skills.ts";
 
 const COPILOT_PRESENTATION = {
   displayName: "Copilot",
   supportsConversationRollback: false,
-  showInteractionModeToggle: false,
+  // Plan mode rides on the ACP adapter's plan instructions and Copilot's own
+  // plan session mode when it advertises one.
+  showInteractionModeToggle: true,
   supportedRuntimeModes: COPILOT_SUPPORTED_RUNTIME_MODES,
 } as const;
 const EMPTY_CAPABILITIES: ModelCapabilities = createModelCapabilities({
@@ -118,10 +122,11 @@ const COPILOT_BUILT_IN_MODELS: ReadonlyArray<ServerProviderModel> = [
 
 export function buildInitialCopilotProviderSnapshot(
   copilotSettings: CopilotSettings,
+  discovery?: CopilotDiscovery,
 ): Effect.Effect<ServerProviderDraft> {
   return Effect.gen(function* () {
     const checkedAt = yield* Effect.map(DateTime.now, DateTime.formatIso);
-    const models = copilotModelsFromSettings(copilotSettings.customModels);
+    const models = copilotModelsFromSettings(copilotSettings.customModels, discovery);
 
     if (!copilotSettings.enabled) {
       return buildServerProvider({
@@ -155,13 +160,16 @@ export function buildInitialCopilotProviderSnapshot(
   });
 }
 
-function copilotModelsFromSettings(
+/** Discovered models replace the default sentinel; their options ride on custom models too. */
+export function copilotModelsFromSettings(
   customModels: ReadonlyArray<CustomModelSetting> | undefined,
+  discovery?: CopilotDiscovery,
 ): ReadonlyArray<ServerProviderModel> {
+  const discovered = discovery?.models ?? [];
   return providerModelsFromSettings(
-    COPILOT_BUILT_IN_MODELS,
+    discovered.length > 0 ? discovered : COPILOT_BUILT_IN_MODELS,
     customModels ?? [],
-    EMPTY_CAPABILITIES,
+    discovery?.capabilities ?? EMPTY_CAPABILITIES,
   );
 }
 
@@ -220,13 +228,14 @@ export const checkCopilotProviderStatus = Effect.fn("checkCopilotProviderStatus"
   copilotSettings: CopilotSettings,
   environment: NodeJS.ProcessEnv = process.env,
   cwd?: string,
+  discovery?: CopilotDiscovery,
 ): Effect.fn.Return<
   ServerProviderDraft,
   never,
   ChildProcessSpawner.ChildProcessSpawner | Crypto.Crypto
 > {
   const checkedAt = DateTime.formatIso(yield* DateTime.now);
-  const models = copilotModelsFromSettings(copilotSettings.customModels);
+  const models = copilotModelsFromSettings(copilotSettings.customModels, discovery);
 
   if (!copilotSettings.enabled) {
     return buildServerProvider({

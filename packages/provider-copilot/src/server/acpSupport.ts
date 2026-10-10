@@ -28,14 +28,14 @@ const COPILOT_TOKEN_ENVIRONMENT_VARIABLES = [
 ] as const;
 
 /**
- * Copilot asks through `session/request_permission` and has no automatic
- * approval reviewer, so Auto is not offered. Supervised and Auto-accept edits
- * are T3's answers to those requests; Full access launches with Copilot's own
- * allow-everything switch.
+ * Copilot asks through `session/request_permission`; T3 answers by mode.
+ * Copilot has no approval reviewer, so Auto approves every request, like Full
+ * access but without Copilot's own allow-everything launch switch.
  */
 export const COPILOT_SUPPORTED_RUNTIME_MODES = [
   "approval-required",
   "auto-accept-edits",
+  "auto",
   "full-access",
 ] as const satisfies ReadonlyArray<RuntimeMode>;
 

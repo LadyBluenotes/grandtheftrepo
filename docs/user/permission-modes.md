@@ -28,8 +28,8 @@ to you for approval.
 Muse Code offers only **Supervised** and **Full access**. A Muse thread already set to another mode
 runs in **Supervised**.
 
-Copilot offers no **Auto**. A Copilot thread already set to it runs in **Supervised**. **Full access**
-launches Copilot with its own allow-all switch; the other modes answer its permission requests.
+Copilot has no automatic reviewer, so **Auto** approves its permission requests without asking.
+**Full access** launches Copilot with its own allow-all switch; the other modes answer its requests.
 
 Grok offers no **Auto-accept edits**. A Grok thread already set to it runs in **Supervised**. Grok
 file-change approvals offer **Allow all edits this session**. Its command approvals have no

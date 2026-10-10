@@ -65,11 +65,16 @@ export function copilotPromptFailure(cause: unknown) {
 
 /**
  * Copilot follows the ACP spec without extensions, so the shared defaults
- * hold. It does receive T3's MCP server on `session/new` and calls its tools
- * (as `t3-code-<tool>`), which is the one capability the defaults leave off.
+ * mostly hold. It receives T3's MCP server on `session/new` and calls its
+ * tools (as `t3-code-<tool>`), and it switches models in a running session
+ * through its model config option or v1 model state.
  */
 const CopilotProviderCapabilitiesV2 = {
   ...AcpProviderCapabilitiesV2,
+  sessions: {
+    ...AcpProviderCapabilitiesV2.sessions,
+    supportsModelSwitchInSession: true,
+  },
   tools: {
     ...AcpProviderCapabilitiesV2.tools,
     supportsMcpTools: true,
@@ -84,6 +89,8 @@ export interface CopilotAdapterV2Options {
   readonly nativeLogging?: Parameters<typeof makeAcpAdapterV2>[0]["nativeLogging"];
   readonly continuationRequests?: Parameters<typeof makeAcpAdapterV2>[0]["continuationRequests"];
   readonly testHooks?: Parameters<typeof makeAcpAdapterV2>[0]["testHooks"];
+  /** Receives each session's live options so the driver can publish Copilot's catalog. */
+  readonly onSessionConfigurationUpdate?: AcpAdapterV2Flavor["onSessionConfigurationUpdate"];
   readonly makeRuntime?: (
     input: AcpAdapterV2RuntimeInput,
   ) => Effect.Effect<
@@ -122,6 +129,9 @@ function makeCopilotAcpAdapterFlavor(options: CopilotAdapterV2Options): AcpAdapt
           runtimeMode: copilotLaunchRuntimeMode(runtimePolicy),
         })),
     promptFailure: copilotPromptFailure,
+    ...(options.onSessionConfigurationUpdate === undefined
+      ? {}
+      : { onSessionConfigurationUpdate: options.onSessionConfigurationUpdate }),
     ...(options.assertComplete === undefined ? {} : { assertComplete: options.assertComplete }),
   };
 }
@@ -151,6 +161,32 @@ export type CopilotAdapterV2DriverEnv =
   | ProviderEventLoggers.ProviderEventLoggers
   | ProviderHost.ProviderHost;
 
+/** The instance adapter; the driver adds its catalog hook, the registry entry has none. */
+export const createCopilotAdapterV2 = Effect.fn("createCopilotAdapterV2")(function* (
+  input: ProviderAdapterDriverCreateInput<CopilotSettings>,
+  hooks: Pick<CopilotAdapterV2Options, "onSessionConfigurationUpdate"> = {},
+) {
+  const hostEnvironment = yield* HostProcess.Environment;
+  const selfInvocation = yield* resolveSelfInvocation();
+  const providerEventLoggers = yield* ProviderEventLoggers.ProviderEventLoggers;
+  const continuationRequests = yield* ProviderContinuationRequests.ProviderContinuationRequests;
+  const makeNativeLogger = yield* makeAcpNativeLoggerFactory();
+  return yield* makeCopilotAdapterV2({
+    instanceId: input.instanceId,
+    settings: { ...input.config, enabled: input.enabled },
+    environment: yield* mergeProviderInstanceEnvironment(input.environment, hostEnvironment),
+    selfInvocation,
+    continuationRequests,
+    nativeLogging: (threadId) =>
+      makeNativeLogger({
+        nativeEventLogger: providerEventLoggers.native,
+        provider: COPILOT_PROVIDER,
+        threadId,
+      }),
+    ...hooks,
+  });
+});
+
 export const CopilotAdapterV2Driver: ProviderAdapterDriver<
   CopilotSettings,
   CopilotAdapterV2DriverEnv
@@ -160,24 +196,7 @@ export const CopilotAdapterV2Driver: ProviderAdapterDriver<
   defaultConfig: (): CopilotSettings => DEFAULT_COPILOT_SETTINGS,
   create: Effect.fn("CopilotAdapterV2Driver.create")(
     function* (input: ProviderAdapterDriverCreateInput<CopilotSettings>) {
-      const hostEnvironment = yield* HostProcess.Environment;
-      const selfInvocation = yield* resolveSelfInvocation();
-      const providerEventLoggers = yield* ProviderEventLoggers.ProviderEventLoggers;
-      const continuationRequests = yield* ProviderContinuationRequests.ProviderContinuationRequests;
-      const makeNativeLogger = yield* makeAcpNativeLoggerFactory();
-      return yield* makeCopilotAdapterV2({
-        instanceId: input.instanceId,
-        settings: { ...input.config, enabled: input.enabled },
-        environment: yield* mergeProviderInstanceEnvironment(input.environment, hostEnvironment),
-        selfInvocation,
-        continuationRequests,
-        nativeLogging: (threadId) =>
-          makeNativeLogger({
-            nativeEventLogger: providerEventLoggers.native,
-            provider: COPILOT_PROVIDER,
-            threadId,
-          }),
-      });
+      return yield* createCopilotAdapterV2(input);
     },
     (effect, input) =>
       effect.pipe(

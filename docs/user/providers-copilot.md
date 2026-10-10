@@ -30,23 +30,28 @@ not accepted.
 Instances on the same host share its Copilot login. Give an instance its own
 `COPILOT_HOME` environment variable for a separate login and settings directory.
 
-## Models
+## Models and options
 
-The picker offers **Copilot default**, which uses the model the CLI is configured
-with (`COPILOT_MODEL` or its `settings.json`). Copilot does not list its models
-before a session starts, so add the model IDs you want to switch between under
-**Custom models** in the instance settings, for example `gpt-5.3-codex` or
-`claude-sonnet-4.5`. The model strings are listed under `--model` in `copilot help`.
-Selecting a custom model switches the session when Copilot exposes a model
-setting; otherwise the session keeps its configured model.
+Copilot only reveals its model list and tuning options, such as reasoning effort,
+once a session exists. Until then the picker offers **Copilot default**, the model
+the CLI is configured with (`COPILOT_MODEL` or its `settings.json`). After signing
+in, use **Refresh provider status** with models in **Settings → Providers**, or
+**Refresh models** in the thread settings on mobile: T3 Code opens a short
+Copilot session, reads its catalog, and closes it. The list also updates on its
+own whenever a Copilot thread runs. Switching models or options applies on the
+next message in the same session. Model IDs Copilot does not list can still be
+added under **Custom models**.
 
 ## Permissions and limitations
 
-Copilot offers three [permission modes](./permission-modes.md). **Supervised** and
-**Auto-accept edits** show Copilot's permission requests in the conversation and
-T3 Code answers them by the mode. **Full access** launches Copilot with its own
-`--allow-all` switch. **Auto** is not offered because Copilot has no automatic
-approval reviewer; a thread already set to Auto runs as Supervised.
+Copilot follows the shared [permission modes](./permission-modes.md). **Supervised**
+and **Auto-accept edits** show Copilot's permission requests in the conversation
+and T3 Code answers them by the mode. **Auto** approves every request, because
+Copilot has no automatic reviewer of its own. **Full access** launches Copilot with
+its own `--allow-all` switch, so nothing is asked at all.
+
+The Plan and Build toggle works: in Plan, T3 Code instructs Copilot to investigate
+without editing and switches to Copilot's plan mode when the CLI offers one.
 
 Permissions you saved in Copilot itself, such as a project's always-allow rules,
 still apply, so those actions do not ask again.
@@ -54,8 +59,9 @@ still apply, so those actions do not ask again.
 Copilot can use T3 Code's tools. Its project, personal, plugin, and built-in
 skills appear in the composer's `$` menu, and its built-in commands such as
 `/context`, `/usage`, `/model`, `/plan`, and `/review` appear under **Provider**
-in the `/` menu. The Usage page does not include Copilot history, and
-conversation rewind is unavailable.
+in the `/` menu. The Usage page reads Copilot's session logs under `~/.copilot`
+or `COPILOT_HOME`. Conversation rewind is unavailable: a rollback restores files
+and starts a fresh Copilot session.
 
 Updates can run from **Settings → Providers** when T3 Code recognizes the Copilot
 launcher; otherwise run `copilot update` on the host.
