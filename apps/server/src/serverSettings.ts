@@ -484,6 +484,7 @@ const TEXT_GENERATION_FALLBACK_DRIVERS = [
   "claudeAgent",
   "cursor",
   "grok",
+  "copilot",
   "muse",
   "pi",
   "opencode",

@@ -3096,6 +3096,7 @@ it.layer(
               "antigravity",
               "claudeAgent",
               "codex",
+              "copilot",
               "cursor",
               "grok",
               "muse",
