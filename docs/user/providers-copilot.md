@@ -1,9 +1,8 @@
 # GitHub Copilot
 
-GitHub Copilot CLI is a beta integration and is disabled by default. T3 Code runs
-it through the CLI's Agent Client Protocol server, which GitHub ships as a public
-preview, so Copilot CLI 0.0.397 or newer is required and 1.0 or newer is
-recommended.
+GitHub Copilot CLI is a beta integration. T3 Code runs it through the CLI's
+Agent Client Protocol server, which GitHub ships as a public preview, so Copilot
+CLI 0.0.397 or newer is required and 1.0 or newer is recommended.
 
 ## Set up Copilot
 
@@ -12,9 +11,9 @@ recommended.
    `npm install -g @github/copilot`.
 2. Run `copilot login` as the account that runs T3 Code. On a remote or headless
    server, the CLI offers a device code to enter in your browser.
-3. Open **Settings → Providers**, select the environment, and enable **Copilot**.
-   Set **Binary path** if `copilot` is not on the host's `PATH`, then refresh
-   provider status.
+3. Open **Settings → Providers** and select the environment. Copilot is on by
+   default; set **Binary path** if `copilot` is not on the host's `PATH`, then
+   refresh provider status. Turn the provider off there if you do not use it.
 
 Provider status does not check your login. If you are signed out, the first
 message fails with a sign-in error until you run `copilot login` on the host.

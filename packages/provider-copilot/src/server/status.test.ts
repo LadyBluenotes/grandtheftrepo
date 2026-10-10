@@ -81,15 +81,10 @@ describe("copilotAcpFailureMessage", () => {
 });
 
 describe("buildInitialCopilotProviderSnapshot", () => {
-  it.effect("is disabled by default and pending once enabled", () =>
+  it.effect("is pending by default and disabled once turned off", () =>
     Effect.gen(function* () {
-      const disabled = yield* buildInitialCopilotProviderSnapshot(decodeCopilotSettings({}));
-      expect(disabled.enabled).toBe(false);
-      expect(disabled.status).toBe("disabled");
-      expect(disabled.models.map((model) => model.slug)).toEqual(["default"]);
-
       const pending = yield* buildInitialCopilotProviderSnapshot(
-        decodeCopilotSettings({ enabled: true, customModels: ["gpt-5.3-codex"] }),
+        decodeCopilotSettings({ customModels: ["gpt-5.3-codex"] }),
       );
       expect(pending.enabled).toBe(true);
       expect(pending.status).toBe("warning");
@@ -100,6 +95,13 @@ describe("buildInitialCopilotProviderSnapshot", () => {
         "full-access",
       ]);
       expect(pending.models.map((model) => model.slug)).toEqual(["default", "gpt-5.3-codex"]);
+
+      const disabled = yield* buildInitialCopilotProviderSnapshot(
+        decodeCopilotSettings({ enabled: false }),
+      );
+      expect(disabled.enabled).toBe(false);
+      expect(disabled.status).toBe("disabled");
+      expect(disabled.models.map((model) => model.slug)).toEqual(["default"]);
     }),
   );
 });

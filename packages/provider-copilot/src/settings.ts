@@ -14,10 +14,9 @@ import * as Schema from "effect/Schema";
 
 export const CopilotSettings = makeProviderSettingsSchema(
   {
-    // Off by default (like Grok and Cursor): Copilot's ACP server is a public
-    // preview, so users opt in from Settings.
+    // On by default like Codex and Claude; users turn it off from Settings.
     enabled: Schema.Boolean.pipe(
-      Schema.withDecodingDefault(Effect.succeed(false)),
+      Schema.withDecodingDefault(Effect.succeed(true)),
       Schema.annotateKey({ providerSettingsForm: { hidden: true } }),
     ),
     binaryPath: makeBinaryPathSetting("copilot").pipe(

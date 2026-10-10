@@ -45,7 +45,7 @@ import type { CopilotSettings } from "../settings.ts";
 import {
   COPILOT_DEFAULT_MODEL_SLUG,
   COPILOT_SUPPORTED_RUNTIME_MODES,
-  copilotTokenFromEnvironment,
+  hasCopilotTokenInEnvironment,
   makeCopilotAcpRuntime,
 } from "./acpSupport.ts";
 
@@ -164,7 +164,7 @@ const probeCopilotAcpInitialize = (
 export function copilotAuthFromEnvironment(environment: NodeJS.ProcessEnv): ServerProviderAuth {
   // A token variable replaces the stored login. Without one, only a session
   // can tell whether `copilot login` ran, so the state stays unknown here.
-  return copilotTokenFromEnvironment(environment)
+  return hasCopilotTokenInEnvironment(environment)
     ? { status: "authenticated", type: "api_key", label: "GitHub token" }
     : { status: "unknown" };
 }

@@ -20,10 +20,7 @@ import type { CopilotSettings } from "../settings.ts";
 
 const COPILOT_DRIVER_KIND = ProviderDriverKind.make("copilot");
 
-/**
- * Token variables the CLI reads, in its own precedence order. Any one of them
- * replaces the `copilot login` credential, so T3 reports them as API-key auth.
- */
+/** Token variables the CLI reads. Any one of them replaces the `copilot login` credential. */
 const COPILOT_TOKEN_ENVIRONMENT_VARIABLES = [
   "COPILOT_GITHUB_TOKEN",
   "GH_TOKEN",
@@ -95,15 +92,9 @@ export function buildCopilotAcpSpawnInput(
   };
 }
 
-/** The first token variable the CLI would use, or undefined when it would use its login. */
-export function copilotTokenFromEnvironment(
-  environment: NodeJS.ProcessEnv | undefined,
-): string | undefined {
-  for (const name of COPILOT_TOKEN_ENVIRONMENT_VARIABLES) {
-    const value = environment?.[name]?.trim();
-    if (value) return value;
-  }
-  return undefined;
+/** Whether the CLI would authenticate with a token variable instead of its stored login. */
+export function hasCopilotTokenInEnvironment(environment: NodeJS.ProcessEnv | undefined): boolean {
+  return COPILOT_TOKEN_ENVIRONMENT_VARIABLES.some((name) => Boolean(environment?.[name]?.trim()));
 }
 
 export const makeCopilotAcpRuntime = (

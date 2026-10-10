@@ -8,7 +8,7 @@ import {
   buildCopilotAcpSpawnInput,
   copilotAcpSpawnArgs,
   copilotLaunchRuntimeMode,
-  copilotTokenFromEnvironment,
+  hasCopilotTokenInEnvironment,
   currentCopilotModelIdFromSessionSetup,
   resolveCopilotAcpModelId,
 } from "./acpSupport.ts";
@@ -84,14 +84,11 @@ describe("buildCopilotAcpSpawnInput", () => {
   });
 });
 
-describe("copilotTokenFromEnvironment", () => {
-  it("follows the CLI's precedence and ignores blank values", () => {
-    expect(copilotTokenFromEnvironment(undefined)).toBeUndefined();
-    expect(copilotTokenFromEnvironment({ GH_TOKEN: "  ", GITHUB_TOKEN: "" })).toBeUndefined();
-    expect(copilotTokenFromEnvironment({ GITHUB_TOKEN: "c", GH_TOKEN: "b" })).toBe("b");
-    expect(
-      copilotTokenFromEnvironment({ GITHUB_TOKEN: "c", GH_TOKEN: "b", COPILOT_GITHUB_TOKEN: "a" }),
-    ).toBe("a");
+describe("hasCopilotTokenInEnvironment", () => {
+  it("sees any of the CLI's token variables and ignores blank values", () => {
+    expect(hasCopilotTokenInEnvironment(undefined)).toBe(false);
+    expect(hasCopilotTokenInEnvironment({ GH_TOKEN: "  ", GITHUB_TOKEN: "" })).toBe(false);
+    expect(hasCopilotTokenInEnvironment({ GITHUB_TOKEN: "github_pat_c" })).toBe(true);
   });
 });
 
