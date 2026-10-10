@@ -37,6 +37,10 @@ const ACP_AGENT_SOURCE = [
   '  process.stdout.write("GitHub Copilot CLI 1.0.95\\n");',
   "  process.exit(0);",
   "}",
+  'if (args.join(" ") === "skill list --json") {',
+  '  process.stdout.write(JSON.stringify([{ name: "deploy", description: "Ship it", source: "project", path: "/work/.github/skills/deploy", enabled: true }]));',
+  "  process.exit(0);",
+  "}",
   'if (args.join(" ") !== "--acp") process.exit(1);',
   "for await (const line of NodeReadline.createInterface({ input: process.stdin })) {",
   "  const request = JSON.parse(line);",
@@ -176,7 +180,27 @@ it.layer(NodeServices.layer)("checkCopilotProviderStatus", (it) => {
         ["default", true],
         ["gpt-5.3-codex", false],
       ]);
-      expect(snapshot.slashCommands.map((command) => command.name)).toEqual(["compact"]);
+      expect(snapshot.slashCommands.map((command) => command.name)).toEqual([
+        "compact",
+        "context",
+        "usage",
+        "env",
+        "model",
+        "mcp",
+        "plan",
+        "review",
+        "research",
+        "session",
+      ]);
+      expect(snapshot.skills).toEqual([
+        {
+          name: "deploy",
+          path: "/work/.github/skills/deploy",
+          enabled: true,
+          scope: "project",
+          description: "Ship it",
+        },
+      ]);
     }),
   );
 

@@ -45,6 +45,7 @@ import {
   checkCopilotProviderStatus,
   enrichCopilotSnapshot,
 } from "./status.ts";
+import { discoverCopilotSkills } from "./skills.ts";
 import { makeCopilotTextGeneration } from "./textGeneration.ts";
 
 const decodeCopilotSettings = Schema.decodeSync(CopilotSettings);
@@ -104,6 +105,7 @@ export const CopilotDriver: ProviderDriver<CopilotSettings, CopilotDriverEnv> = 
       const latestVersions = yield* ProviderLatestVersions.ProviderLatestVersions;
       const fileSystem = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
+      const host = yield* ProviderHost.ProviderHost;
       const processEnv = yield* mergeProviderInstanceEnvironment(environment);
       const continuationIdentity = defaultProviderContinuationIdentity({
         driverKind: DRIVER_KIND,
@@ -147,7 +149,8 @@ export const CopilotDriver: ProviderDriver<CopilotSettings, CopilotDriverEnv> = 
       );
       const textGeneration = yield* makeCopilotTextGeneration(effectiveConfig, processEnv);
 
-      const checkProvider = checkCopilotProviderStatus(effectiveConfig, processEnv).pipe(
+      const { cwd } = host.paths;
+      const checkProvider = checkCopilotProviderStatus(effectiveConfig, processEnv, cwd).pipe(
         Effect.map(stampIdentity),
         Effect.provideService(Crypto.Crypto, crypto),
         Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
@@ -187,6 +190,25 @@ export const CopilotDriver: ProviderDriver<CopilotSettings, CopilotDriverEnv> = 
         ),
       );
 
+      const snapshotForCwd = (workspaceCwd: string) =>
+        !effectiveConfig.enabled
+          ? snapshot.getSnapshot
+          : Effect.all([
+              snapshot.getSnapshot,
+              discoverCopilotSkills(effectiveConfig, processEnv, workspaceCwd).pipe(
+                Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+                Effect.mapError(
+                  (cause) =>
+                    new ProviderDriverError({
+                      driver: DRIVER_KIND,
+                      instanceId,
+                      detail: `Failed to discover Copilot skills for '${workspaceCwd}'`,
+                      cause,
+                    }),
+                ),
+              ),
+            ]).pipe(Effect.map(([machineSnapshot, skills]) => ({ ...machineSnapshot, skills })));
+
       return {
         instanceId,
         driverKind: DRIVER_KIND,
@@ -195,6 +217,7 @@ export const CopilotDriver: ProviderDriver<CopilotSettings, CopilotDriverEnv> = 
         accentColor,
         enabled,
         snapshot,
+        snapshotForCwd,
         orchestrationAdapter,
         textGeneration,
       } satisfies ProviderInstance;

@@ -51,9 +51,10 @@ approval reviewer; a thread already set to Auto runs as Supervised.
 Permissions you saved in Copilot itself, such as a project's always-allow rules,
 still apply, so those actions do not ask again.
 
-Copilot can use T3 Code's tools. Slash commands and skills Copilot advertises run
-when sent as a message, such as `/context`, but they do not appear in the
-composer's menus. The Usage page does not include Copilot history, and
+Copilot can use T3 Code's tools. Its project, personal, plugin, and built-in
+skills appear in the composer's `$` menu, and its built-in commands such as
+`/context`, `/usage`, `/model`, `/plan`, and `/review` appear under **Provider**
+in the `/` menu. The Usage page does not include Copilot history, and
 conversation rewind is unavailable.
 
 Updates can run from **Settings → Providers** when T3 Code recognizes the Copilot

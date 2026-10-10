@@ -11,6 +11,7 @@ import {
   type ServerProvider,
   type ServerProviderAuth,
   type ServerProviderModel,
+  type ServerProviderSlashCommand,
 } from "@t3tools/contracts";
 import { causeErrorTag } from "@t3tools/shared/observability";
 import { createModelCapabilities } from "@t3tools/shared/model";
@@ -48,6 +49,7 @@ import {
   hasCopilotTokenInEnvironment,
   makeCopilotAcpRuntime,
 } from "./acpSupport.ts";
+import { discoverCopilotSkills } from "./skills.ts";
 
 const COPILOT_PRESENTATION = {
   displayName: "Copilot",
@@ -64,6 +66,45 @@ const VERSION_PROBE_TIMEOUT_MS = 4_000;
 const COPILOT_ACP_INITIALIZE_TIMEOUT_MS = 8_000;
 /** The first Copilot CLI release whose `--acp` server shipped (public preview). */
 const COPILOT_MINIMUM_ACP_VERSION = "0.0.397";
+
+/**
+ * Built-in commands Copilot runs when sent as prompt text over ACP. The CLI
+ * advertises the live list only after a session opens, which the probe never
+ * does. shortcut: the documented set as of CLI 1.0; replace with
+ * `available_commands_update` once a session-backed catalog exists.
+ */
+const COPILOT_SLASH_COMMANDS: ReadonlyArray<ServerProviderSlashCommand> = [
+  COMPACT_SLASH_COMMAND,
+  { name: "context", description: "Show context window token usage" },
+  { name: "usage", description: "Show session usage metrics per model" },
+  { name: "env", description: "Show loaded instructions, MCP servers, skills, and agents" },
+  {
+    name: "model",
+    description: "Show or change the session's model",
+    input: { hint: "[MODEL | auto]" },
+  },
+  { name: "mcp", description: "Show MCP servers", input: { hint: "list | show SERVER-NAME" } },
+  {
+    name: "plan",
+    description: "Create an implementation plan before coding",
+    input: { hint: "[PROMPT]" },
+  },
+  {
+    name: "review",
+    description: "Run the code review agent on the current changes",
+    input: { hint: "[PROMPT]" },
+  },
+  {
+    name: "research",
+    description: "Run a deep research investigation",
+    input: { hint: "TOPIC" },
+  },
+  {
+    name: "session",
+    description: "Show session information",
+    input: { hint: "info | checkpoints | files | plan" },
+  },
+];
 
 const COPILOT_BUILT_IN_MODELS: ReadonlyArray<ServerProviderModel> = [
   {
@@ -178,6 +219,7 @@ export function copilotAcpFailureMessage(version: string | null): string {
 export const checkCopilotProviderStatus = Effect.fn("checkCopilotProviderStatus")(function* (
   copilotSettings: CopilotSettings,
   environment: NodeJS.ProcessEnv = process.env,
+  cwd?: string,
 ): Effect.fn.Return<
   ServerProviderDraft,
   never,
@@ -271,6 +313,11 @@ export const checkCopilotProviderStatus = Effect.fn("checkCopilotProviderStatus"
 
   const auth = copilotAuthFromEnvironment(environment);
 
+  const skills = yield* discoverCopilotSkills(copilotSettings, environment, cwd).pipe(
+    Effect.tapError((cause) => Effect.logDebug("Copilot skill discovery failed.", { cause })),
+    Effect.orElseSucceed(() => []),
+  );
+
   const acpExit = yield* probeCopilotAcpInitialize(copilotSettings, environment).pipe(
     Effect.timeoutOption(COPILOT_ACP_INITIALIZE_TIMEOUT_MS),
     Effect.exit,
@@ -285,6 +332,7 @@ export const checkCopilotProviderStatus = Effect.fn("checkCopilotProviderStatus"
       enabled: true,
       checkedAt,
       models,
+      skills,
       probe: {
         installed: true,
         version,
@@ -300,7 +348,8 @@ export const checkCopilotProviderStatus = Effect.fn("checkCopilotProviderStatus"
     enabled: true,
     checkedAt,
     models,
-    slashCommands: [COMPACT_SLASH_COMMAND],
+    skills,
+    slashCommands: COPILOT_SLASH_COMMANDS,
     probe: {
       installed: true,
       version,
