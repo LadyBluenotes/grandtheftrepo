@@ -190,6 +190,30 @@ describe("resolveOnboardingProviderLoginCommand", () => {
     ).toBe("/opt/claude-work/bin/claude auth login");
   });
 
+  it("uses the selected Copilot account binary", () => {
+    const provider: ServerProvider = {
+      ...readyCodex,
+      driver: ProviderDriverKind.make("copilot"),
+      instanceId: ProviderInstanceId.make("copilot_work"),
+    };
+
+    expect(
+      resolveOnboardingProviderLoginCommand(
+        provider,
+        {
+          ...DEFAULT_SERVER_SETTINGS,
+          providerInstances: {
+            [provider.instanceId]: {
+              driver: provider.driver,
+              config: { binaryPath: "/opt/copilot-work/bin/copilot" },
+            },
+          },
+        },
+        "linux",
+      ),
+    ).toBe("/opt/copilot-work/bin/copilot login");
+  });
+
   it("quotes a Codex path with spaces for PowerShell", () => {
     expect(
       resolveOnboardingProviderLoginCommand(
@@ -331,6 +355,9 @@ describe("resolveOnboardingProviderInstallCommand", () => {
     expect(resolveOnboardingProviderInstallCommand("claudeAgent", "windows")).toBe(
       "irm https://claude.ai/install.ps1 | iex",
     );
+    expect(resolveOnboardingProviderInstallCommand("copilot", "windows")).toBe(
+      "winget install GitHub.Copilot",
+    );
   });
 
   it.each(["darwin", "linux", "unknown"] as const)("uses the shell installer on %s", (platform) => {
@@ -339,6 +366,9 @@ describe("resolveOnboardingProviderInstallCommand", () => {
     );
     expect(resolveOnboardingProviderInstallCommand("claudeAgent", platform)).toBe(
       "curl -fsSL https://claude.ai/install.sh | bash",
+    );
+    expect(resolveOnboardingProviderInstallCommand("copilot", platform)).toBe(
+      "curl -fsSL https://gh.io/copilot-install | bash",
     );
   });
 });

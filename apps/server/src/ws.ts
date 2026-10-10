@@ -2228,16 +2228,24 @@ const layerWsRpc = (
                   )
                 )
                   continue;
-                yield* instance.refreshModels().pipe(
-                  Effect.mapError(
-                    (error) =>
-                      new ProviderSetupError({
-                        instanceId: instance.instanceId,
-                        operation: "refresh-models",
-                        detail: error.detail,
-                      }),
-                  ),
-                );
+                const refreshed = yield* instance.refreshModels().pipe(Effect.result);
+                if (Result.isFailure(refreshed)) {
+                  // A targeted refresh reports its failure. An untargeted one
+                  // covers every provider, so one that cannot refresh (a
+                  // signed-out CLI, say) must not hide the others' results.
+                  if (input.instanceId !== undefined) {
+                    return yield* new ProviderSetupError({
+                      instanceId: instance.instanceId,
+                      operation: "refresh-models",
+                      detail: refreshed.failure.detail,
+                    });
+                  }
+                  yield* Effect.logWarning("Provider model refresh failed.", {
+                    instanceId: instance.instanceId,
+                    detail: refreshed.failure.detail,
+                  });
+                  continue;
+                }
                 providers = yield* providerRegistry.refreshInstance(instance.instanceId);
               }
             }
