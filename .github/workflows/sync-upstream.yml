@@ -40,6 +40,9 @@ jobs:
     runs-on: ubuntu-24.04
     env:
       SYNC_TOKEN: ${{ secrets.SYNC_TOKEN }}
+      # The checkout gains an `upstream` remote, and gh would otherwise resolve
+      # the parent repository as the base for every pr and issue command.
+      GH_REPO: ${{ github.repository }}
     steps:
       - uses: actions/checkout@v6
         with:
