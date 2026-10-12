@@ -59,25 +59,65 @@ export type KanbanBlock = typeof KanbanBlock.Type;
 
 export const KanbanThreadLink = Schema.Struct({ id: ThreadId, linkedAt: IsoDateTime });
 
-/** What the board needs per card; the body and log travel only with `getIssue`. */
-export const KanbanIssueSummary = Schema.Struct({
+/** The model class the author expects the work to need. */
+export const KanbanTier = Schema.Literals(["cheap", "standard", "strong"]);
+export type KanbanTier = typeof KanbanTier.Type;
+export const KANBAN_TIERS = KanbanTier.literals;
+
+/** One checkable sentence defining done. Ids are server-made. */
+export const KanbanCriterion = Schema.Struct({
+  id: TrimmedNonEmptyString,
+  text: Schema.String,
+  checked: Schema.Boolean,
+});
+export type KanbanCriterion = typeof KanbanCriterion.Type;
+
+/** Why a Done card came back: the work was wrong, or the ask changed. */
+export const KanbanReopenReason = Schema.Literals(["defect", "scope_change"]);
+export type KanbanReopenReason = typeof KanbanReopenReason.Type;
+
+export const KanbanReopen = Schema.Struct({
+  reason: KanbanReopenReason,
+  at: IsoDateTime,
+  by: KanbanActor,
+});
+export type KanbanReopen = typeof KanbanReopen.Type;
+
+const KanbanIssueFields = {
   id: KanbanSlug,
   title: TrimmedNonEmptyString,
   status: KanbanStatus,
   priority: KanbanPriority,
   labels: Schema.Array(KanbanLabel),
   verification: KanbanVerification,
+  tier: Schema.NullOr(KanbanTier),
   blocked: Schema.NullOr(KanbanBlock),
+  /** The latest reopen; null until a Done card comes back. */
+  reopened: Schema.NullOr(KanbanReopen),
   threads: Schema.Array(KanbanThreadLink),
   createdAt: IsoDateTime,
   createdBy: KanbanActor,
   updatedAt: IsoDateTime,
   doneAt: Schema.NullOr(IsoDateTime),
   archivedAt: Schema.NullOr(IsoDateTime),
+};
+
+/** What the board needs per card; the body, log and criteria travel only with `getIssue`. */
+export const KanbanIssueSummary = Schema.Struct({
+  ...KanbanIssueFields,
+  criteriaOpen: Schema.Int,
+  criteriaTotal: Schema.Int,
 });
 export type KanbanIssueSummary = typeof KanbanIssueSummary.Type;
 
-export const KanbanLogKind = Schema.Literals(["note", "status", "blocked", "unblocked"]);
+export const KanbanLogKind = Schema.Literals([
+  "note",
+  "status",
+  "blocked",
+  "unblocked",
+  "reopened",
+  "criterion",
+]);
 export type KanbanLogKind = typeof KanbanLogKind.Type;
 
 export const KanbanLogEntry = Schema.Struct({
@@ -89,7 +129,8 @@ export const KanbanLogEntry = Schema.Struct({
 export type KanbanLogEntry = typeof KanbanLogEntry.Type;
 
 export const KanbanIssue = Schema.Struct({
-  ...KanbanIssueSummary.fields,
+  ...KanbanIssueFields,
+  criteria: Schema.Array(KanbanCriterion),
   description: Schema.String,
   log: Schema.Array(KanbanLogEntry),
 });
@@ -127,6 +168,9 @@ export const KanbanWriteAction = Schema.Literals([
   "issue.archive",
   "issue.unarchive",
   "issue.delete",
+  "criterion.add",
+  "criterion.update",
+  "criterion.remove",
   "decision.create",
   "decision.update",
   "decision.delete",
@@ -146,9 +190,15 @@ export const KanbanWrite = Schema.Struct({
   priority: Schema.optional(KanbanPriority),
   labels: Schema.optional(Schema.Array(KanbanLabel)),
   verification: Schema.optional(KanbanVerification),
+  tier: Schema.optional(KanbanTier),
   status: Schema.optional(KanbanStatus),
-  /** Note text for `issue.note`. */
+  /** Required by `issue.move` when the card leaves Done. */
+  reopenReason: Schema.optional(KanbanReopenReason),
+  /** Note text for `issue.note`; criterion text for `criterion.add` and `criterion.update`. */
   text: Schema.optional(Schema.String),
+  criterionId: Schema.optional(TrimmedNonEmptyString),
+  /** New checked state for `criterion.update`. */
+  checked: Schema.optional(Schema.Boolean),
   /** Block reason for `issue.block`. */
   reason: Schema.optional(Schema.String),
   threadId: Schema.optional(ThreadId),

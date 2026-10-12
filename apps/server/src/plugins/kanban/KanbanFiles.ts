@@ -1,14 +1,17 @@
 import {
   KanbanActor,
   KanbanBlock,
+  KanbanCriterion,
   KanbanDecision,
   KanbanLabel,
   KanbanLogEntry,
   KanbanLogKind,
   KanbanPriority,
+  KanbanReopen,
   KanbanSlug,
   KanbanStatus,
   KanbanThreadLink,
+  KanbanTier,
   KanbanVerification,
   type KanbanIssue,
 } from "@t3tools/contracts";
@@ -53,7 +56,10 @@ const IssueFrontmatter = Schema.Struct({
   priority: Schema.optional(Schema.NullOr(KanbanPriority)),
   labels: Schema.optional(Schema.NullOr(Schema.Array(KanbanLabel))),
   verification: Schema.optional(Schema.NullOr(KanbanVerification)),
+  tier: Schema.optional(Schema.NullOr(KanbanTier)),
+  criteria: Schema.optional(Schema.NullOr(Schema.Array(KanbanCriterion))),
   blocked: Schema.optional(Schema.NullOr(KanbanBlock)),
+  reopened: Schema.optional(Schema.NullOr(KanbanReopen)),
   threads: Schema.optional(Schema.NullOr(Schema.Array(KanbanThreadLink))),
   createdAt: Schema.String,
   createdBy: Schema.optional(Schema.NullOr(KanbanActor)),
@@ -98,7 +104,10 @@ export function parseIssue(id: string, text: string): ParsedIssue | null {
       priority: front.priority ?? "p3",
       labels: front.labels ?? [],
       verification: front.verification ?? "unverified",
+      tier: front.tier ?? null,
+      criteria: front.criteria ?? [],
       blocked: front.blocked ?? null,
+      reopened: front.reopened ?? null,
       threads: front.threads ?? [],
       createdAt: front.createdAt,
       createdBy: front.createdBy ?? "user",
@@ -141,8 +150,14 @@ export function formatLogEntry(entry: KanbanLogEntry): string {
 }
 
 export function serializeIssue(issue: KanbanIssue, project: string): string {
-  const { id: _id, description, log, blocked, ...rest } = issue;
-  const front = { ...rest, project, ...(blocked === null ? {} : { blocked }) };
+  const { id: _id, description, log, blocked, reopened, criteria, ...rest } = issue;
+  const front = {
+    ...rest,
+    project,
+    ...(criteria.length === 0 ? {} : { criteria }),
+    ...(blocked === null ? {} : { blocked }),
+    ...(reopened === null ? {} : { reopened }),
+  };
   const body = description.length === 0 ? "" : `${description}\n`;
   const logText = log.length === 0 ? "" : `${log.map(formatLogEntry).join("\n")}\n`;
   return `---\n${stringifyYaml(front, { lineWidth: 0 })}---\n${body}\n## Log\n${logText}`;

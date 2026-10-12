@@ -98,6 +98,12 @@ export function buildIssuePrompt(
   return [
     issue.title,
     issue.description,
+    issue.criteria.length === 0
+      ? ""
+      : [
+          "Acceptance criteria (done means every box is checked):",
+          ...issue.criteria.map((c) => `- [${c.checked ? "x" : " "}] ${c.text}`),
+        ].join("\n"),
     `Issue \`${issue.id}\` on the T3 kanban board.`,
     onTicket,
     all,

@@ -10,7 +10,10 @@ const issue = {
   priority: "p2" as const,
   labels: [],
   verification: "verified" as const,
+  tier: null,
+  criteria: [],
   blocked: null,
+  reopened: null,
   threads: [],
   createdAt: "2026-10-12T00:00:00.000Z",
   createdBy: "user",
@@ -47,6 +50,23 @@ describe("buildIssuePrompt", () => {
     expect(prompt).toContain("Decision categories: auth (12), general (7)");
     expect(prompt).toContain("kanban_list kind=decision issue=fix-login-redirect");
     expect(prompt).not.toContain("justification");
+  });
+
+  it("lists acceptance criteria as a checklist", () => {
+    const prompt = buildIssuePrompt(
+      {
+        ...issue,
+        criteria: [
+          { id: "c1", text: "Tests pass", checked: true },
+          { id: "c2", text: "Docs updated", checked: false },
+        ],
+      },
+      [],
+      [],
+    );
+    expect(prompt).toContain(
+      "Acceptance criteria (done means every box is checked):\n- [x] Tests pass\n- [ ] Docs updated",
+    );
   });
 
   it("says when there is nothing to inherit and skips an empty description", () => {

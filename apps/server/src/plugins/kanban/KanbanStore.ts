@@ -244,8 +244,13 @@ const make = Effect.gen(function* () {
   const summary = ({
     description: _description,
     log: _log,
+    criteria,
     ...rest
-  }: KanbanIssue): KanbanIssueSummary => rest;
+  }: KanbanIssue): KanbanIssueSummary => ({
+    ...rest,
+    criteriaOpen: criteria.filter((c) => !c.checked).length,
+    criteriaTotal: criteria.length,
+  });
   const board = (state: Loaded): KanbanBoard => ({
     directory: state.directory,
     issues: Array.from(state.issues.values(), summary),
@@ -360,7 +365,10 @@ const make = Effect.gen(function* () {
           priority: w.priority ?? "p3",
           labels: w.labels ?? [],
           verification: w.verification ?? "unverified",
+          tier: w.tier ?? null,
+          criteria: [],
           blocked: null,
+          reopened: null,
           threads: [],
           createdAt: at,
           createdBy: actor,
@@ -383,6 +391,7 @@ const make = Effect.gen(function* () {
             ...(w.priority === undefined ? {} : { priority: w.priority }),
             ...(w.labels === undefined ? {} : { labels: w.labels }),
             ...(w.verification === undefined ? {} : { verification: w.verification }),
+            ...(w.tier === undefined ? {} : { tier: w.tier }),
           }),
         );
         return { id: current.id };
@@ -395,7 +404,69 @@ const make = Effect.gen(function* () {
             code: "gated",
             message: `Only the user moves a card out of ${current.status}.`,
           });
-        yield* saveIssue(state, moved(current, status, actor, at));
+        const open = current.criteria.filter((c) => !c.checked).length;
+        if (status === "done" && current.status !== "done" && open > 0)
+          return yield* invalid(`${open} acceptance criteria are still open.`);
+        let next = moved(current, status, actor, at);
+        if (current.status === "done" && status !== "done") {
+          if (w.reopenReason === undefined)
+            return yield* invalid(
+              "A completed issue needs a reopen reason: defect or scope_change.",
+            );
+          next = {
+            ...next,
+            reopened: { reason: w.reopenReason, at, by: actor },
+            log: [...next.log, { at, by: actor, kind: "reopened", text: w.reopenReason }],
+          };
+        }
+        yield* saveIssue(state, next);
+        return { id: current.id };
+      }
+      case "criterion.add": {
+        const current = yield* issue();
+        const text = yield* need(w.text, "text");
+        const next =
+          1 + current.criteria.reduce((max, c) => Math.max(max, Number(c.id.slice(1)) || 0), 0);
+        yield* saveIssue(
+          state,
+          touch(logged(current, "criterion", `added: ${text}`), {
+            criteria: [...current.criteria, { id: `c${next}`, text, checked: false }],
+          }),
+        );
+        return { id: current.id };
+      }
+      case "criterion.update": {
+        const current = yield* issue();
+        const criterionId = yield* need(w.criterionId, "criterionId");
+        const index = current.criteria.findIndex((c) => c.id === criterionId);
+        if (index === -1) return yield* notFound(`No criterion "${criterionId}" on ${current.id}.`);
+        const before = current.criteria[index]!;
+        const after = {
+          ...before,
+          ...(w.text === undefined ? {} : { text: w.text }),
+          ...(w.checked === undefined ? {} : { checked: w.checked }),
+        };
+        const change =
+          after.checked !== before.checked
+            ? `${after.checked ? "checked" : "unchecked"}: ${after.text}`
+            : `edited: ${before.text} → ${after.text}`;
+        const criteria = [...current.criteria];
+        criteria[index] = after;
+        yield* saveIssue(state, touch(logged(current, "criterion", change), { criteria }));
+        return { id: current.id };
+      }
+      case "criterion.remove": {
+        const current = yield* issue();
+        const criterionId = yield* need(w.criterionId, "criterionId");
+        const removed = current.criteria.find((c) => c.id === criterionId);
+        if (removed === undefined)
+          return yield* notFound(`No criterion "${criterionId}" on ${current.id}.`);
+        yield* saveIssue(
+          state,
+          touch(logged(current, "criterion", `removed: ${removed.text}`), {
+            criteria: current.criteria.filter((c) => c.id !== criterionId),
+          }),
+        );
         return { id: current.id };
       }
       case "issue.note": {
@@ -560,7 +631,9 @@ const make = Effect.gen(function* () {
         (issue) =>
           issue.threads.some((link) => link.id === threadId) &&
           !HOLDING.has(issue.status) &&
-          rank(status) > rank(issue.status),
+          rank(status) > rank(issue.status) &&
+          // Done keeps its definition: open criteria hold the card in review.
+          !(status === "done" && issue.criteria.some((c) => !c.checked)),
       );
       if (linked.length === 0) return;
       const at = yield* nowIso;
