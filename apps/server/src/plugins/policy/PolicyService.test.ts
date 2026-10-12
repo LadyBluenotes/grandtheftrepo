@@ -17,6 +17,7 @@ import * as SqlClient from "effect/sql/SqlClient";
 import * as ServerConfig from "../../config.ts";
 import * as ServerSettings from "../../serverSettings.ts";
 import * as PluginDatabase from "../PluginDatabase.ts";
+import * as InstructionFiles from "./InstructionFiles.ts";
 import { migrations } from "./migrations.ts";
 import * as PolicyService from "./PolicyService.ts";
 
@@ -57,7 +58,7 @@ const layerTest = PolicyService.layer.pipe(
     }),
   ),
   Layer.provideMerge(layerHome),
-  // The runner's own CLAUDE_CONFIG_DIR or COPILOT_HOME must not pick the targets.
+  // The runner's own CLAUDE_CONFIG_DIR, CODEX_HOME or COPILOT_HOME must not pick the targets.
   Layer.provideMerge(Layer.succeed(HostProcess.Environment, {})),
   Layer.provideMerge(
     Layer.fresh(ServerConfig.layerTest(process.cwd(), { prefix: "t3code-policy-test-" })),
@@ -336,6 +337,114 @@ it.layer(layerTest)("PolicyService", (it) => {
         (yield* policies.list(ProjectId.make("project-2"))).map((policy) => policy.projectId),
         ["*", "*", "*", "*", "*"],
       );
+    }),
+  );
+
+  it.effect("two installs at once into one file keep both blocks", () =>
+    Effect.gen(function* () {
+      const policies = yield* PolicyService.PolicyService;
+      const fs = yield* FileSystem.FileSystem;
+      const local = ProjectId.make("project-concurrent");
+      for (const key of ["one", "two"]) {
+        yield* policies.create({ projectId: local, key, title: key, body: `Policy ${key}.` });
+        yield* policies.accept({ projectId: local, key, version: 1 });
+      }
+      const install = (key: string) =>
+        policies.install({ projectId: local, key, agents: ["claude"] });
+      const [[one]] = yield* Effect.all([install("one"), install("two")], {
+        concurrency: "unbounded",
+      });
+      const text = yield* fs.readFileString(one!.path);
+      assert.include(text, "<!-- fork-policy:start key=project-concurrent/one -->");
+      assert.include(text, "<!-- fork-policy:start key=project-concurrent/two -->");
+    }),
+  );
+
+  it.effect("each agent's file follows its default instance's environment over the server's", () =>
+    Effect.gen(function* () {
+      const path = yield* Path.Path;
+      const home = yield* HostProcess.HomeDirectory;
+      const targetsWith = (settings: Parameters<typeof ServerSettings.layerTest>[0]) =>
+        InstructionFiles.targets().pipe(
+          Effect.provide(ServerSettings.layerTest(settings)),
+          Effect.provideService(HostProcess.Environment, {
+            CLAUDE_CONFIG_DIR: path.join(home, "host-claude"),
+            CODEX_HOME: path.join(home, "host-codex"),
+            COPILOT_HOME: path.join(home, "host-copilot"),
+          }),
+        );
+      const instance = (driver: string, name: string, value: string, config: object = {}) => ({
+        [ProviderInstanceId.make(driver)]: {
+          driver: ProviderDriverKind.make(driver),
+          environment: [{ name, value, sensitive: false }],
+          config,
+        },
+      });
+
+      assert.deepStrictEqual(yield* targetsWith({}), {
+        claude: path.join(home, "host-claude", "CLAUDE.md"),
+        codex: path.join(home, "host-codex", "AGENTS.md"),
+        copilot: path.join(home, "host-copilot", "copilot-instructions.md"),
+      });
+      assert.deepStrictEqual(
+        yield* targetsWith({
+          providerInstances: {
+            ...instance("claudeAgent", "CLAUDE_CONFIG_DIR", "~/instance-claude"),
+            ...instance("codex", "CODEX_HOME", "~/instance-codex"),
+            ...instance("copilot", "COPILOT_HOME", path.join(home, "instance-copilot")),
+          },
+        }),
+        {
+          claude: path.join(home, "instance-claude", "CLAUDE.md"),
+          codex: path.join(home, "instance-codex", "AGENTS.md"),
+          copilot: path.join(home, "instance-copilot", "copilot-instructions.md"),
+        },
+      );
+      // Codex's own homePath outranks CODEX_HOME, as it does for the driver.
+      assert.strictEqual(
+        (yield* targetsWith({
+          providerInstances: instance("codex", "CODEX_HOME", "~/instance-codex", {
+            homePath: "~/codex-config",
+          }),
+        })).codex,
+        path.join(home, "codex-config", "AGENTS.md"),
+      );
+    }),
+  );
+
+  it.effect("a fork-policy marker in RULES.md refuses the install and writes nothing", () =>
+    Effect.gen(function* () {
+      const policies = yield* PolicyService.PolicyService;
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const sql = yield* SqlClient.SqlClient;
+      const home = yield* HostProcess.HomeDirectory;
+      const { stateDir } = yield* ServerConfig.ServerConfig;
+      const rulesPath = path.join(stateDir, "RULES.md");
+      const claudeFile = path.join(home, "claude-config", "CLAUDE.md");
+      const codexFile = path.join(home, ".codex", "AGENTS.md");
+      const local = ProjectId.make("project-rules");
+      yield* fs.writeFileString(claudeFile, "# Claude\n");
+      yield* fs.writeFileString(codexFile, "# Codex\n");
+      yield* fs.writeFileString(rulesPath, "Be kind.\n<!-- fork-policy:end key=x -->\n");
+      yield* policies.create({ projectId: local, key: "rules", title: "Rules", body: "Body." });
+      yield* policies.accept({ projectId: local, key: "rules", version: 1 });
+
+      const error = yield* Effect.flip(policies.install({ projectId: local, key: "rules" }));
+      assert.deepStrictEqual(
+        [error.code, error.message],
+        [
+          "invalid",
+          `${rulesPath} cannot contain "fork-policy:". Remove that marker and install again.`,
+        ],
+      );
+      assert.strictEqual(yield* fs.readFileString(claudeFile), "# Claude\n");
+      assert.strictEqual(yield* fs.readFileString(codexFile), "# Codex\n");
+      assert.deepStrictEqual(
+        yield* sql`SELECT agent FROM deliveries WHERE project_id = ${local}`,
+        [],
+      );
+      yield* fs.remove(rulesPath);
     }),
   );
 });

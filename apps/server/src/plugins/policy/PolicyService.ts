@@ -22,6 +22,7 @@ import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
 import type * as PlatformError from "effect/PlatformError";
 import * as Schema from "effect/Schema";
+import * as Semaphore from "effect/Semaphore";
 import * as SqlClient from "effect/sql/SqlClient";
 import type * as SqlError from "effect/sql/SqlError";
 
@@ -116,6 +117,8 @@ const make = Effect.gen(function* () {
   const provided = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
     Effect.provideContext(effect, services);
   const rulesPath = path.join(stateDir, "RULES.md");
+  /** Installs read the files they rewrite, so two at once would drop one's block. */
+  const installLock = yield* Semaphore.make(1);
   const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
   /** A missing `RULES.md` is empty. */
   const readRules = Effect.map(Files.read(rulesPath), (text) => text ?? "");
@@ -221,13 +224,15 @@ const make = Effect.gen(function* () {
       if (policy.state !== "accepted") {
         return yield* invalid(`Policy "${key}" version ${policy.version} is not accepted.`);
       }
+      // The rules sit inside the block, so a marker there would break it like one in the body.
+      const rules = yield* readRules;
+      if (rules.includes("fork-policy:")) {
+        return yield* invalid(
+          `${rulesPath} cannot contain "fork-policy:". Remove that marker and install again.`,
+        );
+      }
       const id = blockId(projectId, key);
-      const block = renderBlock({
-        id,
-        rules: yield* readRules,
-        body: policy.body,
-        version: policy.version,
-      });
+      const block = renderBlock({ id, rules, body: policy.body, version: policy.version });
       const targets = yield* Files.targets();
       // Every file is read before any is written, so a damaged block refuses the whole install.
       const plans: Array<{ agent: PolicyAgent; path: string; next: string | undefined }> = [];
@@ -272,6 +277,7 @@ const make = Effect.gen(function* () {
       }
       return results;
     },
+    installLock.withPermits(1),
     provided,
     Effect.catchTags({
       SqlError: io("Could not record the install."),

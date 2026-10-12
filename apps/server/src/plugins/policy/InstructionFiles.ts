@@ -1,4 +1,10 @@
-import { ClaudeSettings, ProviderInstanceId, type PolicyAgent } from "@t3tools/contracts";
+import {
+  ClaudeSettings,
+  CodexSettings,
+  ProviderInstanceId,
+  type PolicyAgent,
+} from "@t3tools/contracts";
+import { mergeProviderInstanceEnvironment } from "@t3tools/provider-core/server/instanceEnvironment";
 import { writeFileStringAtomically } from "@t3tools/shared/atomicWrite";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as Effect from "effect/Effect";
@@ -7,31 +13,55 @@ import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 import { resolveClaudeHomePath } from "../../provider/Drivers/ClaudeHome.ts";
+import { resolveCodexHomeLayout } from "../../provider/Drivers/CodexHomeLayout.ts";
 import * as ServerSettings from "../../serverSettings.ts";
 import { findBlock, type FoundBlock } from "./Render.ts";
 
 const decodeClaudeSettings = Schema.decodeUnknownOption(ClaudeSettings);
-const CLAUDE_INSTANCE = ProviderInstanceId.make("claudeAgent");
+const decodeCodexSettings = Schema.decodeUnknownOption(CodexSettings);
+const decodeCodexSettingsSync = Schema.decodeSync(CodexSettings);
 
 /**
- * The instruction file each agent reads from the user's home. Claude's sits in the config
- * directory this server starts Claude Code with, so an instance with a custom `homePath` is
- * not missed; Copilot's follows `COPILOT_HOME` the way the Copilot driver does.
+ * The instruction file each agent reads, found the way its default instance's driver finds its
+ * home: the instance's settings, then its environment over the server's. Claude's sits in its
+ * config directory (`homePath`, else `CLAUDE_CONFIG_DIR`), Codex's in its shared home
+ * (`homePath`, else `CODEX_HOME`), and Copilot's in `COPILOT_HOME`.
  */
 export const targets = Effect.fn("InstructionFiles.targets")(function* () {
   const path = yield* Path.Path;
   const home = yield* HostProcess.HomeDirectory;
-  const environment = yield* HostProcess.Environment;
+  const hostEnvironment = yield* HostProcess.Environment;
   const settings = yield* (yield* ServerSettings.ServerSettingsService).getSettings;
-  const claude = decodeClaudeSettings(settings.providerInstances[CLAUDE_INSTANCE]?.config ?? {});
+  const instance = (id: string) => settings.providerInstances[ProviderInstanceId.make(id)];
+  // The host environment is passed because the helper's own default is `process.env`.
+  const environmentOf = (id: string) =>
+    mergeProviderInstanceEnvironment(instance(id)?.environment, hostEnvironment);
+
+  const claude = decodeClaudeSettings(instance("claudeAgent")?.config ?? {});
   const claudeDir = yield* resolveClaudeHomePath(
     { homePath: Option.isSome(claude) ? claude.value.homePath : "" },
-    environment,
+    yield* environmentOf("claudeAgent"),
   );
-  const copilotHome = environment.COPILOT_HOME?.trim() || path.join(home, ".copilot");
+
+  const codex = Option.getOrElse(decodeCodexSettings(instance("codex")?.config ?? {}), () =>
+    decodeCodexSettingsSync({}),
+  );
+  // As the Codex usage reader does: `CODEX_HOME` counts only when the settings name no home.
+  const codexEnvironmentHome = (yield* environmentOf("codex")).CODEX_HOME?.trim();
+  const codexHome = yield* resolveCodexHomeLayout(
+    codex.setupMode !== "managed" &&
+      !codex.homePath.trim() &&
+      !codex.shadowHomePath.trim() &&
+      codexEnvironmentHome
+      ? { ...codex, homePath: codexEnvironmentHome }
+      : codex,
+  );
+
+  const copilotHome =
+    (yield* environmentOf("copilot")).COPILOT_HOME?.trim() || path.join(home, ".copilot");
   return {
     claude: path.join(claudeDir, "CLAUDE.md"),
-    codex: path.join(home, ".codex", "AGENTS.md"),
+    codex: path.join(codexHome.sharedHomePath, "AGENTS.md"),
     copilot: path.join(copilotHome, "copilot-instructions.md"),
   } satisfies Record<PolicyAgent, string>;
 });

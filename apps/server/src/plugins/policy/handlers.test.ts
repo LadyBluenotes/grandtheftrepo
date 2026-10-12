@@ -49,7 +49,7 @@ const layerTest = PolicyService.layer.pipe(
   ),
   Layer.provideMerge(ServerSettings.layerTest()),
   Layer.provideMerge(layerHome),
-  // The runner's own CLAUDE_CONFIG_DIR or COPILOT_HOME must not pick the targets.
+  // The runner's own CLAUDE_CONFIG_DIR, CODEX_HOME or COPILOT_HOME must not pick the targets.
   Layer.provideMerge(Layer.succeed(HostProcess.Environment, {})),
   Layer.provideMerge(
     Layer.fresh(ServerConfig.layerTest(process.cwd(), { prefix: "t3code-policy-handlers-test-" })),
