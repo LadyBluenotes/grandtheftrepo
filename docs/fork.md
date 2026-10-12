@@ -30,6 +30,10 @@ A plugin registers sweeps with `PluginSupervisor.register` from its layer. The h
 the `supervisor.json` interval, in registry order, and records each tick in `plugins/_host.sqlite`;
 `supervisor.status` reads the latest.
 
+A sweep that finds something waiting on a person raises a flag with `Attention.raise` and clears it
+with `Attention.clear` once the cause is gone. Flags live in the host's `attention` table in that
+same file, so any plugin can raise one without depending on the plugin that shows them.
+
 ## Upstream seams
 
 These are the only lines upstream files carry for the plugin system. A merge conflict in one of
@@ -79,10 +83,10 @@ them half-evaluated. The host hands `toolkitRegistration` to `ServerPlugin.mcp` 
 - **kanban**: a board per project. Issues and decisions are files under
   `<T3 home>/wiki/<project-slug>/`; the folder is changeable per project from the board.
   Its own database, `plugins/kanban.sqlite`, holds the emergency stop (`StopGate`, which a sweep
-  that starts a thread must ask first; no launcher calls it yet) and the `attention` flags, one of
-  which the `writers` sweep raises when two agents write one project. Server:
-  `apps/server/src/plugins/kanban/`. Contracts: `packages/contracts/src/plugins/kanban.ts`. Web:
-  `apps/web/src/plugins/kanban/`. User guide: [Kanban board](./user/kanban.md).
+  that starts a thread must ask first; no launcher calls it yet). The `writers` sweep raises an
+  attention flag when two agents write one project. Server: `apps/server/src/plugins/kanban/`.
+  Contracts: `packages/contracts/src/plugins/kanban.ts`. Web: `apps/web/src/plugins/kanban/`. User
+  guide: [Kanban board](./user/kanban.md).
 - **telemetry**: token usage per provider turn, from `provider-turn.updated`. The template plugin:
   it uses every host seam once (database, reactor, sweep, gateway method, MCP tool, settings
   panel) and is the one to copy. Server: `apps/server/src/plugins/telemetry/`. Contracts:

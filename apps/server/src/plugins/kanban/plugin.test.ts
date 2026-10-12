@@ -19,6 +19,7 @@ import * as SqlitePersistence from "../../persistence/Sqlite.ts";
 import * as ProjectService from "../../project/ProjectService.ts";
 import * as ProviderRegistry from "../../provider/ProviderRegistry.ts";
 import * as ServerSettings from "../../serverSettings.ts";
+import * as Attention from "../Attention.ts";
 import * as PluginHost from "../PluginHost.ts";
 import * as PluginSupervisor from "../PluginSupervisor.ts";
 import { registry } from "../registry.ts";
@@ -92,7 +93,7 @@ const read = (method: string, input: unknown) =>
   PluginHost.handlers[PLUGIN_GATEWAY_WS_METHODS.read]({ method, input });
 
 it.effect(
-  "enabled: its file is migrated, the writers sweep records a flag in it, and the stop works",
+  "enabled: its file is migrated, the writers sweep raises a host flag, and the stop works",
   () =>
     Effect.scoped(
       Effect.gen(function* () {
@@ -104,10 +105,10 @@ it.effect(
           const sql = host.databases.get("kanban")!;
           const tables = yield* sql<{ readonly name: string }>`
             SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name`;
-          assert.includeMembers(
-            tables.map((table) => table.name),
-            ["attention", "stop"],
-          );
+          const names = tables.map((table) => table.name);
+          assert.include(names, "stop");
+          // Flags live in the host's database, not the plugin's.
+          assert.notInclude(names, "attention");
 
           const supervisor = yield* PluginSupervisor.PluginSupervisor;
           assert.deepEqual((yield* supervisor.status).sweeps, [
@@ -118,9 +119,12 @@ it.effect(
             tick.sweeps.map((s) => [s.plugin, s.name, s.status, s.examined, s.acted, s.flags]),
             [["kanban", "writers", "ok", 2, 1, 1]],
           );
-          const flags = yield* sql<{ readonly thread_id: string; readonly kind: string }>`
-            SELECT thread_id, kind FROM attention WHERE cleared_at IS NULL`;
-          assert.deepEqual(flags, [{ thread_id: "a", kind: "two_writers" }]);
+          const attention = yield* Attention.Attention;
+          const flags = yield* attention.listOpen({ pluginId: "kanban", kind: "two_writers" });
+          assert.deepEqual(
+            flags.map((flag) => flag.threadId),
+            ["a"],
+          );
 
           assert.isNull(yield* read(KANBAN_METHODS.stopGet.method, {}));
           yield* operate(KANBAN_METHODS.stopSet.method, { reason: "freeze" });
@@ -142,15 +146,17 @@ it.effect("a dry run records the sweep and writes no flag", () =>
       yield* writeStateFile("plugins.json", onlyKanban);
       yield* writeStateFile("supervisor.json", '{ "dryRun": true }');
       yield* Effect.gen(function* () {
-        const host = yield* PluginHost.PluginHost;
         const tick = yield* (yield* PluginSupervisor.PluginSupervisor).tick;
         assert.isTrue(tick.dryRun);
         assert.deepEqual(
           tick.sweeps.map((s) => [s.name, s.status, s.acted, s.flags]),
           [["writers", "ok", 0, 1]],
         );
-        const sql = host.databases.get("kanban")!;
-        assert.deepEqual(yield* sql`SELECT id FROM attention`, []);
+        const attention = yield* Attention.Attention;
+        assert.deepEqual(
+          yield* attention.listOpen({ pluginId: "kanban", kind: "two_writers" }),
+          [],
+        );
       }).pipe(Effect.provide(layerHost));
     }),
   ).pipe(Effect.provide(layerTest)),

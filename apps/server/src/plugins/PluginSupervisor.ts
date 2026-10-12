@@ -16,12 +16,10 @@ import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
 import * as Schedule from "effect/Schedule";
 import * as Schema from "effect/Schema";
-import * as SqlClient from "effect/sql/SqlClient";
 import type * as SqlError from "effect/sql/SqlError";
 import * as ServerConfig from "../config.ts";
 import { forkParked } from "../serverActivation.ts";
-import type { PluginMigration } from "./Plugin.ts";
-import * as PluginDatabase from "./PluginDatabase.ts";
+import * as HostDatabase from "./HostDatabase.ts";
 
 const DEFAULT_INTERVAL_SECONDS = 60;
 const MIN_INTERVAL_SECONDS = 5;
@@ -34,42 +32,6 @@ const Settings = Schema.Struct({
   dryRun: Schema.optional(Schema.Boolean),
 });
 const decodeSettings = Schema.decodeUnknownEffect(Schema.fromJsonString(Settings));
-
-/** The host's own file, `plugins/_host.sqlite`: one row per tick and one per sweep it ran. */
-const migrations: ReadonlyArray<PluginMigration> = [
-  [
-    1,
-    "supervisor",
-    Effect.gen(function* () {
-      const sql = yield* SqlClient.SqlClient;
-      yield* sql`
-        CREATE TABLE host_supervisor_tick (
-          id INTEGER PRIMARY KEY AUTOINCREMENT,
-          started_at TEXT NOT NULL,
-          finished_at TEXT NOT NULL,
-          dry_run INTEGER NOT NULL
-        )
-      `;
-      yield* sql`
-        CREATE INDEX host_supervisor_tick_started_at ON host_supervisor_tick (started_at)
-      `;
-      yield* sql`
-        CREATE TABLE host_supervisor_sweep (
-          tick_id INTEGER NOT NULL REFERENCES host_supervisor_tick(id) ON DELETE CASCADE,
-          plugin TEXT NOT NULL,
-          name TEXT NOT NULL,
-          status TEXT NOT NULL,
-          examined INTEGER NOT NULL,
-          acted INTEGER NOT NULL,
-          flags INTEGER NOT NULL,
-          duration_ms INTEGER NOT NULL,
-          error TEXT
-        )
-      `;
-      yield* sql`CREATE INDEX host_supervisor_sweep_tick ON host_supervisor_sweep(tick_id)`;
-    }),
-  ],
-];
 
 export interface SweepCounts {
   readonly examined: number;
@@ -170,13 +132,7 @@ const make = (order: ReadonlyArray<string>) =>
       ),
     );
 
-    const pluginsDir = path.join(stateDir, "plugins");
-    yield* fs.makeDirectory(pluginsDir, { recursive: true });
-    const { sql } = yield* PluginDatabase.open({
-      id: "_host",
-      filename: path.join(pluginsDir, "_host.sqlite"),
-      migrations,
-    });
+    const sql = yield* HostDatabase.HostDatabase;
 
     const sweeps = new Map<string, Registered>();
     const rank = (plugin: string) => {

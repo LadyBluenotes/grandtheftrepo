@@ -3,11 +3,11 @@ import type { OrchestrationV2ThreadShell } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Ref from "effect/Ref";
-import * as SqlClient from "effect/sql/SqlClient";
 
 import * as ThreadManagementService from "../../orchestration-v2/ThreadManagementService.ts";
+import * as Attention from "../Attention.ts";
+import * as HostDatabase from "../HostDatabase.ts";
 import * as PluginDatabase from "../PluginDatabase.ts";
-import { migrations } from "./migrations.ts";
 import * as WriterSweep from "./WriterSweep.ts";
 import { projectA, projectB, thread } from "./writerFixtures.ts";
 
@@ -18,17 +18,22 @@ interface FlagRow {
   readonly kind: string;
   readonly text: string;
   readonly resume_action: string;
+  readonly raised_at: string;
   readonly cleared_at: string | null;
 }
 
-/** The sweep over a migrated in-memory kanban database and a read model the test rewrites. */
+/** The sweep over a migrated in-memory host database and a read model the test rewrites. */
 const fixture = Effect.gen(function* () {
-  const { sql } = yield* PluginDatabase.open({ id: "kanban", filename: ":memory:", migrations });
+  const { sql } = yield* PluginDatabase.open({
+    id: "_host",
+    filename: ":memory:",
+    migrations: HostDatabase.migrations,
+  });
   const shells = yield* Ref.make<ReadonlyArray<OrchestrationV2ThreadShell>>([]);
   const run = yield* WriterSweep.sweep.pipe(
     Effect.provide(
       Layer.mergeAll(
-        Layer.succeed(SqlClient.SqlClient, sql),
+        Attention.layer.pipe(Layer.provide(Layer.succeed(HostDatabase.HostDatabase, sql))),
         Layer.mock(ThreadManagementService.ThreadManagementService)({
           getShellSnapshot: () =>
             Ref.get(shells).pipe(

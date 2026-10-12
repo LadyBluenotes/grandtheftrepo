@@ -27,6 +27,7 @@ import * as ProjectService from "../project/ProjectService.ts";
 import * as ProviderRegistry from "../provider/ProviderRegistry.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as ServerActivation from "../serverActivation.ts";
+import * as HostDatabase from "./HostDatabase.ts";
 import * as PluginDatabase from "./PluginDatabase.ts";
 import * as PluginHost from "./PluginHost.ts";
 import * as PluginSupervisor from "./PluginSupervisor.ts";
@@ -39,8 +40,12 @@ const layerConfig = Layer.fresh(
   ServerConfig.layerTest(process.cwd(), { prefix: "t3code-plugin-supervisor-test-" }),
 );
 
+/** The supervisor for `order` over the host database in the state directory it is given. */
+const layerOver = (order: ReadonlyArray<string>) =>
+  PluginSupervisor.layer(order).pipe(Layer.provide(HostDatabase.layer));
+
 /** The supervisor for a registry of plugins `a` then `b`, over a fresh state directory. */
-const layerSupervisor = PluginSupervisor.layer(["a", "b"]).pipe(Layer.provideMerge(layerConfig));
+const layerSupervisor = layerOver(["a", "b"]).pipe(Layer.provideMerge(layerConfig));
 
 it.layer(NodeServices.layer)("plugin supervisor", (it) => {
   it.effect("runs sweeps in registry order and records ok, failed and timed_out", () =>
@@ -171,7 +176,7 @@ it.layer(NodeServices.layer)("plugin supervisor", (it) => {
         const status = yield* supervisor.status;
         assert.isTrue(status.dryRun);
         assert.deepEqual(status.latest, summary);
-      }).pipe(Effect.provide(PluginSupervisor.layer(["a"])));
+      }).pipe(Effect.provide(layerOver(["a"])));
     }).pipe(Effect.provide(layerConfig)),
   );
 
@@ -194,7 +199,7 @@ it.layer(NodeServices.layer)("plugin supervisor", (it) => {
       const settings = Effect.map(PluginSupervisor.PluginSupervisor, (s) => s.status).pipe(
         Effect.flatten,
         Effect.map(({ intervalSeconds, dryRun }) => ({ intervalSeconds, dryRun })),
-        Effect.provide(PluginSupervisor.layer([])),
+        Effect.provide(layerOver([])),
       );
 
       yield* fs.writeFileString(filePath, "not json");

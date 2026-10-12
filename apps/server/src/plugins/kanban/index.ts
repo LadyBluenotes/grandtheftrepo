@@ -7,7 +7,8 @@ import { migrations } from "./migrations.ts";
  * A kanban board per project: issues and decisions as files under the
  * project's wiki folder, status automation from thread events, and MCP tools
  * so agents can file and read tickets. Its own database holds the emergency
- * stop and the flags a sweep raises when two agents write the same project.
+ * stop; a sweep raises a host attention flag when two agents write the same
+ * project.
  */
 export const plugin = {
   id: "kanban",

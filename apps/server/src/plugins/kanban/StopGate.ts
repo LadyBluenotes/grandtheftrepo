@@ -66,13 +66,20 @@ const make = Effect.gen(function* () {
     Effect.gen(function* () {
       const setAt = DateTime.formatIso(yield* DateTime.now);
       const trimmed = reason?.trim();
-      yield* sql`
-        INSERT INTO stop (id, set_at, set_by, reason)
-        VALUES (1, ${setAt}, ${setBy}, ${trimmed === undefined || trimmed === "" ? null : trimmed})
-        ON CONFLICT (id) DO NOTHING
-      `;
-      // The row exists now, written by this call or by the one that set it first.
-      return (yield* read) ?? (yield* Effect.die("The stop row vanished after it was written."));
+      // One transaction, so a concurrent clear cannot land between the insert and the read.
+      return yield* sql.withTransaction(
+        Effect.gen(function* () {
+          yield* sql`
+            INSERT INTO stop (id, set_at, set_by, reason)
+            VALUES (1, ${setAt}, ${setBy}, ${trimmed === undefined || trimmed === "" ? null : trimmed})
+            ON CONFLICT (id) DO NOTHING
+          `;
+          // The row exists now, written by this call or by the one that set it first.
+          return (
+            (yield* read) ?? (yield* Effect.die("The stop row vanished after it was written."))
+          );
+        }),
+      );
     }).pipe(Effect.catchTags({ SqlError: io }));
 
   const clear: StopGate["Service"]["clear"] = sql`DELETE FROM stop`.pipe(
