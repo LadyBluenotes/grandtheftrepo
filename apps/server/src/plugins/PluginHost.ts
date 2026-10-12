@@ -25,6 +25,7 @@ import * as PluginSupervisor from "./PluginSupervisor.ts";
 import type { ServerPlugin } from "./Plugin.ts";
 import { type PluginMcpRequirements, type PluginRequirements, registry } from "./registry.ts";
 import type { toolkitRegistration } from "../mcp/McpHttpServer.ts";
+import * as CavemanHandlers from "./caveman/handlers.ts";
 import * as KanbanHandlers from "./kanban/handlers.ts";
 import * as LearningHandlers from "./learning/handlers.ts";
 import * as PolicyHandlers from "./policy/handlers.ts";
@@ -263,6 +264,7 @@ const table: PluginRpc.DispatchTable<PluginHost | PluginSupervisor.PluginSupervi
         Effect.orDie,
       ),
   }),
+  ...CavemanHandlers.table,
   ...KanbanHandlers.table,
   ...LearningHandlers.table,
   ...PolicyHandlers.table,

@@ -1,4 +1,5 @@
 import type { ServerPlugin } from "./Plugin.ts";
+import * as Caveman from "./caveman/index.ts";
 import * as Kanban from "./kanban/index.ts";
 import * as Learning from "./learning/index.ts";
 import * as Policy from "./policy/index.ts";
@@ -11,6 +12,7 @@ const plugins = [
   Routing.plugin,
   Learning.plugin,
   Policy.plugin,
+  Caveman.plugin,
 ] as const satisfies ReadonlyArray<ServerPlugin<unknown, unknown>>;
 
 type RequirementsOf<P> = P extends ServerPlugin<infer R, unknown> ? R : never;
