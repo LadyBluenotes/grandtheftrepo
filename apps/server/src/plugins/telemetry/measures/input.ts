@@ -16,7 +16,7 @@ export interface ThreadRow {
   readonly settled_at: string | null;
   /** 1 when the automatic settlement sweep made the latest settlement. */
   readonly settled_by_sweep: number;
-  /** The latest reopen, kept after the thread settles again. */
+  /** The latest reopen (an unsettle, or a pin of a settled thread), kept after it settles again. */
   readonly unsettled_at: string | null;
   readonly pull_request_merged_at: string | null;
 }
@@ -115,6 +115,7 @@ export const ACCEPTED_PROVENANCE = [
   "thread.unsettledAt",
   "thread.pullRequests.snapshot.mergedAt",
   "thread.settled.commandId",
+  "thread.pinned.occurredAt",
 ] as const satisfies ReadonlyArray<FieldPath>;
 
 /**

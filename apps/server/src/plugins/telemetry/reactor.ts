@@ -5,6 +5,7 @@ import * as SqlClient from "effect/sql/SqlClient";
 import type * as SqlError from "effect/sql/SqlError";
 import type * as PluginReactor from "../PluginReactor.ts";
 import {
+  pinnedFields,
   runFields,
   settledFields,
   threadFields,
@@ -134,6 +135,17 @@ export const handlers: PluginReactor.Handlers<SqlError.SqlError> = {
   "thread.created": ({ event }) => upsertThread(event.payload),
   "thread.unsettled": ({ event }) => upsertThread(event.payload),
   "thread.pull-request-synced": ({ event }) => upsertThread(event.payload),
+  // Pinning promotes a settled thread out of settled without a `thread.unsettled`, so the pin is
+  // the reopen. A thread with no settlement, or one already reopened since its latest, keeps its row.
+  "thread.pinned": ({ event }) =>
+    Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      yield* sql`UPDATE telemetry_threads
+        SET unsettled_at = ${pinnedFields(event)["thread.pinned.occurredAt"]}
+        WHERE thread_id = ${event.payload.id}
+          AND settled_at IS NOT NULL
+          AND (unsettled_at IS NULL OR unsettled_at < settled_at)`;
+    }),
   "thread.settled": (stored) =>
     Effect.gen(function* () {
       yield* upsertThread(stored.event.payload);

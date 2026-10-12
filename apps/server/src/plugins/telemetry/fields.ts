@@ -109,6 +109,14 @@ export const settledFields = (stored: Pick<OrchestrationV2StoredEvent, "commandI
   "thread.settled.commandId": stored.commandId,
 });
 
+/**
+ * When a thread was pinned. Pinning a settled thread reopens it without a `thread.unsettled`, and
+ * the pinned thread does not carry the reopen, so the event's own time is it.
+ */
+export const pinnedFields = (event: Pick<OrchestrationV2DomainEvent, "occurredAt">) => ({
+  "thread.pinned.occurredAt": DateTime.formatIso(event.occurredAt),
+});
+
 /** A correction as the learning plugin lists it. */
 export const correctionFields = (correction: LearningCorrection) => ({
   "learning.correction.createdAt": correction.createdAt,
@@ -121,4 +129,5 @@ export type FieldPath =
   | keyof ReturnType<typeof toolCallFields>
   | keyof ReturnType<typeof threadFields>
   | keyof ReturnType<typeof settledFields>
+  | keyof ReturnType<typeof pinnedFields>
   | keyof ReturnType<typeof correctionFields>;

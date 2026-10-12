@@ -200,14 +200,20 @@ export const itemEvent = (payload: OrchestrationV2TurnItem): OrchestrationV2Doma
 });
 
 export const threadEvent = (
-  type: "thread.created" | "thread.settled" | "thread.unsettled" | "thread.pull-request-synced",
+  type:
+    | "thread.created"
+    | "thread.settled"
+    | "thread.unsettled"
+    | "thread.pinned"
+    | "thread.pull-request-synced",
   payload: OrchestrationV2AppThread = thread,
+  occurredAt: DateTime.Utc = at,
 ): OrchestrationV2DomainEvent => ({
   id: nextEventId(),
   type,
   threadId,
   providerInstanceId,
-  occurredAt: at,
+  occurredAt,
   payload,
 });
 

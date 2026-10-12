@@ -18,6 +18,8 @@ import * as SqlitePersistence from "../../persistence/Sqlite.ts";
 import * as PluginDatabase from "../PluginDatabase.ts";
 import * as PluginReactor from "../PluginReactor.ts";
 import * as Fixtures from "./eventFixtures.ts";
+import { input } from "./measures/fixtures.ts";
+import { acceptedOutcomes, type ThreadRow } from "./measures/input.ts";
 import { migrations } from "./migrations.ts";
 import * as Reactor from "./reactor.ts";
 
@@ -281,6 +283,93 @@ it.effect("keeps one row per thread with its latest settle and reopen and who se
       ]);
       yield* drain;
       assert.deepEqual(yield* rows, [reopened]);
+    }),
+  ).pipe(Effect.provide(layerSink)),
+);
+
+// A top-level thread, so it can be an accepted outcome, and its states as the commands leave it.
+const topLevel = {
+  ...Fixtures.thread,
+  lineage: { parentThreadId: null, relationshipToParent: null, rootThreadId: Fixtures.threadId },
+  pullRequests: [],
+};
+const active = { ...topLevel, settledOverride: null, settledAt: null, unsettledAt: null };
+const settledBy = (settledAt: string) => ({
+  ...topLevel,
+  settledOverride: "settled" as const,
+  settledAt: DateTime.makeUnsafe(settledAt),
+  unsettledAt: null,
+});
+/** What `thread.pin` leaves of a settled thread: reopened, with no `unsettledAt` stamped. */
+const pinnedAt = (at: string) =>
+  Fixtures.threadEvent(
+    "thread.pinned",
+    { ...active, settledOverride: "active", pinnedAt: DateTime.makeUnsafe(at) },
+    DateTime.makeUnsafe(at),
+  );
+
+it.effect("a pin reopens a thread whose latest settle is still standing, and nothing else", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const { sql, drain } = yield* react;
+      const row = Effect.map(sql<ThreadRow>`SELECT * FROM telemetry_threads`, (rows) => [
+        rows[0]?.settled_at,
+        rows[0]?.unsettled_at,
+      ]);
+
+      // Never settled: nothing to reopen.
+      yield* write([
+        Fixtures.threadEvent("thread.created", active),
+        pinnedAt("2026-10-02T11:00:00.000Z"),
+      ]);
+      yield* drain;
+      assert.deepEqual(yield* row, [null, null]);
+
+      yield* write([Fixtures.threadEvent("thread.settled", settledBy("2026-10-02T12:00:00.000Z"))]);
+      yield* write([pinnedAt("2026-10-03T00:00:00.000Z")]);
+      yield* drain;
+      assert.deepEqual(yield* row, ["2026-10-02T12:00:00.000Z", "2026-10-03T00:00:00.000Z"]);
+
+      // Already reopened since that settle: a later pin is not another reopen.
+      yield* write([pinnedAt("2026-10-04T00:00:00.000Z")]);
+      yield* drain;
+      assert.deepEqual(yield* row, ["2026-10-02T12:00:00.000Z", "2026-10-03T00:00:00.000Z"]);
+    }),
+  ).pipe(Effect.provide(layerSink)),
+);
+
+it.effect("a thread settled, pinned, settled and pinned again is accepted only while settled", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const { sql, drain } = yield* react;
+      const rows = sql<ThreadRow>`SELECT * FROM telemetry_threads`;
+      const acceptedIds = Effect.map(rows, (threads) =>
+        acceptedOutcomes(input({ threads })).map((thread) => thread.thread_id),
+      );
+
+      yield* write([Fixtures.threadEvent("thread.created", active)]);
+      yield* write([Fixtures.threadEvent("thread.settled", settledBy("2026-10-02T12:00:00.000Z"))]);
+      yield* drain;
+      assert.deepEqual(yield* acceptedIds, [Fixtures.threadId]);
+
+      // The pin reopens it; no `thread.unsettled` is emitted.
+      yield* write([pinnedAt("2026-10-03T00:00:00.000Z")]);
+      yield* drain;
+      assert.deepEqual(yield* acceptedIds, []);
+
+      yield* write([Fixtures.threadEvent("thread.settled", settledBy("2026-10-05T00:00:00.000Z"))]);
+      yield* drain;
+      assert.deepEqual(yield* acceptedIds, [Fixtures.threadId]);
+
+      yield* write([pinnedAt("2026-10-06T00:00:00.000Z")]);
+      yield* drain;
+      assert.deepEqual(yield* acceptedIds, []);
+
+      // Replaying the whole log from its first event lands on the same row.
+      const before = yield* rows;
+      yield* sql`DELETE FROM host_reactor_cursor`;
+      yield* drain;
+      assert.deepEqual(yield* rows, before);
     }),
   ).pipe(Effect.provide(layerSink)),
 );

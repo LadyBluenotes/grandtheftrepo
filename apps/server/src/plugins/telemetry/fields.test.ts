@@ -2,6 +2,7 @@ import { assert, it } from "@effect/vitest";
 import * as Fixtures from "./eventFixtures.ts";
 import {
   correctionFields,
+  pinnedFields,
   runFields,
   settledFields,
   threadFields,
@@ -13,6 +14,7 @@ import { computeMeasures } from "./measures/index.ts";
 
 const usageEvent = Fixtures.turnUpdated(Fixtures.usage);
 const settled = { commandId: Fixtures.sweepCommandId };
+const pinned = Fixtures.threadEvent("thread.pinned");
 
 /** What the reactor and the loader read out of the fixtures, through the accessors they use. */
 const accessed: ReadonlyArray<Readonly<Record<string, unknown>>> = [
@@ -22,6 +24,7 @@ const accessed: ReadonlyArray<Readonly<Record<string, unknown>>> = [
   toolCallFields(Fixtures.editItem),
   threadFields(Fixtures.thread),
   settledFields(settled),
+  pinnedFields(pinned),
   correctionFields(Fixtures.correction),
 ];
 
@@ -32,6 +35,7 @@ const roots: ReadonlyArray<readonly [string, ReadonlyArray<unknown>]> = [
   ["run", [Fixtures.run]],
   ["turnItem", [Fixtures.readItem, Fixtures.editItem]],
   ["thread.settled", [settled]],
+  ["thread.pinned", [pinned]],
   ["thread", [Fixtures.thread]],
   ["learning.correction", [Fixtures.correction]],
 ];
