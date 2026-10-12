@@ -1,4 +1,9 @@
-import { PLUGIN_WS_METHODS, PluginHostError, type PluginStatus } from "@t3tools/contracts";
+import {
+  PLUGIN_WS_METHODS,
+  PluginHostError,
+  SUPERVISOR_WS_METHODS,
+  type PluginStatus,
+} from "@t3tools/contracts";
 import { writeFileStringAtomically } from "@t3tools/shared/atomicWrite";
 import { fromJsonStringPretty } from "@t3tools/shared/schemaJson";
 import * as Cause from "effect/Cause";
@@ -12,11 +17,13 @@ import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as ServerConfig from "../config.ts";
 import * as PluginDatabase from "./PluginDatabase.ts";
+import * as PluginSupervisor from "./PluginSupervisor.ts";
 import type { ServerPlugin } from "./Plugin.ts";
 import { type PluginRequirements, registry } from "./registry.ts";
 import type { toolkitRegistration } from "../mcp/McpHttpServer.ts";
 import * as KanbanHandlers from "./kanban/handlers.ts";
 import * as PolicyHandlers from "./policy/handlers.ts";
+import * as SupervisorToolkit from "./supervisorToolkit.ts";
 
 /** `plugins.json` under the state directory: plugin id to saved choice. Absent means enabled. */
 const EnabledState = Schema.Record(Schema.String, Schema.Boolean);
@@ -152,8 +159,12 @@ export const make = (plugins: ReadonlyArray<Registered>) =>
       }
     }
     const activeIds = new Set(wanted.filter((id) => databases.has(id)));
+    // `resolve` knows only the saved choice; a plugin that failed to start this boot is not running.
     const withStartErrors = (statuses: ReadonlyArray<PluginStatus>) =>
-      statuses.map((status) => ({ ...status, startError: startErrors.get(status.id) ?? null }));
+      statuses.map((status) => {
+        const startError = startErrors.get(status.id) ?? null;
+        return { ...status, active: activeIds.has(status.id), startError };
+      });
 
     const setEnabled = Effect.fn("PluginHost.setEnabled")(function* (id: string, enabled: boolean) {
       if (!plugins.some((plugin) => plugin.id === id))
@@ -207,19 +218,28 @@ const mergeActive = (
       );
   });
 
-/** The host plus every active plugin's services, for the server's layer chain. */
+/** The host, its supervisor and every active plugin's services, for the server's layer chain. */
 export const layerAll = Layer.unwrap(mergeActive((plugin) => plugin.layer)).pipe(
+  Layer.provideMerge(PluginSupervisor.layer(registry.map((plugin) => plugin.id))),
   Layer.provideMerge(layer),
 );
 
-/** Every active plugin's MCP tools, for the `/mcp` server layer. */
+/** The supervisor's tool and every active plugin's MCP tools, for the `/mcp` server layer. */
 export const layerMcp = (register: typeof toolkitRegistration) =>
-  Layer.unwrap(mergeActive((plugin) => plugin.mcp?.(register)));
+  Layer.merge(
+    register(SupervisorToolkit.SupervisorToolkit, SupervisorToolkit.handlers),
+    Layer.unwrap(mergeActive((plugin) => plugin.mcp?.(register))),
+  );
 
-/** Spread into the WebSocket handlers; the host service comes from the server's layer chain. */
+/** Spread into the WebSocket handlers; the host services come from the server's layer chain. */
 export const handlers = {
   ...KanbanHandlers.handlers,
   ...PolicyHandlers.handlers,
+  // The host's own file answered at boot, so a read failing afterwards is a defect, not a reply.
+  [SUPERVISOR_WS_METHODS.status]: () =>
+    Effect.flatMap(PluginSupervisor.PluginSupervisor, (supervisor) => supervisor.status).pipe(
+      Effect.orDie,
+    ),
   [PLUGIN_WS_METHODS.pluginsList]: () =>
     Effect.gen(function* () {
       return yield* (yield* PluginHost).statuses;

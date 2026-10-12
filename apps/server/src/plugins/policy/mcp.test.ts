@@ -16,6 +16,7 @@ import * as ThreadManagementService from "../../orchestration-v2/ThreadManagemen
 import * as ServerSettings from "../../serverSettings.ts";
 import * as PluginDatabase from "../PluginDatabase.ts";
 import * as PluginHost from "../PluginHost.ts";
+import * as PluginSupervisor from "../PluginSupervisor.ts";
 import { migrations } from "./migrations.ts";
 import * as PolicyService from "./PolicyService.ts";
 
@@ -75,7 +76,8 @@ it.effect(
               databases: new Map(),
             }),
           ),
-          Layer.provide(Layer.succeedContext(services)),
+          Layer.provide(Layer.mock(PluginSupervisor.PluginSupervisor)({})),
+        Layer.provide(Layer.succeedContext(services)),
           Layer.provide(Layer.mock(ThreadManagementService.ThreadManagementService)({})),
           Layer.provideMerge(McpHttpServer.layerMcpTransport),
           Layer.provide(
