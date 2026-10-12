@@ -1,5 +1,5 @@
 import {
-  LEARNING_WS_METHODS,
+  LEARNING_METHODS,
   type LearningCorrectionInput,
   type LearningCorrectionsInput,
   LearningError,
@@ -25,8 +25,8 @@ const store = Effect.serviceOption(CorrectionStore.CorrectionStore).pipe(
  * and answering with the output. The plugin RPC gateway dispatches to them by name.
  */
 export const handlers = {
-  [LEARNING_WS_METHODS.corrections]: (input: LearningCorrectionsInput) =>
+  [LEARNING_METHODS.corrections.method]: (input: LearningCorrectionsInput) =>
     Effect.flatMap(store, (s) => s.list(input)),
-  [LEARNING_WS_METHODS.correction]: ({ id }: LearningCorrectionInput) =>
+  [LEARNING_METHODS.correction.method]: ({ id }: LearningCorrectionInput) =>
     Effect.flatMap(store, (s) => s.get(id)),
 };

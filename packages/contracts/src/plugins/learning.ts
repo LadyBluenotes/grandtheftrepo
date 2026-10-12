@@ -71,9 +71,15 @@ export type LearningCorrectionInput = typeof LearningCorrectionInput.Type;
  */
 export const LEARNING_METHODS = {
   corrections: {
+    method: LEARNING_WS_METHODS.corrections,
     gateway: "read",
     input: LearningCorrectionsInput,
     output: Schema.Array(LearningCorrection),
   },
-  correction: { gateway: "read", input: LearningCorrectionInput, output: LearningCorrection },
+  correction: {
+    method: LEARNING_WS_METHODS.correction,
+    gateway: "read",
+    input: LearningCorrectionInput,
+    output: LearningCorrection,
+  },
 } as const;
