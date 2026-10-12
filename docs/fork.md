@@ -87,10 +87,13 @@ them half-evaluated. The host hands `toolkitRegistration` to `ServerPlugin.mcp` 
   with the rate table the Usage page saves. A measure whose input is not recorded, or comes from a
   plugin that is off or not built yet, answers `unavailable` with the reason. Migration 2 drops
   the reactor's cursor so the new tables fill from the first event; a request waits a few seconds
-  for the reactor to catch up, and past that every measure answers `unavailable`. The template
-  plugin: it uses every host seam once (database, reactor, sweep, gateway method, MCP tool,
-  settings panel) and is the one to copy. Server: `apps/server/src/plugins/telemetry/`. Contracts:
-  `packages/contracts/src/plugins/telemetry.ts`. Web: `apps/web/src/plugins/telemetry/`.
+  for the reactor to catch up, and past that every measure answers `unavailable`. Where
+  compaction before the upgrade kept a later thread event in place of a `thread.settled`, who
+  settled is lost, and a thread settled by hand that way counts as an accepted outcome only if a
+  pull request merged. The template plugin: it uses every host seam once (database, reactor,
+  sweep, gateway method, MCP tool, settings panel) and is the one to copy. Server:
+  `apps/server/src/plugins/telemetry/`. Contracts: `packages/contracts/src/plugins/telemetry.ts`.
+  Web: `apps/web/src/plugins/telemetry/`.
 - **routing**: which model does which work. Three tiers, `cheap`, `standard` and `strong`, each map
   to a provider instance and a model, set for the environment and overridable per project, in the
   plugin's own database. A tier with nothing saved falls back to the built-in: one instance's model

@@ -1,6 +1,7 @@
 import { assert, it } from "@effect/vitest";
 import {
   type CommandId,
+  type OrchestrationV2AppThread,
   type OrchestrationV2DomainEvent,
   type OrchestrationV2ProviderTurnTokenUsage,
   RunId,
@@ -260,6 +261,11 @@ it.effect("keeps one row per thread with its latest settle and reopen and who se
       const rows = sql`SELECT * FROM telemetry_threads`;
       assert.deepEqual(yield* rows, [settled]);
 
+      // A later event carrying the same settlement does not forget who made it.
+      yield* write([Fixtures.threadEvent("thread.visited")]);
+      yield* drain;
+      assert.deepEqual(yield* rows, [settled]);
+
       // A reopen clears the thread's settledAt; the row keeps the settle it reopened.
       const reopenedAt = DateTime.makeUnsafe("2026-10-02T13:00:00.000Z");
       yield* write([
@@ -372,6 +378,47 @@ it.effect("a thread settled, pinned, settled and pinned again is accepted only w
       assert.deepEqual(yield* rows, before);
     }),
   ).pipe(Effect.provide(layerSink)),
+);
+
+it.effect(
+  "a compacted log that kept only a later visit still yields the settlement, by someone unknown",
+  () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { sql, drain } = yield* react;
+        const rows = sql<ThreadRow>`SELECT * FROM telemetry_threads`;
+        const acceptedIds = Effect.map(rows, (threads) =>
+          acceptedOutcomes(input({ threads })).map((thread) => thread.thread_id),
+        );
+        const visitedAt = DateTime.makeUnsafe("2026-10-03T00:00:00.000Z");
+        const visit = (thread: OrchestrationV2AppThread) =>
+          Fixtures.threadEvent(
+            "thread.visited",
+            { ...thread, lastVisitedAt: visitedAt },
+            visitedAt,
+          );
+        const settled = settledBy("2026-10-02T12:00:00.000Z");
+
+        // Compaction dropped the `thread.settled`; the visit after it is the thread's newest state.
+        yield* write([Fixtures.threadEvent("thread.created", active), visit(settled)]);
+        yield* drain;
+        const [row] = yield* rows;
+        assert.deepEqual(
+          [row?.settled_at, row?.settled_by_sweep],
+          ["2026-10-02T12:00:00.000Z", null],
+        );
+        // Not known to be settled by hand, so it is accepted only once a pull request merged.
+        assert.deepEqual(yield* acceptedIds, []);
+        yield* write([visit({ ...settled, pullRequests: Fixtures.thread.pullRequests })]);
+        yield* drain;
+        assert.deepEqual(yield* acceptedIds, [Fixtures.threadId]);
+
+        const before = yield* rows;
+        yield* sql`DELETE FROM host_reactor_cursor`;
+        yield* drain;
+        assert.deepEqual(yield* rows, before);
+      }),
+    ).pipe(Effect.provide(layerSink)),
 );
 
 it.effect("upgrading to migration 2 replays the log into the new tables", () =>

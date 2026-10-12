@@ -201,9 +201,10 @@ const layerTest = Layer.mergeAll(
  */
 const seed = (sql: SqlClient.SqlClient) =>
   Effect.gen(function* () {
-    yield* sql`INSERT INTO telemetry_threads (thread_id, project_id, created_at, settled_at)
+    yield* sql`INSERT INTO telemetry_threads
+        (thread_id, project_id, created_at, settled_at, settled_by_sweep)
       VALUES ('thread:1', ${measuresInput.projectId}, '2026-10-02T00:00:00.000Z',
-        '2026-10-03T00:00:00.000Z')`;
+        '2026-10-03T00:00:00.000Z', 0)`;
     yield* sql`INSERT INTO telemetry_runs
         (run_id, thread_id, turn_id, ordinal, status, model, started_at, completed_at)
       VALUES ('run:1', 'thread:1', 'message:1', 1, 'completed', 'test-model',

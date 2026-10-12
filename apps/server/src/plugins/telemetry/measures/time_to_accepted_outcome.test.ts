@@ -49,7 +49,7 @@ it("is unavailable in an empty window", () => {
   );
 });
 
-it("counts a reopened thread only once it settles again, merged or not, and a sweep's settlement only after a merge", () => {
+it("counts a reopened thread only once it settles again, merged or not, and a sweep's or an unknown settlement only after a merge", () => {
   const threads = [
     // Settled by hand, then reopened: not accepted.
     accepted({ thread_id: "reopened", unsettled_at: REOPENED }),
@@ -65,6 +65,9 @@ it("counts a reopened thread only once it settles again, merged or not, and a sw
     accepted({ thread_id: "swept", settled_by_sweep: 1 }),
     // Settled by the sweep after its pull request merged: accepted.
     accepted({ thread_id: "merged", settled_by_sweep: 1, pull_request_merged_at: FROM }),
+    // Settled by someone unknown (a compacted log): accepted only after a merge.
+    accepted({ thread_id: "unknown", settled_by_sweep: null }),
+    accepted({ thread_id: "unknown-merged", settled_by_sweep: null, pull_request_merged_at: FROM }),
     // A child task is part of its parent's outcome.
     accepted({ thread_id: "child", parent_thread_id: "merged" }),
   ];
@@ -76,5 +79,5 @@ it("counts a reopened thread only once it settles again, merged or not, and a sw
       ),
     }),
   );
-  assert.deepEqual([result.value, result.sampleSize], [86_400, 2]);
+  assert.deepEqual([result.value, result.sampleSize], [86_400, 3]);
 });

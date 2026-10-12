@@ -14,8 +14,12 @@ export interface ThreadRow {
   readonly parent_thread_id: string | null;
   /** The latest settlement, kept after a reopen. */
   readonly settled_at: string | null;
-  /** 1 when the automatic settlement sweep made the latest settlement. */
-  readonly settled_by_sweep: number;
+  /**
+   * 1 when the automatic settlement sweep made the latest settlement, 0 when a person did, null
+   * when that is unknown: the settlement was learned from a later event because compaction had
+   * dropped its `thread.settled`.
+   */
+  readonly settled_by_sweep: number | null;
   /** The latest reopen (an unsettle, or a pin of a settled thread), kept after it settles again. */
   readonly unsettled_at: string | null;
   readonly pull_request_merged_at: string | null;
@@ -121,7 +125,8 @@ export const ACCEPTED_PROVENANCE = [
 /**
  * Threads accepted in the window: settled in it with no reopen since, and either a pull request
  * merged or settled by hand. A settlement by the inactivity sweep with nothing merged is not an
- * acceptance. Child tasks are part of their parent's outcome, not outcomes of their own.
+ * acceptance, and neither is one whose origin is unknown: without a merge it counts only when it
+ * is known to be by hand. Child tasks are part of their parent's outcome, not outcomes of their own.
  */
 export const acceptedOutcomes = (input: MeasureInput) =>
   input.threads.filter(

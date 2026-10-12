@@ -61,7 +61,8 @@ export const migrations: ReadonlyArray<PluginMigration> = [
       `;
       yield* sql`CREATE INDEX telemetry_tool_calls_thread ON telemetry_tool_calls (thread_id)`;
       // `settled_at` and `unsettled_at` keep the latest settle and reopen, so a reopen stays
-      // visible after the thread settles again.
+      // visible after the thread settles again. `settled_by_sweep` is NULL while who settled is
+      // unknown: a settlement learned from an event other than `thread.settled`.
       yield* sql`
         CREATE TABLE telemetry_threads (
           thread_id TEXT PRIMARY KEY,
@@ -69,7 +70,7 @@ export const migrations: ReadonlyArray<PluginMigration> = [
           created_at TEXT NOT NULL,
           parent_thread_id TEXT,
           settled_at TEXT,
-          settled_by_sweep INTEGER NOT NULL DEFAULT 0,
+          settled_by_sweep INTEGER,
           unsettled_at TEXT,
           pull_request_merged_at TEXT
         )

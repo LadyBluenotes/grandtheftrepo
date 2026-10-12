@@ -28,7 +28,10 @@ const AUTO_SETTLE_PREFIX = "server:auto-settle:";
 /**
  * Every thread event carries the whole thread, so any of them can introduce it. The latest settle
  * and the latest reopen are kept even after the thread leaves that state, so a measure can tell a
- * thread reopened after it settled.
+ * thread reopened after it settled. A settlement is taken only when the row has none or it is
+ * newer, and who made it stays unknown (NULL) until `thread.settled` records it: compaction keeps
+ * only a thread's newest full-state event, so a replay can learn a settlement from a later visit
+ * or rename whose command says nothing about the settle.
  */
 const upsertThread = (thread: OrchestrationV2AppThread) =>
   Effect.gen(function* () {
@@ -48,12 +51,22 @@ const upsertThread = (thread: OrchestrationV2AppThread) =>
          ${f["thread.pullRequests.snapshot.mergedAt"]})
       ON CONFLICT (thread_id) DO UPDATE SET
         project_id = excluded.project_id,
-        settled_at = COALESCE(excluded.settled_at, telemetry_threads.settled_at),
+        settled_at = CASE
+          WHEN telemetry_threads.settled_at IS NULL
+            OR excluded.settled_at > telemetry_threads.settled_at
+          THEN excluded.settled_at ELSE telemetry_threads.settled_at END,
+        settled_by_sweep = CASE
+          WHEN excluded.settled_at > telemetry_threads.settled_at
+          THEN NULL ELSE telemetry_threads.settled_by_sweep END,
         unsettled_at = COALESCE(excluded.unsettled_at, telemetry_threads.unsettled_at),
         pull_request_merged_at =
           COALESCE(excluded.pull_request_merged_at, telemetry_threads.pull_request_merged_at)
     `;
   });
+
+/** The handler for every event whose payload is the whole thread. */
+const threadState = (stored: { readonly event: { readonly payload: OrchestrationV2AppThread } }) =>
+  upsertThread(stored.event.payload);
 
 /** Every run event carries the whole run; the latest one wins. */
 const upsertRun = (f: ReturnType<typeof runFields>) =>
@@ -132,9 +145,27 @@ export const handlers: PluginReactor.Handlers<SqlError.SqlError> = {
           status = excluded.status
       `;
     }),
-  "thread.created": ({ event }) => upsertThread(event.payload),
-  "thread.unsettled": ({ event }) => upsertThread(event.payload),
-  "thread.pull-request-synced": ({ event }) => upsertThread(event.payload),
+  "thread.created": threadState,
+  "thread.unsettled": threadState,
+  "thread.pull-request-synced": threadState,
+  // Compaction (`ProjectionMaintenance`) keeps only a thread's newest full-state event, so after
+  // it the settlement may survive only on one of these.
+  "thread.archived": threadState,
+  "thread.unarchived": threadState,
+  "thread.deleted": threadState,
+  "thread.snoozed": threadState,
+  "thread.unsnoozed": threadState,
+  "thread.auto-settle-set": threadState,
+  "thread.unpinned": threadState,
+  "thread.pin-reordered": threadState,
+  "thread.active-reordered": threadState,
+  "thread.visited": threadState,
+  "thread.marked-unread": threadState,
+  "thread.metadata-updated": threadState,
+  "thread.runtime-mode-updated": threadState,
+  "thread.interaction-mode-updated": threadState,
+  "thread.model-selection-updated": threadState,
+  "thread.provider-switched": threadState,
   // Pinning promotes a settled thread out of settled without a `thread.unsettled`, so the pin is
   // the reopen. A thread with no settlement, or one already reopened since its latest, keeps its row.
   "thread.pinned": ({ event }) =>

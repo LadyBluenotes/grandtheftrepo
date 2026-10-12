@@ -205,7 +205,8 @@ export const threadEvent = (
     | "thread.settled"
     | "thread.unsettled"
     | "thread.pinned"
-    | "thread.pull-request-synced",
+    | "thread.pull-request-synced"
+    | "thread.visited",
   payload: OrchestrationV2AppThread = thread,
   occurredAt: DateTime.Utc = at,
 ): OrchestrationV2DomainEvent => ({
