@@ -16,6 +16,7 @@ import * as ThreadManagementService from "../../orchestration-v2/ThreadManagemen
 import * as ProjectService from "../../project/ProjectService.ts";
 import * as PluginDatabase from "../PluginDatabase.ts";
 import * as PluginHost from "../PluginHost.ts";
+import * as PluginSupervisor from "../PluginSupervisor.ts";
 import * as CorrectionStore from "./CorrectionStore.ts";
 import { migrations } from "./migrations.ts";
 
@@ -76,6 +77,7 @@ it.effect(
           Layer.provide(Layer.mock(ThreadManagementService.ThreadManagementService)({})),
           // Kanban's tools need it by type even though only learning is active here.
           Layer.provide(Layer.mock(ProjectService.ProjectService)({})),
+          Layer.provide(Layer.mock(PluginSupervisor.PluginSupervisor)({})),
           Layer.provideMerge(McpHttpServer.layerMcpTransport),
           Layer.provide(
             Layer.mock(McpSessionRegistry.McpSessionRegistry)({

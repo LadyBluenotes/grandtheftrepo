@@ -1,6 +1,4 @@
-import * as Rpc from "effect/rpc/Rpc";
 import * as Schema from "effect/Schema";
-import { AuthOrchestrationReadScope, EnvironmentAuthorizationError } from "../auth.ts";
 import { EventId, IsoDateTime, ProjectId, ThreadId } from "../baseSchemas.ts";
 
 export const LEARNING_WS_METHODS = {
@@ -67,28 +65,15 @@ export type LearningCorrectionsInput = typeof LearningCorrectionsInput.Type;
 export const LearningCorrectionInput = Schema.Struct({ id: Schema.Int });
 export type LearningCorrectionInput = typeof LearningCorrectionInput.Type;
 
-const error = Schema.Union([LearningError, EnvironmentAuthorizationError]);
-
-export const LEARNING_RPCS = [
-  Rpc.make(LEARNING_WS_METHODS.corrections, {
-    payload: LearningCorrectionsInput,
-    success: Schema.Array(LearningCorrection),
-    error,
-  }),
-  Rpc.make(LEARNING_WS_METHODS.correction, {
-    payload: LearningCorrectionInput,
-    success: LearningCorrection,
-    error,
-  }),
-] as const;
-
-/** Reads: server-side authorization only. */
-export const LEARNING_RPC_SCOPES = {
-  [LEARNING_WS_METHODS.corrections]: AuthOrchestrationReadScope,
-  [LEARNING_WS_METHODS.correction]: AuthOrchestrationReadScope,
-} as const;
-
-export const LEARNING_RPC_SUBSYSTEMS = {
-  [LEARNING_WS_METHODS.corrections]: "learning",
-  [LEARNING_WS_METHODS.correction]: "learning",
+/**
+ * The plugin's methods and the gateway each answers behind. They are not in the WebSocket RPC
+ * group, which is at TypeScript's instantiation limit; the gateway RPCs dispatch them by name.
+ */
+export const LEARNING_METHODS = {
+  corrections: {
+    gateway: "read",
+    input: LearningCorrectionsInput,
+    output: Schema.Array(LearningCorrection),
+  },
+  correction: { gateway: "read", input: LearningCorrectionInput, output: LearningCorrection },
 } as const;

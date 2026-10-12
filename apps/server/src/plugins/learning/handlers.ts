@@ -9,7 +9,7 @@ import * as Option from "effect/Option";
 
 import * as CorrectionStore from "./CorrectionStore.ts";
 
-/** The RPC group needs every handler even when the plugin is off, so an inactive plugin answers with an error. */
+/** The handlers exist whether or not the plugin runs, so an inactive plugin answers with an error. */
 const store = Effect.serviceOption(CorrectionStore.CorrectionStore).pipe(
   Effect.flatMap(
     Option.match({
@@ -20,7 +20,10 @@ const store = Effect.serviceOption(CorrectionStore.CorrectionStore).pipe(
   ),
 );
 
-/** Spread into the WebSocket handlers through `PluginHost.handlers`. */
+/**
+ * One handler per method in `LEARNING_METHODS`, keyed by method name, taking the decoded input
+ * and answering with the output. The plugin RPC gateway dispatches to them by name.
+ */
 export const handlers = {
   [LEARNING_WS_METHODS.corrections]: (input: LearningCorrectionsInput) =>
     Effect.flatMap(store, (s) => s.list(input)),

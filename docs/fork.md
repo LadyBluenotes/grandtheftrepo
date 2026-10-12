@@ -26,6 +26,10 @@ A plugin reacts to committed orchestration events through `PluginReactor.start` 
 own database, so a restart replays only what the plugin missed. It reads `EventSinkV2.stream`, not
 `Orchestrator.streamDomainEvents`, because only the former carries a sequence to resume from.
 
+A plugin registers sweeps with `PluginSupervisor.register` from its layer. The host runs them on
+the `supervisor.json` interval, in registry order, and records each tick in `plugins/_host.sqlite`;
+`supervisor.status` reads the latest.
+
 ## Upstream seams
 
 These are the only lines upstream files carry for the plugin system. A merge conflict in one of
@@ -41,7 +45,7 @@ them is resolved by keeping the line.
 | `apps/server/src/mcp/McpHttpServer.ts`                       | `PluginHost.layerMcp(toolkitRegistration),` inside the exported `layer`, plus its import                                                                               |
 | `apps/server/src/observability/RpcInstrumentation.ts`        | `...PLUGIN_RPC_SUBSYSTEMS,` in the subsystem map, plus the import                                                                                                      |
 | `apps/server/src/auth/RpcAuthorization.ts`                   | `...PLUGIN_RPC_SCOPES,` inside `RPC_REQUIRED_SCOPES`, plus its import                                                                                                  |
-| `apps/server/src/mcp/toolkits/worktree/registration.test.ts` | the `PluginHost` mock in the service list, plus its import                                                                                                             |
+| `apps/server/src/mcp/toolkits/worktree/registration.test.ts` | the `PluginHost` and `PluginSupervisor` mocks in the service list, plus their imports                                                                                  |
 | `packages/client-runtime/src/rpc/client.ts`                  | `\| PluginSubscriptionRpcTag` in `EnvironmentSubscriptionRpcTag`, plus its import                                                                                      |
 | `apps/web/src/routes/_chat.board.tsx`                        | the kanban board's own route; a new plugin screen uses `/plugins/<id>` through the registry instead                                                                    |
 | `apps/web/src/components/sidebar/mainAppLocation.ts`         | `/board` and the `/plugins` paths in `isSidebarUtilityPage`                                                                                                            |
