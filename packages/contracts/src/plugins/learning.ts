@@ -1,5 +1,6 @@
 import * as Schema from "effect/Schema";
 import { EventId, IsoDateTime, ProjectId, ThreadId } from "../baseSchemas.ts";
+import { definePluginMethods } from "./method.ts";
 
 const LEARNING_WS_METHODS = {
   corrections: "learning.corrections",
@@ -69,17 +70,19 @@ export type LearningCorrectionInput = typeof LearningCorrectionInput.Type;
  * The plugin's methods and the gateway each answers behind. They are not in the WebSocket RPC
  * group, which is at TypeScript's instantiation limit; the gateway RPCs dispatch them by name.
  */
-export const LEARNING_METHODS = {
+export const LEARNING_METHODS = definePluginMethods({
   corrections: {
     method: LEARNING_WS_METHODS.corrections,
     gateway: "read",
     input: LearningCorrectionsInput,
     output: Schema.Array(LearningCorrection),
+    error: LearningError,
   },
   correction: {
     method: LEARNING_WS_METHODS.correction,
     gateway: "read",
     input: LearningCorrectionInput,
     output: LearningCorrection,
+    error: LearningError,
   },
-} as const;
+});

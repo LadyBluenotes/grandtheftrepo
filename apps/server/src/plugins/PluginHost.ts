@@ -1,7 +1,9 @@
 import {
-  PLUGIN_WS_METHODS,
+  HOST_METHODS,
+  PLUGIN_GATEWAY_WS_METHODS,
   PluginHostError,
-  SUPERVISOR_WS_METHODS,
+  SUPERVISOR_METHODS,
+  type PluginMethodCall,
   type PluginStatus,
 } from "@t3tools/contracts";
 import { writeFileStringAtomically } from "@t3tools/shared/atomicWrite";
@@ -18,11 +20,14 @@ import * as SqlClient from "effect/sql/SqlClient";
 import * as ServerConfig from "../config.ts";
 import * as RuntimeLayer from "../orchestration-v2/runtimeLayer.ts";
 import * as PluginDatabase from "./PluginDatabase.ts";
+import * as PluginRpc from "./PluginRpc.ts";
 import * as PluginSupervisor from "./PluginSupervisor.ts";
 import type { ServerPlugin } from "./Plugin.ts";
 import { type PluginMcpRequirements, type PluginRequirements, registry } from "./registry.ts";
 import type { toolkitRegistration } from "../mcp/McpHttpServer.ts";
 import * as KanbanHandlers from "./kanban/handlers.ts";
+import * as LearningHandlers from "./learning/handlers.ts";
+import * as RoutingHandlers from "./routing/handlers.ts";
 import * as SupervisorToolkit from "./supervisorToolkit.ts";
 import * as TelemetryHandlers from "./telemetry/handlers.ts";
 
@@ -238,27 +243,38 @@ export const layerMcp = (register: typeof toolkitRegistration) =>
     Layer.unwrap(mergeActive((plugin) => plugin.mcp?.(register))),
   );
 
-/** Spread into the WebSocket handlers; the host services come from the server's layer chain. */
+/** Every plugin method behind the gateway; the host services come from the server's layer chain. */
+const table: PluginRpc.DispatchTable<PluginHost | PluginSupervisor.PluginSupervisor> = {
+  ...PluginRpc.defineHandlers(HOST_METHODS)({
+    list: () =>
+      Effect.gen(function* () {
+        return yield* (yield* PluginHost).statuses;
+      }),
+    setEnabled: ({ id, enabled }) =>
+      Effect.gen(function* () {
+        return yield* (yield* PluginHost).setEnabled(id, enabled);
+      }),
+  }),
+  ...PluginRpc.defineHandlers(SUPERVISOR_METHODS)({
+    // The host's own file answered at boot, so a read failing afterwards is a defect, not a reply.
+    status: () =>
+      Effect.flatMap(PluginSupervisor.PluginSupervisor, (supervisor) => supervisor.status).pipe(
+        Effect.orDie,
+      ),
+  }),
+  ...KanbanHandlers.table,
+  ...LearningHandlers.table,
+  ...RoutingHandlers.table,
+  ...TelemetryHandlers.table,
+};
+
+/** Spread into the WebSocket handlers: the three gateway RPCs and every plugin stream RPC. */
 export const handlers = {
-  ...KanbanHandlers.handlers,
-  ...TelemetryHandlers.handlers,
-  // The host's own file answered at boot, so a read failing afterwards is a defect, not a reply.
-  [SUPERVISOR_WS_METHODS.status]: () =>
-    Effect.flatMap(PluginSupervisor.PluginSupervisor, (supervisor) => supervisor.status).pipe(
-      Effect.orDie,
-    ),
-  [PLUGIN_WS_METHODS.pluginsList]: () =>
-    Effect.gen(function* () {
-      return yield* (yield* PluginHost).statuses;
-    }),
-  [PLUGIN_WS_METHODS.pluginsSetEnabled]: ({
-    id,
-    enabled,
-  }: {
-    readonly id: string;
-    readonly enabled: boolean;
-  }) =>
-    Effect.gen(function* () {
-      return yield* (yield* PluginHost).setEnabled(id, enabled);
-    }),
+  [PLUGIN_GATEWAY_WS_METHODS.read]: (call: PluginMethodCall) =>
+    PluginRpc.dispatch("read", table, call),
+  [PLUGIN_GATEWAY_WS_METHODS.operate]: (call: PluginMethodCall) =>
+    PluginRpc.dispatch("operate", table, call),
+  [PLUGIN_GATEWAY_WS_METHODS.settingsWrite]: (call: PluginMethodCall) =>
+    PluginRpc.dispatch("settingsWrite", table, call),
+  ...KanbanHandlers.streams,
 };

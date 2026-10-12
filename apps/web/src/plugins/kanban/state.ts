@@ -1,11 +1,12 @@
 import {
-  createEnvironmentRpcCommand,
-  createEnvironmentRpcQueryAtomFamily,
-  createEnvironmentRpcSubscriptionAtomFamily,
-} from "@t3tools/client-runtime/state/runtime";
+  createPluginRpcCommand,
+  createPluginRpcQueryAtomFamily,
+} from "@t3tools/client-runtime/plugins/rpc";
+import { createEnvironmentRpcSubscriptionAtomFamily } from "@t3tools/client-runtime/state/runtime";
 import {
+  HOST_METHODS,
+  KANBAN_METHODS,
   KANBAN_WS_METHODS,
-  PLUGIN_WS_METHODS,
   type KanbanDecision,
   type KanbanIssue,
 } from "@t3tools/contracts";
@@ -22,33 +23,33 @@ export const kanbanBoard = createEnvironmentRpcSubscriptionAtomFamily(connection
 });
 
 /** One issue with its body and log; re-read whenever the board changes. */
-export const kanbanIssue = createEnvironmentRpcQueryAtomFamily(connectionAtomRuntime, {
+export const kanbanIssue = createPluginRpcQueryAtomFamily(connectionAtomRuntime, {
   label: "environment-data:kanban:issue",
-  tag: KANBAN_WS_METHODS.getIssue,
+  method: KANBAN_METHODS.getIssue,
   refreshTrigger: ({ environmentId, input }) =>
     kanbanBoard({ environmentId, input: { projectId: input.projectId } }),
 });
 
-export const kanbanDecisions = createEnvironmentRpcQueryAtomFamily(connectionAtomRuntime, {
+export const kanbanDecisions = createPluginRpcQueryAtomFamily(connectionAtomRuntime, {
   label: "environment-data:kanban:decisions",
-  tag: KANBAN_WS_METHODS.listDecisions,
+  method: KANBAN_METHODS.listDecisions,
   refreshTrigger: ({ environmentId, input }) =>
     kanbanBoard({ environmentId, input: { projectId: input.projectId } }),
 });
 
-export const kanbanWrite = createEnvironmentRpcCommand(connectionAtomRuntime, {
+export const kanbanWrite = createPluginRpcCommand(connectionAtomRuntime, {
   label: "kanban:write",
-  tag: KANBAN_WS_METHODS.write,
+  method: KANBAN_METHODS.write,
 });
 
-export const kanbanSetDirectory = createEnvironmentRpcCommand(connectionAtomRuntime, {
+export const kanbanSetDirectory = createPluginRpcCommand(connectionAtomRuntime, {
   label: "kanban:set-directory",
-  tag: KANBAN_WS_METHODS.setDirectory,
+  method: KANBAN_METHODS.setDirectory,
 });
 
-const pluginStatuses = createEnvironmentRpcQueryAtomFamily(connectionAtomRuntime, {
+const pluginStatuses = createPluginRpcQueryAtomFamily(connectionAtomRuntime, {
   label: "environment-data:plugins",
-  tag: PLUGIN_WS_METHODS.pluginsList,
+  method: HOST_METHODS.list,
   staleTimeMs: 60_000,
 });
 

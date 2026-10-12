@@ -1,13 +1,13 @@
-import { createEnvironmentRpcQueryAtomFamily } from "@t3tools/client-runtime/state/runtime";
-import { SUPERVISOR_WS_METHODS, type SupervisorStatus } from "@t3tools/contracts";
+import { createPluginRpcQueryAtomFamily } from "@t3tools/client-runtime/plugins/rpc";
+import { SUPERVISOR_METHODS, type SupervisorStatus } from "@t3tools/contracts";
 
 import { connectionAtomRuntime } from "~/connection/runtime";
 import { usePrimaryEnvironmentId } from "~/state/environments";
 import { useEnvironmentQuery } from "~/state/query";
 
-const supervisorStatus = createEnvironmentRpcQueryAtomFamily(connectionAtomRuntime, {
+const supervisorStatus = createPluginRpcQueryAtomFamily(connectionAtomRuntime, {
   label: "environment-data:plugins:supervisor",
-  tag: SUPERVISOR_WS_METHODS.status,
+  method: SUPERVISOR_METHODS.status,
   // The supervisor ticks every 60 seconds by default; "Last tick" follows it while the page is open.
   refreshIntervalMs: 60_000,
 });

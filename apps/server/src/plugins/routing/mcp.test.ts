@@ -7,6 +7,8 @@ import {
   ProviderDriverKind,
   ProviderInstanceId,
   ROUTING_METHODS,
+  RoutingError,
+  RoutingTiers,
   type Project,
   type ServerProvider,
 } from "@t3tools/contracts";
@@ -14,6 +16,7 @@ import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/sql/SqlClient";
 import { HttpBody, HttpClient, HttpRouter } from "effect/http";
 
@@ -27,10 +30,19 @@ import * as ProviderRegistry from "../../provider/ProviderRegistry.ts";
 import * as ServerSettings from "../../serverSettings.ts";
 import * as PluginDatabase from "../PluginDatabase.ts";
 import * as PluginHost from "../PluginHost.ts";
+import * as PluginRpc from "../PluginRpc.ts";
 import * as PluginSupervisor from "../PluginSupervisor.ts";
 import * as RoutingHandlers from "./handlers.ts";
 import { migrations } from "./migrations.ts";
 import * as TierMapService from "./TierMapService.ts";
+
+/** `routing.tiers.get` through the read gateway, as a client calls it. */
+const tiersGet = (input: unknown) =>
+  PluginRpc.dispatch("read", RoutingHandlers.table, {
+    method: ROUTING_METHODS.tiersGet.method,
+    input,
+  });
+const decodeRoutingError = Schema.decodeUnknownEffect(RoutingError);
 
 const environmentId = EnvironmentId.make("env-1");
 const projectId = ProjectId.make("project-1");
@@ -191,9 +203,10 @@ it.effect("the MCP tool and the plugin method return the same tiers", () =>
           yield* rpc(3, "tools/call", { name: "routing_tiers", arguments: { projectId } }),
         ),
       );
-      const fromHandler = yield* RoutingHandlers.handlers[ROUTING_METHODS.tiersGet.method]({
-        projectId,
-      }).pipe(Effect.provideService(TierMapService.TierMapService, tierMap));
+      const fromHandler = yield* tiersGet({ projectId }).pipe(
+        Effect.flatMap(Schema.decodeUnknownEffect(RoutingTiers)),
+        Effect.provideService(TierMapService.TierMapService, tierMap),
+      );
       expect(fromTool).toEqual(fromHandler);
       expect(fromHandler.cheap.source).toBe("environment");
       expect(fromHandler.strong.source).toBe("project");
@@ -219,7 +232,12 @@ it.effect("the MCP tool and the plugin method return the same tiers", () =>
 
 it.effect("the plugin methods answer with the plugin's own error while it is not running", () =>
   Effect.gen(function* () {
-    const error = yield* Effect.flip(RoutingHandlers.handlers[ROUTING_METHODS.tiersGet.method]({}));
+    const refused = yield* tiersGet({}).pipe(
+      Effect.andThen(Effect.die("expected a failure")),
+      Effect.flip,
+    );
+    if (refused._tag !== "PluginMethodError") throw new Error(refused.message);
+    const error = yield* decodeRoutingError(refused.error);
     expect(error.message).toBe('Plugin "routing" is not running.');
     expect(error.code).toBe("inactive");
   }),

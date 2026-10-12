@@ -1,11 +1,19 @@
 import { NodeHttpServer } from "@effect/platform-node";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
-import { EnvironmentId, ProjectId, type TelemetryMeasuresResult } from "@t3tools/contracts";
+import {
+  EnvironmentId,
+  PLUGIN_GATEWAY_WS_METHODS,
+  ProjectId,
+  TELEMETRY_METHODS,
+  TelemetryError,
+  TelemetryMeasuresResult,
+} from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
+import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/sql/SqlClient";
 import { HttpBody, HttpClient, HttpRouter } from "effect/http";
 
@@ -27,6 +35,13 @@ const measuresInput = {
   from: "2026-10-01T00:00:00.000Z",
   to: "2026-10-12T00:00:00.000Z",
 };
+
+/** `telemetry.measures` through the read gateway, as a client calls it. */
+const measures = PluginHost.handlers[PLUGIN_GATEWAY_WS_METHODS.read]({
+  method: TELEMETRY_METHODS.measures.method,
+  input: measuresInput,
+});
+const decodeTelemetryError = Schema.decodeUnknownEffect(TelemetryError);
 
 const environmentId = EnvironmentId.make("env-1");
 const clientToken = "client-payload.client-signature";
@@ -198,8 +213,9 @@ it.effect(
             { plugin: "telemetry", name: "heartbeat" },
           ]);
 
-          const fromHandler: TelemetryMeasuresResult =
-            yield* PluginHost.handlers["telemetry.measures"](measuresInput);
+          const fromHandler = yield* measures.pipe(
+            Effect.flatMap(Schema.decodeUnknownEffect(TelemetryMeasuresResult)),
+          );
           assert.deepEqual(fromHandler, {
             state: "unavailable",
             missingReason: "Measures are not built yet (#1).",
@@ -244,11 +260,14 @@ it.effect("disabled: no file, no sweep, no tool, and the RPC says it is not runn
         assert.isFalse(yield* telemetryFileExists);
         assert.deepEqual((yield* (yield* PluginSupervisor.PluginSupervisor).status).sweeps, []);
 
-        const refused = yield* Effect.flip(
-          PluginHost.handlers["telemetry.measures"](measuresInput),
+        const refused = yield* measures.pipe(
+          Effect.andThen(Effect.die("expected a failure")),
+          Effect.flip,
         );
-        assert.strictEqual(refused._tag, "TelemetryError");
-        assert.strictEqual(refused.message, 'Plugin "telemetry" is not running.');
+        if (refused._tag !== "PluginMethodError") return assert.fail(refused.message);
+        const error = yield* decodeTelemetryError(refused.error);
+        assert.strictEqual(error._tag, "TelemetryError");
+        assert.strictEqual(error.message, 'Plugin "telemetry" is not running.');
 
         const call = yield* mcp;
         const tools = (yield* call("tools/list", {})).tools?.map((tool) => tool.name) ?? [];
