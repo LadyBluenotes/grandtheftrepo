@@ -94,7 +94,10 @@ them half-evaluated. The host hands `toolkitRegistration` to `ServerPlugin.mcp` 
 - **learning**: a record of corrections, visible instances of work going wrong, taken from
   events the server already emits: failed or interrupted provider turns, pull request wakes
   while changes are requested, and threads reopened after settlement. Agents read and add
-  them over MCP. Server: `apps/server/src/plugins/learning/`. Contracts:
+  them over MCP. Two sweeps turn corrections with a declared failure mode into learning items, one
+  per mode per project, routed by fixed rules on the mode to an owner kind, and hand each item
+  over once through a promotion record; no promoter is registered yet, so records wait. Server:
+  `apps/server/src/plugins/learning/`. Contracts:
   `packages/contracts/src/plugins/learning.ts`. No screen yet.
 - **caveman**: whether each provider instance's model traffic goes through caveman's loopback
   proxy, `routed`, `direct`, `other` or `unsupported`, read from the Claude `settings.json` and

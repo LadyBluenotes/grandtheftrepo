@@ -4,6 +4,10 @@ import {
   LearningCorrectionsInput,
   LearningDeclaredMode,
   type LearningError,
+  LearningItem,
+  LearningItemDetail,
+  LearningItemInput,
+  LearningItemsInput,
   OrchestratorMcpFailure,
   ProjectId,
   ThreadId,
@@ -18,6 +22,7 @@ import * as McpToolAccess from "../../mcp/McpToolAccess.ts";
 import { readCaller, resolveProjectId } from "../../mcp/threadAccess.ts";
 import * as ThreadManagementService from "../../orchestration-v2/ThreadManagementService.ts";
 import * as CorrectionStore from "./CorrectionStore.ts";
+import * as ItemStore from "./items/ItemStore.ts";
 
 const shared = {
   failure: OrchestratorMcpFailure,
@@ -68,7 +73,36 @@ const CorrectionAddTool = Tool.make("learning_correction_add", {
   .annotate(Tool.Idempotent, false)
   .annotate(Tool.OpenWorld, false);
 
-export const LearningToolkit = Toolkit.make(CorrectionsTool, CorrectionTool, CorrectionAddTool);
+const ItemsTool = Tool.make("learning_items", {
+  ...shared,
+  description:
+    "List a project's learning items, one per recurring failure mode, most recently updated first. Each says how often the mode recurred, who should act on it (ownerKind: project_knowledge, prompt, policy or local_only) and whether it is open, candidate, promoted or closed. Omit projectId for the calling thread's project; narrow with state.",
+  parameters: Schema.Struct({
+    ...LearningItemsInput.fields,
+    projectId: Schema.optional(ProjectId),
+  }),
+  success: Schema.Array(LearningItem),
+})
+  .annotate(Tool.Readonly, true)
+  .annotate(Tool.Destructive, false);
+
+const ItemTool = Tool.make("learning_item", {
+  ...shared,
+  description:
+    "One learning item by id, with its evidence (one entry per occurrence) and its promotion records.",
+  parameters: LearningItemInput,
+  success: LearningItemDetail,
+})
+  .annotate(Tool.Readonly, true)
+  .annotate(Tool.Destructive, false);
+
+export const LearningToolkit = Toolkit.make(
+  CorrectionsTool,
+  CorrectionTool,
+  CorrectionAddTool,
+  ItemsTool,
+  ItemTool,
+);
 
 const failure = (error: LearningError) =>
   new OrchestratorMcpFailure({
@@ -76,24 +110,28 @@ const failure = (error: LearningError) =>
     message: error.message,
   });
 
+const running = <A>(service: Option.Option<A>) =>
+  Option.match(service, {
+    onNone: () =>
+      Effect.fail(
+        new OrchestratorMcpFailure({
+          code: "orchestration_error",
+          message: 'Plugin "learning" is not running.',
+        }),
+      ),
+    onSome: Effect.succeed,
+  });
+
 /**
- * The store is read when the handlers are built, not declared as a tool dependency: plugin
+ * The stores are read when the handlers are built, not declared as tool dependencies: plugin
  * services are typed as absent from the server chain, and these tools only register while
- * the plugin is active, which is when the store is there.
+ * the plugin is active, which is when the stores are there.
  */
 export const handlers = McpToolAccess.toLayer(
   LearningToolkit,
-  Effect.map(Effect.serviceOption(CorrectionStore.CorrectionStore), (storeOption) => {
-    const store = Option.match(storeOption, {
-      onNone: () =>
-        Effect.fail(
-          new OrchestratorMcpFailure({
-            code: "orchestration_error",
-            message: 'Plugin "learning" is not running.',
-          }),
-        ),
-      onSome: Effect.succeed,
-    });
+  Effect.gen(function* () {
+    const store = running(yield* Effect.serviceOption(CorrectionStore.CorrectionStore));
+    const itemStore = running(yield* Effect.serviceOption(ItemStore.ItemStore));
     return {
       learning_corrections: McpToolAccess.reads(({ projectId: given, ...input }) =>
         Effect.gen(function* () {
@@ -132,6 +170,21 @@ export const handlers = McpToolAccess.toLayer(
               sourceKey: null,
             });
           }).pipe(Effect.catchTags({ LearningError: (error) => Effect.fail(failure(error)) })),
+      ),
+      learning_items: McpToolAccess.reads(({ projectId: given, ...input }) =>
+        Effect.gen(function* () {
+          const context = yield* readCaller();
+          const projectId = yield* resolveProjectId(context, given);
+          const items = yield* itemStore;
+          return yield* items.list({ projectId, ...input });
+        }).pipe(Effect.catchTags({ LearningError: (error) => Effect.fail(failure(error)) })),
+      ),
+      learning_item: McpToolAccess.reads(({ id }) =>
+        Effect.gen(function* () {
+          yield* readCaller();
+          const items = yield* itemStore;
+          return yield* items.get(id);
+        }).pipe(Effect.catchTags({ LearningError: (error) => Effect.fail(failure(error)) })),
       ),
     };
   }),

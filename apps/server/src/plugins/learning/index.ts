@@ -3,12 +3,17 @@ import * as Layer from "effect/Layer";
 import type * as SqlError from "effect/sql/SqlError";
 import type { ServerPlugin } from "../Plugin.ts";
 import * as PluginReactor from "../PluginReactor.ts";
+import * as PluginSupervisor from "../PluginSupervisor.ts";
+import * as ClassifySweep from "./ClassifySweep.ts";
 import * as CorrectionStore from "./CorrectionStore.ts";
+import * as ItemStore from "./items/ItemStore.ts";
 import * as Mcp from "./mcp.ts";
 import { migrations } from "./migrations.ts";
 import * as ChangesRequested from "./producers/changesRequested.ts";
 import * as Reopened from "./producers/reopened.ts";
 import * as TurnFailures from "./producers/turnFailures.ts";
+import * as PromoteSweep from "./PromoteSweep.ts";
+import * as Promoter from "./Promoter.ts";
 
 /** Every producer's handlers, run by one reactor from the first event the server ever committed. */
 export const handlers = {
@@ -17,22 +22,30 @@ export const handlers = {
   ...Reopened.handlers,
 } satisfies PluginReactor.Handlers<SqlError.SqlError>;
 
+// Neither fails in a state the plugin can run in: the reactor's cursor tables go in the database
+// the host just migrated, and a second sweep under this plugin's own name is a defect.
+const start = Effect.gen(function* () {
+  yield* PluginReactor.start({ plugin: "learning", from: "start", handlers });
+  const supervisor = yield* PluginSupervisor.PluginSupervisor;
+  // Classify before promote, so a tick hands over what it just classified.
+  yield* supervisor.register(yield* ClassifySweep.sweep);
+  yield* supervisor.register(yield* PromoteSweep.sweep);
+}).pipe(Effect.orDie);
+
 /**
  * Records corrections, visible instances of work going wrong, from events the
  * server already emits: failed and interrupted provider turns, pull request
  * wakes while changes are requested, and threads reopened after settlement.
- * Two read tools and one write tool expose them to agents.
+ * Two sweeps turn them into learning items, one per recurring failure mode per
+ * project, and hand each item once to the owner kind the rules or a person
+ * picked. MCP tools expose corrections and items to agents.
  */
 export const plugin = {
   id: "learning",
   dependsOn: [],
   migrations,
-  layer: Layer.effectDiscard(
-    PluginReactor.start({ plugin: "learning", from: "start", handlers }).pipe(
-      // Its cursor tables go in the database the host just migrated: a failure here is a broken
-      // SQLite build, not plugin state.
-      Effect.orDie,
-    ),
-  ).pipe(Layer.provideMerge(CorrectionStore.layer)),
+  layer: Layer.effectDiscard(start).pipe(
+    Layer.provideMerge(Layer.mergeAll(CorrectionStore.layer, ItemStore.layer, Promoter.layer)),
+  ),
   mcp: (register) => register(Mcp.LearningToolkit, Mcp.handlers),
 } satisfies ServerPlugin<unknown>;

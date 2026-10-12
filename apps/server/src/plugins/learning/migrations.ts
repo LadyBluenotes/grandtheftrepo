@@ -30,6 +30,51 @@ const corrections: PluginMigration[2] = Effect.gen(function* () {
   )`;
 });
 
+const learningItems: PluginMigration[2] = Effect.gen(function* () {
+  const sql = yield* SqlClient.SqlClient;
+  // The classify sweep takes rows with no `classified_at`; the reason says why a row has its class.
+  yield* sql`ALTER TABLE corrections ADD COLUMN classified_at TEXT`;
+  yield* sql`ALTER TABLE corrections ADD COLUMN classification_reason TEXT`;
+  yield* sql`CREATE INDEX corrections_unclassified ON corrections (id) WHERE classified_at IS NULL`;
+  // One item per recurring failure mode per project; `occurrences` is its evidence row count.
+  yield* sql`CREATE TABLE learning_items (
+    id INTEGER PRIMARY KEY,
+    project_id TEXT NOT NULL,
+    failure_mode TEXT NOT NULL,
+    occurrences INTEGER NOT NULL,
+    state TEXT NOT NULL,
+    owner_kind TEXT,
+    disposition_by TEXT NOT NULL,
+    reason TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    UNIQUE (project_id, failure_mode)
+  )`;
+  yield* sql`CREATE TABLE learning_item_evidence (
+    item_id INTEGER NOT NULL REFERENCES learning_items (id),
+    evidence_key TEXT NOT NULL,
+    summary TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    UNIQUE (item_id, evidence_key)
+  )`;
+  // At most one handover per project, failure mode and owner kind, whatever happens to the item.
+  yield* sql`CREATE TABLE learning_promotions (
+    id INTEGER PRIMARY KEY,
+    item_id INTEGER NOT NULL REFERENCES learning_items (id),
+    project_id TEXT NOT NULL,
+    failure_mode TEXT NOT NULL,
+    owner_kind TEXT NOT NULL,
+    state TEXT NOT NULL,
+    attempts INTEGER NOT NULL,
+    next_attempt_at TEXT,
+    last_error TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    UNIQUE (project_id, failure_mode, owner_kind)
+  )`;
+});
+
 export const migrations = [
   [1, "Corrections", corrections],
+  [2, "LearningItems", learningItems],
 ] as const satisfies ReadonlyArray<PluginMigration>;

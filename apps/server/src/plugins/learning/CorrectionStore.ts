@@ -42,6 +42,8 @@ interface Row {
   readonly description: string;
   readonly source_event_ids: string;
   readonly source_key: string | null;
+  readonly classified_at: string | null;
+  readonly classification_reason: string | null;
   readonly created_at: string;
   readonly updated_at: string;
 }
@@ -60,6 +62,8 @@ const toCorrection = (row: Row): LearningCorrection => ({
   description: row.description,
   sourceEventIds: decodeEventIds(row.source_event_ids),
   sourceKey: row.source_key,
+  classifiedAt: row.classified_at,
+  classificationReason: row.classification_reason,
   createdAt: row.created_at,
   updatedAt: row.updated_at,
 });
