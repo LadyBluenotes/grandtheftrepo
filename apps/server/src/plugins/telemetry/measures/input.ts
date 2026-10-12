@@ -118,8 +118,8 @@ export const ACCEPTED_PROVENANCE = [
 ] as const satisfies ReadonlyArray<FieldPath>;
 
 /**
- * Threads accepted in the window: settled in it, and either a pull request merged or settled by
- * hand with no reopen since. A settlement by the inactivity sweep with nothing merged is not an
+ * Threads accepted in the window: settled in it with no reopen since, and either a pull request
+ * merged or settled by hand. A settlement by the inactivity sweep with nothing merged is not an
  * acceptance. Child tasks are part of their parent's outcome, not outcomes of their own.
  */
 export const acceptedOutcomes = (input: MeasureInput) =>
@@ -128,9 +128,8 @@ export const acceptedOutcomes = (input: MeasureInput) =>
       thread.parent_thread_id === null &&
       thread.settled_at !== null &&
       inWindow(input, thread.settled_at) &&
-      (thread.pull_request_merged_at !== null ||
-        (thread.settled_by_sweep === 0 &&
-          (thread.unsettled_at === null || thread.unsettled_at < thread.settled_at))),
+      (thread.unsettled_at === null || thread.unsettled_at < thread.settled_at) &&
+      (thread.pull_request_merged_at !== null || thread.settled_by_sweep === 0),
   );
 
 /** Runs that started in the window. */

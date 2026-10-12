@@ -9,8 +9,11 @@ const spec = {
 
 /**
  * Failed runs that started in the window whose thread's next run completed, over those failed
- * runs. shortcut: a run retried in place (`prepared-run.retry`) keeps only its last status, so a
- * failure it recovered from is not seen; latch the failure on the row if that retry matters.
+ * runs. The next run in the thread is the proxy for a retry because the log keeps no link from a
+ * new run to the failed one it retries (`restartContinuationOfRunId` links only to a run a restart
+ * cancelled). The failed run is the sample, so its next run counts wherever it started, after `to`
+ * included. shortcut: a run retried in place (`prepared-run.retry`) keeps only its last status, so
+ * a failure it recovered from is not seen; latch the failure on the row if that retry matters.
  */
 export const recoveryEfficiency: Measure = (input) => {
   const failed = windowRuns(input).filter((run) => run.status === "failed");

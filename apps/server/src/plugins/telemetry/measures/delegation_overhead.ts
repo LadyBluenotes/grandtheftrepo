@@ -5,6 +5,7 @@ import {
   ok,
   type Spec,
   unavailable,
+  windowRuns,
 } from "./input.ts";
 
 const spec = {
@@ -13,7 +14,10 @@ const spec = {
   direction: "lower_is_better",
   provenance: [
     ...ACCEPTED_PROVENANCE,
-    "provider-turn.updated.threadId",
+    "run.id",
+    "run.threadId",
+    "run.startedAt",
+    "provider-turn.updated.runId",
     "providerTurn.tokenUsage.inputTokens",
     "providerTurn.tokenUsage.outputTokens",
   ],
@@ -21,7 +25,9 @@ const spec = {
 
 /**
  * Input plus output tokens of the child tasks of each accepted outcome that delegated one, per
- * such outcome. A fork is not a child task. A child turn missing either count is left out.
+ * such outcome. Like `cost_per_accepted_outcome`, it counts the turns of runs that started in the
+ * window, not an outcome's whole spend. A fork is not a child task. A child turn missing either
+ * count is left out.
  */
 export const delegationOverhead: Measure = (input) => {
   const parents = new Set(acceptedOutcomes(input).map((thread) => thread.thread_id));
@@ -33,18 +39,26 @@ export const delegationOverhead: Measure = (input) => {
   if (delegating.size === 0) {
     return unavailable(spec, "No accepted outcome in the window delegated a child task.");
   }
+  const childRuns = new Set(
+    windowRuns(input)
+      .filter((run) => childIds.has(run.thread_id))
+      .map((run) => run.run_id),
+  );
   let turns = 0;
   let counted = 0;
   let tokens = 0;
   for (const turn of input.turnUsage) {
-    if (!childIds.has(turn.thread_id)) continue;
+    if (turn.run_id === null || !childRuns.has(turn.run_id)) continue;
     turns += 1;
     if (turn.input_tokens === null || turn.output_tokens === null) continue;
     counted += 1;
     tokens += turn.input_tokens + turn.output_tokens;
   }
   if (counted === 0) {
-    return unavailable(spec, "No child task of an accepted outcome reported token usage.");
+    return unavailable(
+      spec,
+      "No child task of an accepted outcome reported token usage for a run in the window.",
+    );
   }
   return ok(
     spec,

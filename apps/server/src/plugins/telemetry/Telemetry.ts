@@ -5,8 +5,8 @@ import type {
 } from "@t3tools/contracts";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
-import * as Layer from "effect/Layer";
 
+import type * as EventSink from "../../orchestration-v2/EventSink.ts";
 import * as MeasureService from "./MeasureService.ts";
 
 /**
@@ -24,7 +24,6 @@ export class Telemetry extends Context.Service<
   }
 >()("t3/plugins/telemetry/Telemetry") {}
 
-export const layer = Layer.effect(
-  Telemetry,
-  Effect.map(MeasureService.make, (measures) => Telemetry.of({ measures })),
-);
+/** `caughtUp` is the drain of the reactor that fills the tables the measures read. */
+export const make = (caughtUp: Effect.Effect<void, EventSink.EventSinkV2Error>) =>
+  Effect.map(MeasureService.make(caughtUp), (measures) => Telemetry.of({ measures }));

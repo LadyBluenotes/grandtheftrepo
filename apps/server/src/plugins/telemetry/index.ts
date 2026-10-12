@@ -12,9 +12,15 @@ import * as Telemetry from "./Telemetry.ts";
 
 // Neither fails in a state the plugin can run in: a database that cannot take the reactor's
 // tables, or a second sweep under this plugin's own name, are defects.
-const start = Effect.gen(function* () {
-  yield* PluginReactor.start({ plugin: "telemetry", from: "start", handlers: Reactor.handlers });
+const make = Effect.gen(function* () {
+  const reactor = yield* PluginReactor.start({
+    plugin: "telemetry",
+    from: "start",
+    handlers: Reactor.handlers,
+  });
   yield* (yield* PluginSupervisor.PluginSupervisor).register(heartbeat);
+  // The measures read the reactor's tables, so each request waits for it to catch up.
+  return yield* Telemetry.make(reactor.drain);
 }).pipe(Effect.orDie);
 
 /**
@@ -27,6 +33,6 @@ export const plugin = {
   id: "telemetry",
   dependsOn: [],
   migrations,
-  layer: Layer.effectDiscard(start).pipe(Layer.provideMerge(Telemetry.layer)),
+  layer: Layer.effect(Telemetry.Telemetry, make),
   mcp: (register) => register(Mcp.TelemetryToolkit, Mcp.handlers),
 } satisfies ServerPlugin<unknown>;
