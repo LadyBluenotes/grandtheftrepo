@@ -79,9 +79,14 @@ export class PolicyService extends Context.Service<
     readonly create: (input: PolicyCreateInput) => Effect.Effect<PolicyVersionRef, PolicyError>;
     /** Accepts one version and supersedes every other accepted one, so accepting an older version restores it. */
     readonly accept: (input: PolicyAcceptInput) => Effect.Effect<PolicyVersionRef, PolicyError>;
-    /** Writes the accepted version's block into each agent's instruction file. */
+    /**
+     * Writes the accepted version's block into each agent's instruction file. `beforeWrite` runs
+     * under the install lock right before the first file is written, and failing it cancels the
+     * install with nothing written. The sweep uses it to look for a run again after the lock wait.
+     */
     readonly install: (
       input: PolicyAgentsInput,
+      beforeWrite?: Effect.Effect<void, PolicyError>,
     ) => Effect.Effect<ReadonlyArray<PolicyInstallResult>, PolicyError>;
     /** Re-reads each delivered file and compares its block with what was installed. */
     readonly verify: (
@@ -223,7 +228,10 @@ const make = Effect.gen(function* () {
   );
 
   const install = Effect.fn("PolicyService.install")(
-    function* ({ projectId, key, agents = POLICY_AGENTS }: PolicyAgentsInput) {
+    function* (
+      { projectId, key, agents = POLICY_AGENTS }: PolicyAgentsInput,
+      beforeWrite?: Effect.Effect<void, PolicyError>,
+    ) {
       const policy = yield* policyOf(projectId, key);
       if (policy.state !== "accepted") {
         return yield* invalid(`Policy "${key}" version ${policy.version} is not accepted.`);
@@ -256,6 +264,7 @@ const make = Effect.gen(function* () {
         plans.push({ agent, path: filePath, next: placeBlock(text, found, block.text) });
       }
       const at = yield* nowIso;
+      if (beforeWrite !== undefined) yield* beforeWrite;
       const results: Array<PolicyInstallResult> = [];
       for (const plan of plans) {
         if (plan.next !== undefined) {

@@ -408,9 +408,9 @@ it.effect("a failed verification leaves verified_at null and the next tick insta
     // An install whose file is edited before the sweep reads it back.
     const tampering = PolicyService.PolicyService.of({
       ...policies,
-      install: (input) =>
+      install: (input, beforeWrite) =>
         policies
-          .install(input)
+          .install(input, beforeWrite)
           .pipe(
             Effect.tap((installed) =>
               Effect.forEach(installed, ({ path }) =>
@@ -441,6 +441,72 @@ it.effect("a failed verification leaves verified_at null and the next tick insta
     assert.deepStrictEqual(yield* w.run(), { examined: 2, acted: 2, flags: 0 });
     assert.isTrue((yield* w.deliveries).every((row) => row.verified_at !== null));
     assert.include(yield* w.fs.readFileString(w.claudeFile), "Run the tests.");
+  }).pipe(Effect.provide(layerTest)),
+);
+
+it.effect("a moved instruction file is delivered to again on the next tick", () =>
+  Effect.gen(function* () {
+    const settings = yield* ServerSettings.ServerSettingsService;
+    const path = yield* Path.Path;
+    const home = yield* HostProcess.HomeDirectory;
+    const w = yield* world;
+    yield* accepted(alpha, "review", "Run the tests.");
+    assert.deepStrictEqual(yield* w.run(), { examined: 2, acted: 2, flags: 0 });
+    assert.deepStrictEqual(yield* w.run(), { examined: 2, acted: 0, flags: 0 });
+
+    // The agent's home changes after a verified delivery into the old one.
+    const movedFile = path.join(home, "claude-moved", "CLAUDE.md");
+    yield* w.fs.makeDirectory(path.dirname(movedFile));
+    yield* settings.updateSettings({
+      providerInstances: {
+        [ProviderInstanceId.make("claudeAgent")]: {
+          driver: ProviderDriverKind.make("claudeAgent"),
+          config: { homePath: "~/claude-moved" },
+        },
+      },
+    });
+    assert.deepStrictEqual(yield* w.run(), { examined: 2, acted: 1, flags: 0 });
+    assert.include(yield* w.fs.readFileString(movedFile), "key=alpha/review");
+    const claude = (yield* w.deliveries).find((row) => row.agent === "claude");
+    assert.isNotNull(claude?.verified_at);
+    assert.deepStrictEqual(yield* w.run(), { examined: 2, acted: 0, flags: 0 });
+  }).pipe(Effect.provide(layerTest)),
+);
+
+it.effect("a run that starts while the install waits for its lock cancels the install", () =>
+  Effect.gen(function* () {
+    const policies = yield* PolicyService.PolicyService;
+    const w = yield* world;
+    yield* accepted(alpha, "review", "Run the tests.");
+    yield* w.fs.writeFileString(w.claudeFile, "# Mine\n");
+
+    // The run starts after the sweep's own check and before the install writes, as it can while
+    // a manual install holds the lock.
+    const late = PolicyService.PolicyService.of({
+      ...policies,
+      install: (input, beforeWrite) =>
+        Effect.andThen(
+          w.setThreads([shell(alpha, "late", "running")]),
+          policies.install(input, beforeWrite),
+        ),
+    });
+    const sweep = yield* DeliverySweep.make.pipe(
+      Effect.provideService(PolicyService.PolicyService, late),
+    );
+    const held = yield* logged(w.calling(sweep.run({ dryRun: false })));
+    assert.deepStrictEqual(held.value.value, { examined: 2, acted: 0, flags: 0 });
+    assert.deepStrictEqual(held.messages, []);
+    assert.deepStrictEqual(
+      held.value.calls.filter((call) => call.startsWith("write ")),
+      [],
+    );
+    assert.strictEqual(yield* w.fs.readFileString(w.claudeFile), "# Mine\n");
+    assert.isFalse(yield* w.fs.exists(w.codexFile));
+    assert.deepStrictEqual(yield* w.deliveries, []);
+
+    yield* w.setThreads([]);
+    assert.deepStrictEqual(yield* w.run(), { examined: 2, acted: 2, flags: 0 });
+    assert.include(yield* w.fs.readFileString(w.claudeFile), "key=alpha/review");
   }).pipe(Effect.provide(layerTest)),
 );
 

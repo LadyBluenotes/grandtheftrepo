@@ -1,8 +1,8 @@
 import {
   POLICY_AGENTS,
   POLICY_ENVIRONMENT_PROJECT_ID,
+  PolicyError,
   type PolicyAgent,
-  type PolicyError,
   type ProjectId,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
@@ -27,18 +27,19 @@ interface DeliveredRow {
   readonly agent: PolicyAgent;
   readonly version: number;
   readonly rulesHash: string;
+  readonly targetPath: string;
   readonly verifiedAt: string | null;
 }
 
 /**
  * The supervisor sweep that makes policy delivery automatic. Every accepted policy that an
  * agent's instruction file does not carry current, because it was never installed, a newer
- * version was accepted, `RULES.md` changed, or the last install was not verified, is installed
- * and verified through `PolicyService`, but only at a session boundary: a project's policy waits
- * while any thread in the project has a run, and a `*` policy while any thread does. A waiting
- * policy leaves nothing behind and the next tick looks again. `examined` counts policy and
- * agent pairs, `acted` installs, `flags` deliveries a failed install or verification left
- * unverified. A dry run counts the installs it would make and writes nothing.
+ * version was accepted, `RULES.md` changed, the agent's file moved, or the last install was not
+ * verified, is installed and verified through `PolicyService`, but only at a session boundary: a
+ * project's policy waits while any thread in the project has a run, and a `*` policy while any
+ * thread does. A waiting policy leaves nothing behind and the next tick looks again. `examined`
+ * counts policy and agent pairs, `acted` installs, `flags` deliveries a failed install or
+ * verification left unverified. A dry run counts the installs it would make and writes nothing.
  */
 export const make = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
@@ -64,6 +65,36 @@ export const make = Effect.gen(function* () {
       (thread) => thread.activeRunId !== null || thread.activityRunStatus === "waiting",
     );
   });
+
+  /**
+   * The check `install` repeats under its lock, right before it writes: a manual install can hold
+   * the lock long enough for a run to start after the sweep first looked. Seeing one marks the
+   * project busy, so the sweep reads the refusal as a wait and not as a failed install.
+   */
+  const refuseWhileRunning = (projectId: ProjectId, busy: Set<ProjectId>) =>
+    hasActiveRun(projectId).pipe(
+      Effect.catch((cause) =>
+        Effect.logWarning("policy delivery: could not look for runs", { cause }).pipe(
+          Effect.andThen(
+            Effect.fail(new PolicyError({ code: "io", message: "Could not look for runs." })),
+          ),
+        ),
+      ),
+      Effect.flatMap((active) =>
+        active
+          ? Effect.sync(() => busy.add(projectId)).pipe(
+              Effect.andThen(
+                Effect.fail(
+                  new PolicyError({
+                    code: "invalid",
+                    message: "A run started before the install.",
+                  }),
+                ),
+              ),
+            )
+          : Effect.void,
+      ),
+    );
 
   const warn = (step: string, filePath: string, error: PolicyError) =>
     Effect.logWarning(`policy delivery: ${step} failed`, {
@@ -93,13 +124,17 @@ export const make = Effect.gen(function* () {
       for (const { project_id: projectId, key, version } of accepted) {
         const delivered = new Map(
           (yield* sql<DeliveredRow>`
-            SELECT agent, version, rules_hash AS rulesHash, verified_at AS verifiedAt
+            SELECT agent, version, rules_hash AS rulesHash, target_path AS targetPath,
+              verified_at AS verifiedAt
             FROM deliveries WHERE project_id = ${projectId} AND "key" = ${key}
           `).map((row) => [row.agent, row]),
         );
         for (const agent of agents) {
           examined += 1;
-          if (!needsDelivery({ version, rulesHash, delivery: delivered.get(agent) })) continue;
+          const targetPath = targets[agent];
+          if (!needsDelivery({ version, rulesHash, targetPath, delivery: delivered.get(agent) })) {
+            continue;
+          }
           if (busy.has(projectId)) continue;
           if (yield* hasActiveRun(projectId)) {
             busy.add(projectId);
@@ -112,13 +147,19 @@ export const make = Effect.gen(function* () {
 
           const target = { projectId, key, agents: [agent] };
           // One agent at a time, so a file that cannot be written does not hold back the others.
-          const installed = yield* policies.install(target).pipe(
-            Effect.map(([result]) => (result?.status === "installed" ? "installed" : "skipped")),
-            Effect.catchTags({
-              PolicyError: (error) => Effect.as(warn("install", targets[agent], error), "failed"),
-            }),
-          );
-          // Skipped means the directory went away since the check; the next tick looks again.
+          const installed = yield* policies
+            .install(target, refuseWhileRunning(projectId, busy))
+            .pipe(
+              Effect.map(([result]) => (result?.status === "installed" ? "installed" : "skipped")),
+              Effect.catchTags({
+                PolicyError: (error) =>
+                  busy.has(projectId)
+                    ? Effect.succeed("skipped")
+                    : Effect.as(warn("install", targetPath, error), "failed"),
+              }),
+            );
+          // Skipped means the directory went away since the check or a run started while the
+          // install waited for its lock; the next tick looks again.
           if (installed === "skipped") continue;
           if (installed === "failed") {
             flags += 1;
