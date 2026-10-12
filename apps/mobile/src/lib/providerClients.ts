@@ -1,5 +1,6 @@
 import { isProviderDriverKind } from "@t3tools/contracts";
 import { acpRegistryClient } from "@t3tools/provider-acp-registry/client";
+import { copilotClient } from "@t3tools/provider-copilot/client";
 import { makeProviderClientRegistry } from "@t3tools/provider-core/client";
 import { cursorClient } from "@t3tools/provider-cursor/client";
 import { grokClient } from "@t3tools/provider-grok/client";
@@ -9,6 +10,7 @@ import { piClient } from "@t3tools/provider-pi/client";
 
 /** The provider client definitions this mobile build ships. */
 const providerClients = makeProviderClientRegistry([
+  copilotClient,
   cursorClient,
   grokClient,
   museClient,
