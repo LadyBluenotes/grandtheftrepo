@@ -26,7 +26,6 @@ import * as Semaphore from "effect/Semaphore";
 import * as SqlClient from "effect/sql/SqlClient";
 import type * as SqlError from "effect/sql/SqlError";
 
-import * as ServerConfig from "../../config.ts";
 import * as ServerSettings from "../../serverSettings.ts";
 import * as Files from "./InstructionFiles.ts";
 import { blockId, findBlock, placeBlock, renderBlock, sha256 } from "./Render.ts";
@@ -113,13 +112,12 @@ const make = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
-  const { stateDir } = yield* ServerConfig.ServerConfig;
   const services = yield* Effect.context<
     FileSystem.FileSystem | Path.Path | ServerSettings.ServerSettingsService
   >();
   const provided = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
     Effect.provideContext(effect, services);
-  const rulesPath = path.join(stateDir, "RULES.md");
+  const rulesPath = yield* Files.rulesPath();
   /** Installs read the files they rewrite, so two at once would drop one's block; verify shares it. */
   const installLock = yield* Semaphore.make(1);
   const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
