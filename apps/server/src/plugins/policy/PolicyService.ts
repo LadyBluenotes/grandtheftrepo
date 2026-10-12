@@ -117,7 +117,7 @@ const make = Effect.gen(function* () {
   const provided = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
     Effect.provideContext(effect, services);
   const rulesPath = path.join(stateDir, "RULES.md");
-  /** Installs read the files they rewrite, so two at once would drop one's block. */
+  /** Installs read the files they rewrite, so two at once would drop one's block; verify shares it. */
   const installLock = yield* Semaphore.make(1);
   const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
   /** A missing `RULES.md` is empty. */
@@ -328,6 +328,9 @@ const make = Effect.gen(function* () {
       }
       return results;
     },
+    // Under the install lock, so a verify never reads a file one install is replacing and
+    // marks the delivery row that install writes next.
+    installLock.withPermits(1),
     provided,
     Effect.catchTags({
       SqlError: io("Could not record the verification."),
