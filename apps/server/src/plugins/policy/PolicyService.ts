@@ -97,6 +97,9 @@ export class PolicyService extends Context.Service<
 
 const invalid = (message: string) => new PolicyError({ code: "invalid", message });
 const isKey = Schema.is(PolicyKey);
+/** The project id sits inside the markers, so whitespace, angle brackets and the marker word would break parsing. */
+const isMarkerSafe = (projectId: string) =>
+  !/[\s<>]/.test(projectId) && !projectId.includes("fork-policy:");
 
 /** Database, file and settings failures are logged in full; the caller hears which step failed. */
 const io =
@@ -173,6 +176,9 @@ const make = Effect.gen(function* () {
   const create = Effect.fn("PolicyService.create")(
     function* ({ projectId, key, title, body }: PolicyCreateInput) {
       if (!isKey(key)) return yield* invalid(`Policy key "${key}" must match [a-z0-9-]+.`);
+      if (!isMarkerSafe(projectId)) {
+        return yield* invalid(`Project id "${projectId}" cannot be placed in a policy marker.`);
+      }
       if (body.includes("fork-policy:")) {
         return yield* invalid('A policy body cannot contain "fork-policy:".');
       }

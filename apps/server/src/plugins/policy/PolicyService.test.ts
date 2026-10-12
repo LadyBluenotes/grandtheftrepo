@@ -217,6 +217,13 @@ it.layer(layerTest)("PolicyService", (it) => {
         ),
         'A policy body cannot contain "fork-policy:".',
       );
+      const unsafe = ProjectId.make("p -->\n<!-- fork-policy:end key=x");
+      assert.strictEqual(
+        yield* failure(
+          policies.create({ projectId: unsafe, key: "safe", title: "Safe", body: "" }),
+        ),
+        `Project id "${unsafe}" cannot be placed in a policy marker.`,
+      );
       assert.strictEqual(
         yield* failure(policies.install({ projectId, key: "unknown" })),
         'Policy "unknown" was not found.',
