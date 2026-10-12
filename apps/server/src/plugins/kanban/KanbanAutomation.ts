@@ -8,11 +8,14 @@ import * as Stream from "effect/Stream";
 import * as ThreadManagementService from "../../orchestration-v2/ThreadManagementService.ts";
 import { forkParked } from "../../serverActivation.ts";
 import * as KanbanStore from "./KanbanStore.ts";
+import * as StopGate from "./StopGate.ts";
+import * as WriterSweep from "./WriterSweep.ts";
 
 /**
  * Status follows linked work, forward only: a thread starting moves its card to
  * In Progress, a finished turn to In Review, a merged pull request or settled
- * thread to Done. Cards in Triage or Inbox never move on their own.
+ * thread to Done. Cards in Triage or Inbox never move on their own. The writers
+ * sweep watches for two agents writing the same project.
  */
 const start = Effect.gen(function* () {
   const store = yield* KanbanStore.KanbanStore;
@@ -47,6 +50,8 @@ const start = Effect.gen(function* () {
     }
   };
 
+  // A second sweep under this plugin's own name is a defect, not a state the plugin can run in.
+  yield* WriterSweep.register.pipe(Effect.orDie);
   yield* forkParked(
     store.sweepArchive.pipe(Effect.repeat(Schedule.spaced(Duration.hours(1))), Effect.asVoid),
   );
@@ -63,5 +68,7 @@ const start = Effect.gen(function* () {
   );
 });
 
-/** The store plus its automation, for the plugin's layer. */
-export const layer = Layer.effectDiscard(start).pipe(Layer.provideMerge(KanbanStore.layer));
+/** The store and the stop gate plus the automation, for the plugin's layer. */
+export const layer = Layer.effectDiscard(start).pipe(
+  Layer.provideMerge(Layer.merge(KanbanStore.layer, StopGate.layer)),
+);

@@ -1,0 +1,92 @@
+import * as Context from "effect/Context";
+import * as DateTime from "effect/DateTime";
+import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
+import * as Schema from "effect/Schema";
+import type * as SqlError from "effect/sql/SqlError";
+import * as HostDatabase from "./HostDatabase.ts";
+
+/** What the person should do about a flag: a label and the screen it leads to (issue #30). */
+const ResumeAction = Schema.Struct({
+  label: Schema.String,
+  target: Schema.Literals(["thread", "board", "settings"]),
+});
+const encodeResumeAction = Schema.encodeSync(Schema.fromJsonString(ResumeAction));
+
+type AttentionKind =
+  | "budget_breach"
+  | "routing_mismatch"
+  | "two_writers"
+  | "stale_review"
+  | "security_hold"
+  | "unowned_finding";
+
+interface FlagKey {
+  readonly pluginId: string;
+  readonly threadId: string;
+  readonly kind: AttentionKind;
+}
+
+/**
+ * Things waiting on a person, raised and cleared by any plugin's sweep without depending on the
+ * plugin that shows them. Only the raising plugin clears its flags, once the cause is gone; a
+ * cleared flag is kept as history.
+ */
+export class Attention extends Context.Service<
+  Attention,
+  {
+    /** Opens a flag, or rewrites the text and action of the one already open for the same key. */
+    readonly raise: (
+      flag: FlagKey & {
+        readonly text: string;
+        readonly resumeAction: typeof ResumeAction.Type;
+      },
+    ) => Effect.Effect<void, SqlError.SqlError>;
+    /** Clears the open flag for the key; succeeds when none is open. */
+    readonly clear: (flag: FlagKey) => Effect.Effect<void, SqlError.SqlError>;
+    /** One plugin's open flags of one kind, oldest first, for its sweep to reconcile against. */
+    readonly listOpen: (input: {
+      readonly pluginId: string;
+      readonly kind: AttentionKind;
+    }) => Effect.Effect<
+      ReadonlyArray<{ readonly threadId: string; readonly text: string }>,
+      SqlError.SqlError
+    >;
+  }
+>()("t3/plugins/Attention") {}
+
+const make = Effect.gen(function* () {
+  const sql = yield* HostDatabase.HostDatabase;
+
+  const raise: Attention["Service"]["raise"] = (flag) =>
+    Effect.gen(function* () {
+      const raisedAt = DateTime.formatIso(yield* DateTime.now);
+      yield* sql`
+        INSERT INTO attention (plugin_id, thread_id, kind, text, resume_action, raised_at)
+        VALUES (${flag.pluginId}, ${flag.threadId}, ${flag.kind}, ${flag.text}, ${encodeResumeAction(flag.resumeAction)}, ${raisedAt})
+        ON CONFLICT (plugin_id, thread_id, kind) WHERE cleared_at IS NULL
+        DO UPDATE SET text = excluded.text, resume_action = excluded.resume_action
+      `;
+    });
+
+  const clear: Attention["Service"]["clear"] = (flag) =>
+    Effect.gen(function* () {
+      const clearedAt = DateTime.formatIso(yield* DateTime.now);
+      yield* sql`
+        UPDATE attention SET cleared_at = ${clearedAt}
+        WHERE plugin_id = ${flag.pluginId} AND thread_id = ${flag.threadId}
+          AND kind = ${flag.kind} AND cleared_at IS NULL
+      `;
+    });
+
+  const listOpen: Attention["Service"]["listOpen"] = ({ pluginId, kind }) =>
+    sql<{ readonly thread_id: string; readonly text: string }>`
+      SELECT thread_id, text FROM attention
+      WHERE plugin_id = ${pluginId} AND kind = ${kind} AND cleared_at IS NULL
+      ORDER BY id
+    `.pipe(Effect.map((rows) => rows.map((row) => ({ threadId: row.thread_id, text: row.text }))));
+
+  return Attention.of({ raise, clear, listOpen });
+});
+
+export const layer = Layer.effect(Attention, make);

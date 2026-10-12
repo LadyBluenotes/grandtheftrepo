@@ -65,6 +65,7 @@ import { useAtomCommand } from "~/state/use-atom-command";
 import { DecisionsView } from "./DecisionsView";
 import { IssuePanel } from "./IssuePanel";
 import { ReopenDialog } from "./ReopenDialog";
+import { StopBanner } from "./StopBanner";
 import { kanbanActiveAtom, kanbanBoard, kanbanSetDirectory, kanbanWrite } from "./state";
 
 export interface BoardSearch {
@@ -500,6 +501,10 @@ export function BoardPage({ search }: { readonly search: BoardSearch }) {
             </Popover>
           </div>
         </WorkspacePageHeader>
+
+        {environmentId !== null && active === true ? (
+          <StopBanner environmentId={environmentId} />
+        ) : null}
 
         {selected === undefined ? (
           <Empty className="m-auto">
