@@ -13,7 +13,6 @@ import {
   type KANBAN_WS_METHODS,
 } from "./kanban.ts";
 import { definePluginMethods } from "./method.ts";
-import { POLICY_GUARDED_RPC_SCOPES, POLICY_RPC_SUBSYSTEMS, POLICY_RPCS } from "./policy.ts";
 
 export * from "./kanban.ts";
 export * from "./learning.ts";
@@ -91,14 +90,12 @@ export const PLUGIN_RPCS = [
   Rpc.make(PLUGIN_GATEWAY_WS_METHODS.operate, gateway),
   Rpc.make(PLUGIN_GATEWAY_WS_METHODS.settingsWrite, gateway),
   ...KANBAN_RPCS,
-  ...POLICY_RPCS,
 ] as const;
 
 /** Writes the client must hold a grant for; spread into `CLIENT_GUARDED_RPC_SCOPES`. */
 export const PLUGIN_GUARDED_RPC_SCOPES = {
   [PLUGIN_GATEWAY_WS_METHODS.operate]: AuthOrchestrationOperateScope,
   [PLUGIN_GATEWAY_WS_METHODS.settingsWrite]: AuthSettingsWriteScope,
-  ...POLICY_GUARDED_RPC_SCOPES,
 } as const;
 
 /** Reads and subscriptions the server alone authorizes; spread into `RPC_REQUIRED_SCOPES`. */
@@ -116,5 +113,4 @@ export const PLUGIN_RPC_SUBSYSTEMS = {
   [PLUGIN_GATEWAY_WS_METHODS.operate]: "plugins",
   [PLUGIN_GATEWAY_WS_METHODS.settingsWrite]: "plugins",
   ...KANBAN_RPC_SUBSYSTEMS,
-  ...POLICY_RPC_SUBSYSTEMS,
 } as const;

@@ -265,6 +265,7 @@ const table: PluginRpc.DispatchTable<PluginHost | PluginSupervisor.PluginSupervi
   }),
   ...KanbanHandlers.table,
   ...LearningHandlers.table,
+  ...PolicyHandlers.table,
   ...RoutingHandlers.table,
   ...TelemetryHandlers.table,
 };
@@ -278,5 +279,4 @@ export const handlers = {
   [PLUGIN_GATEWAY_WS_METHODS.settingsWrite]: (call: PluginMethodCall) =>
     PluginRpc.dispatch("settingsWrite", table, call),
   ...KanbanHandlers.streams,
-  ...PolicyHandlers.handlers,
 };

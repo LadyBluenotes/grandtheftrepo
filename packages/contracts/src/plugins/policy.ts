@@ -1,16 +1,6 @@
-import * as Rpc from "effect/rpc/Rpc";
 import * as Schema from "effect/Schema";
-import { AuthOrchestrationOperateScope, EnvironmentAuthorizationError } from "../auth.ts";
 import { ProjectId, TrimmedNonEmptyString } from "../baseSchemas.ts";
-
-/**
- * One RPC for every change: the WebSocket group's handler typing (`toLayer` in `ws.ts`) hits
- * tsgo's instantiation limit one entry past where `main` stands, and each plugin method costs an
- * entry, so `action` picks the operation the way `kanban.write` does.
- */
-export const POLICY_WS_METHODS = {
-  write: "policy.write",
-} as const;
+import { definePluginMethods } from "./method.ts";
 
 /** The environment-wide project: its policies reach the agents of every project. */
 export const POLICY_ENVIRONMENT_PROJECT_ID = ProjectId.make("*");
@@ -81,35 +71,34 @@ export class PolicyError extends Schema.TaggedError<PolicyError>()("PolicyError"
   message: Schema.String,
 }) {}
 
-export const PolicyWriteInput = Schema.Union([
-  Schema.Struct({ action: Schema.Literal("create"), ...PolicyCreateInput.fields }),
-  Schema.Struct({ action: Schema.Literal("accept"), ...PolicyAcceptInput.fields }),
-  Schema.Struct({ action: Schema.Literal("install"), ...PolicyAgentsInput.fields }),
-  Schema.Struct({ action: Schema.Literal("verify"), ...PolicyAgentsInput.fields }),
-]);
-export type PolicyWriteInput = typeof PolicyWriteInput.Type;
-
-/** `create` and `accept` answer with the version; `install` and `verify` with one entry per agent. */
-export const PolicyWriteResult = Schema.Union([
-  PolicyVersionRef,
-  Schema.Array(PolicyInstallResult),
-  Schema.Array(PolicyVerifyResult),
-]);
-export type PolicyWriteResult = typeof PolicyWriteResult.Type;
-
-export const POLICY_RPCS = [
-  Rpc.make(POLICY_WS_METHODS.write, {
-    payload: PolicyWriteInput,
-    success: PolicyWriteResult,
-    error: Schema.Union([PolicyError, EnvironmentAuthorizationError]),
-  }),
-] as const;
-
-/** Every action writes the database or a home file: clients check the grant, the server checks it again. */
-export const POLICY_GUARDED_RPC_SCOPES = {
-  [POLICY_WS_METHODS.write]: AuthOrchestrationOperateScope,
-} as const;
-
-export const POLICY_RPC_SUBSYSTEMS = {
-  [POLICY_WS_METHODS.write]: "plugins",
-} as const;
+/** Every method writes the database or a home file, so each answers behind the `operate` gateway. */
+export const POLICY_METHODS = definePluginMethods({
+  create: {
+    method: "policy.create",
+    gateway: "operate",
+    input: PolicyCreateInput,
+    output: PolicyVersionRef,
+    error: PolicyError,
+  },
+  accept: {
+    method: "policy.accept",
+    gateway: "operate",
+    input: PolicyAcceptInput,
+    output: PolicyVersionRef,
+    error: PolicyError,
+  },
+  install: {
+    method: "policy.install",
+    gateway: "operate",
+    input: PolicyAgentsInput,
+    output: Schema.Array(PolicyInstallResult),
+    error: PolicyError,
+  },
+  verify: {
+    method: "policy.verify",
+    gateway: "operate",
+    input: PolicyAgentsInput,
+    output: Schema.Array(PolicyVerifyResult),
+    error: PolicyError,
+  },
+});
