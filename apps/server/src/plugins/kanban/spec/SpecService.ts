@@ -33,6 +33,9 @@ import { SPEC_FORMAT, validateSpec } from "./SpecValidator.ts";
 const NO_CHEAP_TIER =
   "The cheap tier is not configured. Use useExisting or enable the routing plugin.";
 
+/** Why an attempt is closed when `admit` finds a different description than the one it checked. */
+const ISSUE_CHANGED = "The issue changed while the spec was drafted. Run specify again.";
+
 /** The run statuses that end a drafting thread's attempt. `waiting` still has a person to answer. */
 const ENDED = new Set<OrchestrationV2Run["status"]>([
   "completed",
@@ -46,6 +49,10 @@ const ENDED = new Set<OrchestrationV2Run["status"]>([
  * the description as written, or starts a drafting thread in plan mode on routing's cheap tier;
  * `finish`, called by the reactor when that thread's run ends, validates what it wrote. A valid
  * spec admits the issue with its Acceptance items as criteria; a malformed one only records why.
+ *
+ * Each attempt records the hash of the description it started from, and the admission applies only
+ * while the issue still has it: an issue edited, or recreated under the same id, while a child
+ * drafted closes the attempt as `malformed` and stays where it is.
  *
  * The attempt is stored, with its outcome, before the issue is admitted: admitting renames the
  * issue file, which no SQL transaction can cover, and a card admitted without an attempt would
@@ -80,6 +87,7 @@ interface AttemptRow {
   readonly project_id: ProjectId;
   readonly issue_id: string;
   readonly source: KanbanSpecSource;
+  readonly source_hash: string;
   readonly child_thread_id: ThreadId | null;
   readonly status: KanbanSpecStatus;
   readonly text: string | null;
@@ -149,15 +157,15 @@ const make = Effect.gen(function* () {
     );
   const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
 
-  const insert = (attempt: Omit<KanbanSpecAttempt, "id">) =>
+  const insert = (attempt: Omit<KanbanSpecAttempt, "id">, sourceHash: string) =>
     sql<{ readonly id: number }>`
       INSERT INTO spec_attempt
-        (project_id, issue_id, source, child_thread_id, status, text, reason, created_at,
-         completed_at)
+        (project_id, issue_id, source, source_hash, child_thread_id, status, text, reason,
+         created_at, completed_at)
       VALUES
-        (${attempt.projectId}, ${attempt.issueId}, ${attempt.source}, ${attempt.childThreadId},
-         ${attempt.status}, ${attempt.text}, ${attempt.reason}, ${attempt.createdAt},
-         ${attempt.completedAt})
+        (${attempt.projectId}, ${attempt.issueId}, ${attempt.source}, ${sourceHash},
+         ${attempt.childThreadId}, ${attempt.status}, ${attempt.text}, ${attempt.reason},
+         ${attempt.createdAt}, ${attempt.completedAt})
       RETURNING id
     `.pipe(
       Effect.flatMap((rows) =>
@@ -188,20 +196,32 @@ const make = Effect.gen(function* () {
   ) {
     const check = validateSpec(issue.description);
     const createdAt = yield* nowIso;
+    const sourceHash = KanbanStore.descriptionHash(issue.description);
     // The attempt first, then the issue file; see the order note on `SpecService`.
-    const attempt = yield* insert({
-      projectId,
-      issueId: issue.id,
-      source: "existing",
-      childThreadId: null,
-      status: check.valid ? "valid" : "malformed",
-      text: issue.description,
-      reason: check.valid ? null : check.reason,
-      createdAt,
-      completedAt: createdAt,
-    }).pipe(Effect.catchTags({ SqlError: io }));
-    if (check.valid) yield* store.admit(projectId, issue.id, "spec", check.acceptance);
-    return attempt;
+    const attempt = yield* insert(
+      {
+        projectId,
+        issueId: issue.id,
+        source: "existing",
+        childThreadId: null,
+        status: check.valid ? "valid" : "malformed",
+        text: issue.description,
+        reason: check.valid ? null : check.reason,
+        createdAt,
+        completedAt: createdAt,
+      },
+      sourceHash,
+    ).pipe(Effect.catchTags({ SqlError: io }));
+    if (!check.valid) return attempt;
+    const outcome = yield* store.admit(projectId, issue.id, "spec", check.acceptance, sourceHash);
+    if (outcome !== "changed") return attempt;
+    yield* close({
+      id: attempt.id,
+      status: "malformed",
+      text: attempt.text,
+      reason: ISSUE_CHANGED,
+    });
+    return { ...attempt, status: "malformed", reason: ISSUE_CHANGED } satisfies KanbanSpecAttempt;
   });
 
   const draft = Effect.fn("SpecService.draft")(function* (
@@ -234,17 +254,21 @@ const make = Effect.gen(function* () {
           ? Effect.fail(invalid(NO_CHEAP_TIER))
           : Effect.gen(function* () {
               // Stored before the launch, so the reactor finds it however soon the run ends.
-              const attempt = yield* insert({
-                projectId,
-                issueId: issue.id,
-                source: "child",
-                childThreadId,
-                status: "running",
-                text: null,
-                reason: null,
-                createdAt: yield* nowIso,
-                completedAt: null,
-              }).pipe(Effect.catchTags({ SqlError: io }));
+              const attempt = yield* insert(
+                {
+                  projectId,
+                  issueId: issue.id,
+                  source: "child",
+                  childThreadId,
+                  status: "running",
+                  text: null,
+                  reason: null,
+                  createdAt: yield* nowIso,
+                  completedAt: null,
+                },
+                // The text the child is asked to spec; see `ISSUE_CHANGED`.
+                KanbanStore.descriptionHash(issue.description),
+              ).pipe(Effect.catchTags({ SqlError: io }));
               yield* launches
                 .launch({
                   commandId,
@@ -375,8 +399,16 @@ const make = Effect.gen(function* () {
       text,
       reason: check.valid ? null : check.reason,
     });
-    if (check.valid)
-      yield* store.admit(attempt.project_id, attempt.issue_id, "spec", check.acceptance);
+    if (!check.valid) return;
+    const outcome = yield* store.admit(
+      attempt.project_id,
+      attempt.issue_id,
+      "spec",
+      check.acceptance,
+      attempt.source_hash,
+    );
+    if (outcome === "changed")
+      yield* close({ id: attempt.id, status: "malformed", text, reason: ISSUE_CHANGED });
   });
 
   return SpecService.of({ specify, latest, finish });

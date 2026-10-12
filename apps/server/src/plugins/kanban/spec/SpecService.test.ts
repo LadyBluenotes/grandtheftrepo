@@ -234,8 +234,10 @@ const runUpdated = (
 const start = Effect.gen(function* () {
   const { sql } = yield* PluginDatabase.open({ id: "kanban", filename: ":memory:", migrations });
   const projections = yield* ProjectionStore.ProjectionStoreV2;
-  // The real store, except that `admit` can be made to fail, as a rename that cannot complete would.
+  // The real store, except that `admit` can be made to fail, as a rename that cannot complete would,
+  // and can be preceded by an edit, as a person's would land between a read and the locked write.
   let admitFails = false;
+  let beforeAdmit: Effect.Effect<unknown, KanbanError> = Effect.void;
   const breakableStore = Layer.effect(
     KanbanStore.KanbanStore,
     Effect.map(KanbanStore.KanbanStore, (real) =>
@@ -246,7 +248,7 @@ const start = Effect.gen(function* () {
             ? Effect.fail(
                 new KanbanError({ code: "io", message: "The issue file could not be written." }),
               )
-            : real.admit(...args),
+            : Effect.andThen(beforeAdmit, real.admit(...args)),
       }),
     ),
   ).pipe(Layer.provide(KanbanStore.layer));
@@ -353,6 +355,10 @@ const start = Effect.gen(function* () {
     admitFails = fails;
   };
 
+  const editBeforeAdmit = (edit: Effect.Effect<unknown, KanbanError>) => {
+    beforeAdmit = edit;
+  };
+
   const failLaunch = (operation: typeof launchFailsAt) => {
     launchFailsAt = operation;
   };
@@ -368,6 +374,7 @@ const start = Effect.gen(function* () {
     file,
     fileText,
     failAdmit,
+    editBeforeAdmit,
     failLaunch,
   };
 });
@@ -446,6 +453,45 @@ describe("SpecService", () => {
         assert.isNotNull(decided?.attempt.completedAt);
       }),
     ).pipe(Effect.provide(layerTest)),
+  );
+
+  it.effect(
+    "a description edited while the child drafts: malformed, the card stays in Triage",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const { spec, store, launched, specify, react, file, fileText } = yield* start;
+          const { id } = yield* file("Login loops", rough);
+
+          yield* specify({ projectId, id });
+          // A person rewrites the description while the child drafts from the old one.
+          yield* store.write(projectId, "user", {
+            action: "issue.update",
+            id,
+            description: "Login loops when the session cookie has expired, but only on Safari.",
+          });
+          const edited = yield* fileText(id);
+          const threadId = launched[0]!.threadId!;
+          const runId = RunId.make("run:spec-edited");
+          yield* react([
+            threadCreated(threadId),
+            planned(threadId, runId, 1, validSpec),
+            runUpdated(threadId, runId, "completed"),
+          ]);
+
+          const report = yield* spec.latest({ projectId, id });
+          assert.strictEqual(report?.attempt.status, "malformed");
+          assert.strictEqual(
+            report?.attempt.reason,
+            "The issue changed while the spec was drafted. Run specify again.",
+          );
+          assert.strictEqual(report?.attempt.text, validSpec);
+          assert.isNotNull(report?.attempt.completedAt);
+          assert.strictEqual(report?.issueStatus, "triage");
+          assert.strictEqual(yield* fileText(id), edited);
+          assert.lengthOf((yield* store.getIssue({ projectId, id })).criteria, 0);
+        }),
+      ).pipe(Effect.provide(layerTest)),
   );
 
   it.effect("six Approach items: malformed with the reason, the ticket untouched", () =>
@@ -531,6 +577,44 @@ describe("SpecService", () => {
 
         assert.lengthOf(launched, 0);
         assert.lengthOf(routed, 0);
+      }),
+    ).pipe(Effect.provide(layerTest)),
+  );
+
+  it.effect("useExisting: a description edited before the admission is not admitted", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { spec, store, specify, file, fileText, editBeforeAdmit } = yield* start;
+        const { id } = yield* file("Login loops", validSpec);
+
+        // The edit lands after `specify` has read and validated the issue.
+        editBeforeAdmit(
+          store.write(projectId, "user", {
+            action: "issue.update",
+            id,
+            description: `${validSpec}\n- [ ] A late addition.`,
+          }),
+        );
+        const attempt = yield* specify({ projectId, id, useExisting: true });
+        assert.strictEqual(attempt.status, "malformed");
+        assert.strictEqual(
+          attempt.reason,
+          "The issue changed while the spec was drafted. Run specify again.",
+        );
+        const edited = yield* fileText(id);
+        const report = yield* spec.latest({ projectId, id });
+        assert.strictEqual(report?.attempt.status, "malformed");
+        assert.strictEqual(report?.attempt.reason, attempt.reason);
+        assert.strictEqual(report?.issueStatus, "triage");
+        assert.lengthOf((yield* store.getIssue({ projectId, id })).criteria, 0);
+
+        // Run again over the text as it stands now.
+        editBeforeAdmit(Effect.void);
+        assert.strictEqual((yield* specify({ projectId, id, useExisting: true })).status, "valid");
+        assert.notStrictEqual(yield* fileText(id), edited);
+        const admitted = yield* store.getIssue({ projectId, id });
+        assert.strictEqual(admitted.status, "todo");
+        assert.lengthOf(admitted.criteria, 3);
       }),
     ).pipe(Effect.provide(layerTest)),
   );

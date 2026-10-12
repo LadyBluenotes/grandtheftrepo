@@ -10,7 +10,8 @@ import type { PluginMigration } from "../Plugin.ts";
  * sweep raises live in the host's `attention` table, not here.
  *
  * `spec_attempt` holds each try at turning an issue into a spec. A `running` one waits for its
- * drafting thread's run to end, found by `child_thread_id`.
+ * drafting thread's run to end, found by `child_thread_id`. `source_hash` is the hash of the
+ * description the attempt was started from: the issue is admitted only while it still has it.
  */
 export const migrations: ReadonlyArray<PluginMigration> = [
   [
@@ -39,6 +40,7 @@ export const migrations: ReadonlyArray<PluginMigration> = [
           project_id TEXT NOT NULL,
           issue_id TEXT NOT NULL,
           source TEXT NOT NULL,
+          source_hash TEXT NOT NULL,
           child_thread_id TEXT,
           status TEXT NOT NULL,
           text TEXT,

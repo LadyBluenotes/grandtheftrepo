@@ -1,3 +1,4 @@
+// @effect-diagnostics nodeBuiltinImport:off - a plain sha256 of text; Effect's Crypto has no digest.
 import {
   KANBAN_STATUSES,
   KanbanError,
@@ -33,10 +34,15 @@ import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
+import * as NodeCrypto from "node:crypto";
 
 import * as ServerConfig from "../../config.ts";
 import * as ProjectService from "../../project/ProjectService.ts";
 import * as Files from "./KanbanFiles.ts";
+
+/** What `admit` compares: the hash of the description a spec was checked or drafted from. */
+export const descriptionHash = (description: string) =>
+  NodeCrypto.createHash("sha256").update(description).digest("hex");
 
 /** Done issues wait this long before the sweep archives them. */
 const ARCHIVE_AFTER = Duration.days(7);
@@ -82,15 +88,20 @@ export class KanbanStore extends Context.Service<
     /**
      * Admits an issue from Triage or Inbox to Todo as `by`, in one write, with `criteria` as its
      * acceptance criteria in that order: one already there with the same text keeps its id and
-     * state, and every other change is logged. An issue already out of those columns is left as
+     * state, and every other change is logged. An issue already out of those columns is `left` as
      * it is. The description is never touched.
+     *
+     * `sourceHash` is the `descriptionHash` of the description the criteria came from. The check
+     * is inside the write, so an issue edited, or recreated under the same id, since then is
+     * `changed`: nothing is written.
      */
     readonly admit: (
       projectId: ProjectId,
       id: string,
       by: KanbanActor,
       criteria: ReadonlyArray<string>,
-    ) => Effect.Effect<void, KanbanError>;
+      sourceHash: string,
+    ) => Effect.Effect<"admitted" | "left" | "changed", KanbanError>;
     /** Moves every issue linking `threadId` forward to `status`. Never leaves Triage or Inbox. */
     readonly advance: (
       projectId: ProjectId,
@@ -662,13 +673,14 @@ const make = Effect.gen(function* () {
   );
 
   const admit: KanbanStore["Service"]["admit"] = Effect.fn("KanbanStore.admit")(
-    function* (projectId, id, by, texts) {
+    function* (projectId, id, by, texts, sourceHash) {
       const state = yield* load(projectId);
-      const admitted = yield* state.lock.withPermits(1)(
+      const outcome = yield* state.lock.withPermits(1)(
         Effect.gen(function* () {
           const current = state.issues.get(id);
           if (current === undefined) return yield* notFound(`No issue "${id}".`);
-          if (!HOLDING.has(current.status)) return false;
+          if (!HOLDING.has(current.status)) return "left" as const;
+          if (descriptionHash(current.description) !== sourceHash) return "changed" as const;
           const at = yield* nowIso;
           // In the given order; an existing criterion with the same text keeps its id and state.
           const unused = [...current.criteria];
@@ -700,10 +712,11 @@ const make = Effect.gen(function* () {
             ],
           };
           yield* saveIssue(state, moved(amended, "todo", by, at));
-          return true;
+          return "admitted" as const;
         }),
       );
-      if (admitted) yield* publish(projectId);
+      if (outcome === "admitted") yield* publish(projectId);
+      return outcome;
     },
   );
 
