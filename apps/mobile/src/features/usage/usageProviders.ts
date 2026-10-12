@@ -12,6 +12,7 @@ export const PROVIDER_ORDER: readonly UsageProviderKind[] = [
   "cursor",
   "opencode",
   "antigravity",
+  "pi",
   "copilot",
 ];
 
@@ -22,6 +23,7 @@ export const PROVIDER_LABEL: Record<UsageProviderKind, string> = {
   cursor: "Cursor",
   opencode: "OpenCode",
   antigravity: "Antigravity",
+  pi: "Pi",
   copilot: "Copilot",
 };
 
@@ -38,6 +40,7 @@ export function useProviderColors(): Record<UsageProviderKind, string> {
     cursor: "#8b8b8b",
     opencode: "#5b9bbd",
     antigravity: "#8c7bd1",
+    pi: "#4d9f8a",
     copilot: "#2da44e",
   };
 }

@@ -1607,6 +1607,8 @@ export interface ChatComposerProps {
   activeProjectDefaultModelSelection: ModelSelection | null | undefined;
   activeThreadModelSelection: ModelSelection | null | undefined;
   reportedModelSelection?: ModelSelection | null;
+  /** The active project, so the picker can fold in its provider instance overrides. */
+  activeProjectId: ProjectId | null;
 
   // Context window
   activeContextWindow: ContextWindowSnapshot | null;
@@ -1756,6 +1758,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     activeProjectDefaultModelSelection,
     activeThreadModelSelection,
     reportedModelSelection,
+    activeProjectId,
     activeContextWindow,
     compactThreadUnavailable,
     compactDisabled,
@@ -1917,6 +1920,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   const composerContextActions = useMemo(
     () => ({
       environmentId,
+      cwd: gitCwd ?? undefined,
       expandImage: (imageId: string) => {
         const preview = buildExpandedImagePreview(composerImages, imageId);
         if (preview) onExpandImage(preview);
@@ -1947,7 +1951,15 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         openPrLink(event, url);
       },
     }),
-    [composerFiles, composerImages, environmentId, onExpandImage, openPrLink, routeThreadRef],
+    [
+      composerFiles,
+      composerImages,
+      gitCwd,
+      environmentId,
+      onExpandImage,
+      openPrLink,
+      routeThreadRef,
+    ],
   );
   const composerContextRecords = useMemo(
     () =>
@@ -2123,9 +2135,13 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   const providerInstanceEntries = useMemo<ReadonlyArray<ProviderInstanceEntry>>(
     () =>
       sortProviderInstanceEntries(
-        applyProviderInstanceSettings(deriveProviderInstanceEntries(providerStatuses), settings),
+        applyProviderInstanceSettings(
+          deriveProviderInstanceEntries(providerStatuses),
+          settings,
+          activeProjectId,
+        ),
       ),
-    [providerStatuses, settings],
+    [providerStatuses, settings, activeProjectId],
   );
   const selectedProviderByThreadId = composerDraft.activeProvider ?? null;
   const {
@@ -5515,6 +5531,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         />
       ) : null}
       <ProviderModelPicker
+        environmentId={environmentId}
         compact={false}
         isComposerOwned
         disabled={providerCatalogPending || isSendBusy}
@@ -7479,6 +7496,9 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                     editorRef={composerEditorRef}
                     richTextEnabled={settings.composerRichTextEnabled}
                     literalText={isLiteralPendingAnswer}
+                    isPathQueryActive={() =>
+                      resolveActiveComposerTrigger().trigger?.kind === "path"
+                    }
                     value={
                       isComposerApprovalState
                         ? ""

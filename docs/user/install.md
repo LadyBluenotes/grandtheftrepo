@@ -143,7 +143,7 @@ computer.
 | Copilot     | Install [GitHub Copilot CLI](./providers-copilot.md) (0.0.397 or newer), then run `copilot login`.                                                        |
 | OpenCode    | Install [OpenCode](https://opencode.ai), then run `opencode auth login`.                                                                                  |
 | Antigravity | Install and sign in with Google from T3 Code's provider settings.                                                                                         |
-| Pi          | Install [Pi](https://pi.dev), then run `pi` once to finish its login or API-key setup.                                                                    |
+| Pi          | Install [Pi](./providers-pi.md#set-up-pi) with Node.js 22.19 or newer, then run `pi` and `/login`.                                                        |
 | Muse Code   | Install [Muse Code](https://dev.meta.ai/docs/muse-code) on the server, run `muse login`, then enable it in Settings → Providers.                          |
 
 Provider CLIs must be on the server's `PATH`. If T3 Code cannot find one, set its
