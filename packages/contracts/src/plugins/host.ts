@@ -28,6 +28,8 @@ export const PluginStatus = Schema.Struct({
   active: Schema.Boolean,
   /** Dependencies that would not run, so this plugin cannot either. */
   missing: Schema.Array(Schema.String),
+  /** Why the plugin did not start this boot: a failed migration, or a dependency that failed. */
+  startError: Schema.NullOr(Schema.String),
 });
 export type PluginStatus = typeof PluginStatus.Type;
 

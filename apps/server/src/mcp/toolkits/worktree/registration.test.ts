@@ -58,7 +58,7 @@ const layerStubServices = Layer.mergeAll(
   Layer.mock(SourceControlRepositoryService.SourceControlRepositoryService)({}),
   Layer.mock(ThreadLaunchService.ThreadLaunchService)({}),
   Layer.mock(ThreadSearch.ThreadSearch)({}),
-  Layer.mock(PluginHost.PluginHost)({ activeIds: new Set<string>() }),
+  Layer.mock(PluginHost.PluginHost)({ activeIds: new Set<string>(), databases: new Map() }),
 );
 
 const ToolsListPayload = Schema.fromJsonString(

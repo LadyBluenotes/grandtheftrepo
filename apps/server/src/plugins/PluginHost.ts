@@ -1,13 +1,17 @@
 import { PLUGIN_WS_METHODS, PluginHostError, type PluginStatus } from "@t3tools/contracts";
 import { writeFileStringAtomically } from "@t3tools/shared/atomicWrite";
 import { fromJsonStringPretty } from "@t3tools/shared/schemaJson";
+import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
+import * as SqlClient from "effect/sql/SqlClient";
 import * as ServerConfig from "../config.ts";
+import * as PluginDatabase from "./PluginDatabase.ts";
 import type { ServerPlugin } from "./Plugin.ts";
 import { type PluginRequirements, registry } from "./registry.ts";
 import type { toolkitRegistration } from "../mcp/McpHttpServer.ts";
@@ -19,7 +23,7 @@ type EnabledState = typeof EnabledState.Type;
 const decodeEnabledState = Schema.decodeUnknownEffect(Schema.fromJsonString(EnabledState));
 const encodeEnabledState = Schema.encodeUnknownEffect(fromJsonStringPretty(EnabledState));
 
-type Registered = Pick<ServerPlugin, "id" | "dependsOn">;
+type Registered = Pick<ServerPlugin, "id" | "dependsOn" | "migrations">;
 
 /** A plugin runs when it is enabled and every dependency runs. An unknown dependency id never runs. */
 export const resolve = (
@@ -43,6 +47,7 @@ export const resolve = (
     enabled: enabled[plugin.id] ?? true,
     active: active.has(plugin.id),
     missing: plugin.dependsOn.filter((id) => !active.has(id)),
+    startError: null,
   }));
 };
 
@@ -51,6 +56,8 @@ export class PluginHost extends Context.Service<
   {
     /** Plugins this process runs, decided once at boot. */
     readonly activeIds: ReadonlySet<string>;
+    /** Each running plugin's own database, opened and migrated at boot. */
+    readonly databases: ReadonlyMap<string, SqlClient.SqlClient>;
     /** Saved choice and running state for every registered plugin. */
     readonly statuses: Effect.Effect<ReadonlyArray<PluginStatus>>;
     /** Saves the choice. It applies on the next start; `activeIds` does not change. */
@@ -93,11 +100,59 @@ export const make = (plugins: ReadonlyArray<Registered>) =>
         Effect.provideService(Path.Path, path),
       );
 
-    const activeIds = new Set(
-      resolve(plugins, yield* read)
-        .filter((status) => status.active)
-        .map((status) => status.id),
-    );
+    const pluginsDir = path.join(stateDir, "plugins");
+    const byId = new Map(plugins.map((plugin) => [plugin.id, plugin]));
+    const wanted = resolve(plugins, yield* read)
+      .filter((status) => status.active)
+      .map((status) => status.id);
+    const databases = new Map<string, SqlClient.SqlClient>();
+    const startErrors = new Map<string, string>();
+    // Dependency order: a plugin opens once every dependency has, and never after one failed.
+    for (let progress = true; progress;) {
+      progress = false;
+      for (const id of wanted) {
+        if (databases.has(id) || startErrors.has(id)) continue;
+        const plugin = byId.get(id);
+        if (plugin === undefined) continue;
+        const failedDependency = plugin.dependsOn.find((dependency) => startErrors.has(dependency));
+        if (failedDependency !== undefined) {
+          startErrors.set(id, `Dependency "${failedDependency}" failed to start.`);
+          progress = true;
+          continue;
+        }
+        if (!plugin.dependsOn.every((dependency) => databases.has(dependency))) continue;
+        progress = true;
+        const opened = yield* Effect.gen(function* () {
+          if (plugin.migrations === undefined) {
+            return yield* PluginDatabase.open({ id, filename: ":memory:", migrations: [] });
+          }
+          yield* fs.makeDirectory(pluginsDir, { recursive: true });
+          return yield* PluginDatabase.open({
+            id,
+            filename: path.join(pluginsDir, `${id}.sqlite`),
+            migrations: plugin.migrations,
+          });
+        }).pipe(Effect.exit);
+        if (Exit.isFailure(opened)) {
+          // The migrator dies on a failed migration, so defects count as well as failures.
+          if (Cause.hasInterruptsOnly(opened.cause)) return yield* Effect.failCause(opened.cause);
+          const error = Cause.squash(opened.cause);
+          yield* Effect.logError("plugin did not start", { plugin: id, cause: opened.cause });
+          startErrors.set(id, error instanceof Error ? error.message : String(error));
+          continue;
+        }
+        if (opened.value.executed.length > 0) {
+          yield* Effect.log("plugin migrations ran", {
+            plugin: id,
+            migrations: opened.value.executed.map(([number, name]) => `${number}_${name}`),
+          });
+        }
+        databases.set(id, opened.value.sql);
+      }
+    }
+    const activeIds = new Set(wanted.filter((id) => databases.has(id)));
+    const withStartErrors = (statuses: ReadonlyArray<PluginStatus>) =>
+      statuses.map((status) => ({ ...status, startError: startErrors.get(status.id) ?? null }));
 
     const setEnabled = Effect.fn("PluginHost.setEnabled")(function* (id: string, enabled: boolean) {
       if (!plugins.some((plugin) => plugin.id === id))
@@ -110,12 +165,13 @@ export const make = (plugins: ReadonlyArray<Registered>) =>
           message: `Enable ${missing.join(", ")} before ${id}.`,
         });
       yield* write(next);
-      return statuses;
+      return withStartErrors(statuses);
     });
 
     return PluginHost.of({
       activeIds,
-      statuses: Effect.map(read, (state) => resolve(plugins, state)),
+      databases,
+      statuses: Effect.map(read, (state) => withStartErrors(resolve(plugins, state))),
       setEnabled,
     });
   });
@@ -125,13 +181,25 @@ const layer = Layer.effect(PluginHost, make(registry));
 const mergeActive = (
   pick: (
     plugin: ServerPlugin<PluginRequirements>,
-  ) => Layer.Layer<never, never, PluginRequirements> | undefined,
+  ) => Layer.Layer<never, never, PluginRequirements | SqlClient.SqlClient> | undefined,
 ) =>
   Effect.gen(function* () {
     const host = yield* PluginHost;
     return registry
       .filter((plugin) => host.activeIds.has(plugin.id))
-      .flatMap((plugin) => pick(plugin) ?? [])
+      .flatMap((plugin) => {
+        const layer = pick(plugin);
+        if (layer === undefined) return [];
+        const sql = host.databases.get(plugin.id);
+        return [
+          Layer.provide(
+            layer,
+            sql === undefined
+              ? PluginDatabase.layerMemory(plugin.id)
+              : Layer.succeed(SqlClient.SqlClient, sql),
+          ),
+        ];
+      })
       .reduce<Layer.Layer<never, never, PluginRequirements>>(
         (merged, next) => Layer.merge(merged, next),
         Layer.empty,
