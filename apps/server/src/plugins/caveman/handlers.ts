@@ -13,6 +13,6 @@ const service = Effect.serviceOption(CavemanService.CavemanService).pipe(
 export const table = PluginRpc.defineHandlers(CAVEMAN_METHODS)({
   status: () => Effect.flatMap(service, (caveman) => caveman.status),
   setRoute: (input) => Effect.flatMap(service, (caveman) => caveman.setRoute(input)),
-  learnPlan: () => Effect.flatMap(service, (caveman) => caveman.learnPlan),
+  learnPlan: (input) => Effect.flatMap(service, (caveman) => caveman.learnPlan(input)),
   learnRefresh: () => Effect.flatMap(service, (caveman) => caveman.learnRefresh),
 });

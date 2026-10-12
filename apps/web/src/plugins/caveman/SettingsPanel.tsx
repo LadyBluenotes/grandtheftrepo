@@ -52,7 +52,7 @@ const CLASS_BADGE: Record<
   load_bearing: { label: "Load-bearing", variant: "outline" },
 };
 
-/** The panel shows the top sinks; the rest stay in the plan. */
+/** The panel asks for, and shows, this many of the top sinks; the rest stay in the plan. */
 const TOP_SINKS = 5;
 
 const formatEvidence = Schema.encodeSync(fromJsonStringPretty(Schema.JsonObject));
@@ -160,7 +160,7 @@ export function SettingsPanel() {
  * their evidence behind Details. Refresh starts a scan; the next sweep tick imports its report.
  */
 function WhereTokensGo() {
-  const learn = useCavemanLearnPlan();
+  const learn = useCavemanLearnPlan(TOP_SINKS);
   const { canWrite, refresh } = useCavemanLearnRefresh();
   const [starting, setStarting] = useState(false);
   useRelativeTimeTick(60_000);
@@ -221,7 +221,7 @@ function WhereTokensGo() {
             status={`${formatDay(data.plan.windowFrom)} to ${formatDay(data.plan.windowTo)}`}
           />
           <SettingsRow title="Last scan" status={formatRelativeTimeLabel(data.plan.generatedAt)} />
-          {data.sinks.slice(0, TOP_SINKS).map((sink) => (
+          {data.sinks.map((sink) => (
             <SinkRow key={sink.rank} sink={sink} />
           ))}
         </>

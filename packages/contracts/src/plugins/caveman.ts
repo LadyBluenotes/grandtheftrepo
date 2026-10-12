@@ -97,8 +97,8 @@ export const CavemanLearnSink = Schema.Struct({
 });
 export type CavemanLearnSink = typeof CavemanLearnSink.Type;
 
-/** One imported `caveman learn` report. `spend` and `wrapMeasured` are caveman's own blocks. */
-export const CavemanLearnPlan = Schema.Struct({
+/** What a plan says about itself: its score, what it scanned, when it was generated and from where. */
+export const CavemanLearnHeader = Schema.Struct({
   generatedAt: IsoDateTime,
   source: CavemanLearnSource,
   windowFrom: Schema.String,
@@ -106,6 +106,12 @@ export const CavemanLearnPlan = Schema.Struct({
   /** The Setup Score, 0 to 100. */
   caveScore: Schema.Number,
   sessionsScanned: Schema.Number,
+});
+export type CavemanLearnHeader = typeof CavemanLearnHeader.Type;
+
+/** One imported `caveman learn` report. `spend` and `wrapMeasured` are caveman's own blocks. */
+export const CavemanLearnPlan = Schema.Struct({
+  ...CavemanLearnHeader.fields,
   caveats: Schema.Array(Schema.String),
   spend: Schema.NullOr(Schema.Json),
   wrapMeasured: Schema.NullOr(Schema.Json),
@@ -120,7 +126,16 @@ export const CavemanLearnScan = Schema.Struct({
 });
 export type CavemanLearnScan = typeof CavemanLearnScan.Type;
 
-/** The newest imported plan with its sinks in rank order, or `none` before the first import. */
+/** How many sinks or findings, from rank 1. */
+const SinkLimit = Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 100 }));
+
+export const CavemanLearnPlanInput = Schema.Struct({
+  /** How many sinks, from rank 1; all of them when left out. */
+  limit: Schema.optional(SinkLimit),
+});
+export type CavemanLearnPlanInput = typeof CavemanLearnPlanInput.Type;
+
+/** The newest imported plan with its first sinks in rank order, or `none` before the first import. */
 export const CavemanLearnPlanResult = Schema.Union([
   Schema.Struct({ state: Schema.Literal("none"), scan: CavemanLearnScan }),
   Schema.Struct({
@@ -134,13 +149,13 @@ export type CavemanLearnPlanResult = typeof CavemanLearnPlanResult.Type;
 
 export const CavemanLearnFindingsInput = Schema.Struct({
   /** How many findings, from rank 1; 10 when left out. */
-  limit: Schema.optional(Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 100 }))),
+  limit: Schema.optional(SinkLimit),
 });
 export type CavemanLearnFindingsInput = typeof CavemanLearnFindingsInput.Type;
 
-/** The newest plan, null before the first import, and its top findings without evidence. */
+/** The newest plan's header, null before the first import, and its top findings without evidence. */
 export const CavemanLearnFindings = Schema.Struct({
-  plan: Schema.NullOr(CavemanLearnPlan),
+  plan: Schema.NullOr(CavemanLearnHeader),
   findings: Schema.Array(CavemanLearnFinding),
 });
 export type CavemanLearnFindings = typeof CavemanLearnFindings.Type;
@@ -168,7 +183,7 @@ export const CAVEMAN_METHODS = definePluginMethods({
   learnPlan: {
     method: "caveman.learnPlan",
     gateway: "read",
-    input: Schema.Struct({}),
+    input: CavemanLearnPlanInput,
     output: CavemanLearnPlanResult,
     error: CavemanError,
   },

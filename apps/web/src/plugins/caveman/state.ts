@@ -67,11 +67,11 @@ export function useCavemanSetRoute() {
   };
 }
 
-/** The newest `caveman learn` plan on the primary environment, with its sinks and the scan's state. */
-export function useCavemanLearnPlan() {
+/** The newest `caveman learn` plan on the primary environment, with its top `limit` sinks and the scan's state. */
+export function useCavemanLearnPlan(limit: number) {
   const environmentId = usePrimaryEnvironmentId();
   return useEnvironmentQuery(
-    environmentId === null ? null : cavemanLearnPlan({ environmentId, input: {} }),
+    environmentId === null ? null : cavemanLearnPlan({ environmentId, input: { limit } }),
   );
 }
 

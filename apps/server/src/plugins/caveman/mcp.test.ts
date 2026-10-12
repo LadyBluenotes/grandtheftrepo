@@ -68,7 +68,7 @@ const status: CavemanStatus = {
 const caveman: CavemanService.CavemanService["Service"] = {
   status: Effect.succeed(status),
   setRoute: () => Effect.succeed(status),
-  learnPlan: Effect.die("not called"),
+  learnPlan: () => Effect.die("not called"),
   learnRefresh: Effect.die("not called"),
   learnFindings: () => Effect.die("not called"),
 };
@@ -210,9 +210,25 @@ it.effect(
         });
         expect(body).not.toContain("evidence");
         expect(body).not.toContain("/home/user");
+        // The fixture plan carries all of these; only its header reaches an agent.
+        for (const leaked of ["spend", "wrapMeasured", "caveats", "importedAt"]) {
+          expect(body).not.toContain(leaked);
+        }
         const result = JSON.parse(resultText(body));
+        expect(Object.keys(result.plan).toSorted()).toEqual([
+          "caveScore",
+          "generatedAt",
+          "sessionsScanned",
+          "source",
+          "windowFrom",
+          "windowTo",
+        ]);
         expect(result.plan.caveScore).toBe(72);
         expect(result.plan.sessionsScanned).toBe(41);
+        expect(result.plan.source).toBe("canonical");
+        expect(result.plan.windowFrom).toBe("2026-09-10T00:00:00Z");
+        expect(result.plan.windowTo).toBe("2026-10-10T00:00:00Z");
+        expect(result.plan.generatedAt).toBe("2026-10-10T08:00:00.000Z");
         expect(
           result.findings.map((finding: { rank: number; sinkId: string; class: string }) => [
             finding.rank,

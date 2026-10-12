@@ -3,6 +3,7 @@ import type {
   CavemanLearnFinding,
   CavemanLearnFindings,
   CavemanLearnFraming,
+  CavemanLearnHeader,
   CavemanLearnPlan,
   CavemanLearnSink,
   CavemanLearnSource,
@@ -63,13 +64,17 @@ interface FindingRow {
   readonly suggestion: string;
 }
 
-const toPlan = (row: PlanRow): CavemanLearnPlan => ({
+const toHeader = (row: PlanRow): CavemanLearnHeader => ({
   generatedAt: row.generated_at,
   source: row.source,
   windowFrom: row.window_from,
   windowTo: row.window_to,
   caveScore: row.cave_score,
   sessionsScanned: row.sessions_scanned,
+});
+
+const toPlan = (row: PlanRow): CavemanLearnPlan => ({
+  ...toHeader(row),
   caveats: decodeCaveats(row.caveats_json),
   spend: row.spend_json === null ? null : decodeJson(row.spend_json),
   wrapMeasured: row.wrap_measured_json === null ? null : decodeJson(row.wrap_measured_json),
@@ -177,26 +182,31 @@ export const storedFiles = Effect.gen(function* () {
   }));
 });
 
-/** The newest plan with every sink and its evidence, in rank order; undefined before the first import. */
-export const latest = Effect.gen(function* () {
-  const sql = yield* SqlClient.SqlClient;
-  const plan = yield* newestPlanRow;
-  if (plan === undefined) return undefined;
-  const rows = yield* sql<FindingRow & { readonly evidence_json: string }>`
-    SELECT rank, sink_id, title, class, framing, basis, tokens_per_turn, tokens_observed,
-      tokens_per_day_rate, suggestion, evidence_json
-    FROM caveman_learn_sink WHERE plan_id = ${plan.id} ORDER BY rank
-  `;
-  return {
-    plan: toPlan(plan),
-    sinks: rows.map((row): CavemanLearnSink => ({
-      ...toFinding(row),
-      evidence: decodeEvidence(row.evidence_json),
-    })),
-  };
-});
+/**
+ * The newest plan with its sinks and their evidence, in rank order: the first `limit` of them, or
+ * every one when `limit` is left out. Undefined before the first import.
+ */
+export const latest = (limit?: number) =>
+  Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    const plan = yield* newestPlanRow;
+    if (plan === undefined) return undefined;
+    const rows = yield* sql<FindingRow & { readonly evidence_json: string }>`
+      SELECT rank, sink_id, title, class, framing, basis, tokens_per_turn, tokens_observed,
+        tokens_per_day_rate, suggestion, evidence_json
+      FROM caveman_learn_sink WHERE plan_id = ${plan.id} ORDER BY rank
+      ${limit === undefined ? sql`` : sql`LIMIT ${limit}`}
+    `;
+    return {
+      plan: toPlan(plan),
+      sinks: rows.map((row): CavemanLearnSink => ({
+        ...toFinding(row),
+        evidence: decodeEvidence(row.evidence_json),
+      })),
+    };
+  });
 
-/** The newest plan and its first `limit` findings. Evidence is never read. */
+/** The newest plan's header and its first `limit` findings. Evidence is never read. */
 export const findings = (limit: number) =>
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
@@ -207,5 +217,5 @@ export const findings = (limit: number) =>
         tokens_per_day_rate, suggestion
       FROM caveman_learn_sink WHERE plan_id = ${plan.id} ORDER BY rank LIMIT ${limit}
     `;
-    return { plan: toPlan(plan), findings: rows.map(toFinding) } satisfies CavemanLearnFindings;
+    return { plan: toHeader(plan), findings: rows.map(toFinding) } satisfies CavemanLearnFindings;
   });

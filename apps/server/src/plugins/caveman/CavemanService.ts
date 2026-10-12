@@ -6,6 +6,7 @@ import {
   type CavemanAgentRoute,
   type CavemanLearnFindings,
   type CavemanLearnFindingsInput,
+  type CavemanLearnPlanInput,
   type CavemanLearnPlanResult,
   type CavemanSetRouteInput,
   type CavemanStatus,
@@ -42,15 +43,17 @@ export class CavemanService extends Context.Service<
     readonly status: Effect.Effect<CavemanStatus, CavemanError>;
     /** Runs `caveman enable` or `disable` for the instance, then returns `status`. */
     readonly setRoute: (input: CavemanSetRouteInput) => Effect.Effect<CavemanStatus, CavemanError>;
-    /** The newest imported `caveman learn` plan with every sink and its evidence, and the scan's state. */
-    readonly learnPlan: Effect.Effect<CavemanLearnPlanResult, CavemanError>;
+    /** The newest imported `caveman learn` plan with its sinks and their evidence, every sink unless `limit` says otherwise, and the scan's state. */
+    readonly learnPlan: (
+      input: CavemanLearnPlanInput,
+    ) => Effect.Effect<CavemanLearnPlanResult, CavemanError>;
     /**
      * Starts `caveman learn scan` from the home directory, pointed at the first Claude and Codex
      * instances' homes when they have a custom `homePath`. Refuses while caveman is missing or a
      * scan runs.
      */
     readonly learnRefresh: Effect.Effect<{ readonly started: true }, CavemanError>;
-    /** The newest plan's top findings, 10 unless `limit` says otherwise, without evidence. */
+    /** The newest plan's header and top findings, 10 unless `limit` says otherwise, without evidence. */
     readonly learnFindings: (
       input: CavemanLearnFindingsInput,
     ) => Effect.Effect<CavemanLearnFindings, CavemanError>;
@@ -302,17 +305,18 @@ const make = Effect.gen(function* () {
       ),
     );
 
-  const learnPlan = Effect.gen(function* () {
+  const learnPlan = Effect.fn("CavemanService.learnPlan")(function* ({
+    limit,
+  }: CavemanLearnPlanInput) {
     const scan = yield* scanner.state;
-    const newest = yield* LearnImport.latest;
+    const newest = yield* LearnImport.latest(limit).pipe(
+      Effect.provideService(SqlClient.SqlClient, sql),
+      Effect.catchTags({ SqlError: unreadable }),
+    );
     return (
       newest === undefined ? { state: "none", scan } : { state: "ready", ...newest, scan }
     ) satisfies CavemanLearnPlanResult;
-  }).pipe(
-    Effect.provideService(SqlClient.SqlClient, sql),
-    Effect.catchTags({ SqlError: unreadable }),
-    Effect.withSpan("CavemanService.learnPlan"),
-  );
+  });
 
   const learnRefresh = Effect.gen(function* () {
     if (!(yield* probe).installed) {

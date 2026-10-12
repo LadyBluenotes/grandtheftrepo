@@ -31,7 +31,7 @@ describe("caveman learn import", () => {
         yield* Import.importPlan(plan, file).pipe(Effect.provideService(SqlClient.SqlClient, sql)),
       );
 
-      const latest = yield* Import.latest.pipe(Effect.provideService(SqlClient.SqlClient, sql));
+      const latest = yield* Import.latest().pipe(Effect.provideService(SqlClient.SqlClient, sql));
       if (latest === undefined) return assert.fail("Nothing was imported.");
       assert.deepStrictEqual(
         { ...latest.plan, importedAt: "" },

@@ -5,6 +5,8 @@ import {
   ProviderInstanceId,
   type CavemanAgent,
   type CavemanAgentRoute,
+  type CavemanLearnPlanInput,
+  type CavemanLearnPlanResult,
   type CavemanRoute,
   type CavemanStatus,
   type ServerProvider,
@@ -16,6 +18,7 @@ import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
+import * as Result from "effect/Result";
 import * as Scope from "effect/Scope";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as TestClock from "effect/testing/TestClock";
@@ -27,7 +30,9 @@ import * as ProviderRegistry from "../../provider/ProviderRegistry.ts";
 import * as ServerSettings from "../../serverSettings.ts";
 import * as CavemanService from "./CavemanService.ts";
 import * as Cli from "./Cli.ts";
-import { openDatabase } from "./learn/Plan.testkit.ts";
+import * as LearnImport from "./learn/import.ts";
+import * as Plan from "./learn/Plan.ts";
+import { openDatabase, reportJson } from "./learn/Plan.testkit.ts";
 
 const windowsHost = HostProcess.Platform.defaultValue() === "win32";
 
@@ -189,7 +194,8 @@ const start = Effect.fn("test.start")(function* (
     status: within(caveman.status),
     setRoute: (instanceId: string, enabled: boolean) =>
       within(caveman.setRoute({ instanceId: ProviderInstanceId.make(instanceId), enabled })),
-    learnPlan: within(caveman.learnPlan),
+    sql: Context.get(services, SqlClient.SqlClient),
+    learnPlan: (input: CavemanLearnPlanInput) => within(caveman.learnPlan(input)),
     learnRefresh: within(caveman.learnRefresh),
     /** What `caveman` recorded, in order. */
     recorded: fs.readFileString(calls).pipe(
@@ -490,7 +496,7 @@ describe.skipIf(windowsHost)("CavemanService", () => {
           const fs = yield* FileSystem.FileSystem;
           const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
           yield* spawner.exitCode(ChildProcess.make("mkfifo", [`${h.root}/started`]));
-          assert.deepStrictEqual(yield* h.learnPlan, {
+          assert.deepStrictEqual(yield* h.learnPlan({}), {
             state: "none",
             scan: { running: false, lastError: null },
           });
@@ -529,7 +535,7 @@ describe.skipIf(windowsHost)("CavemanService", () => {
         yield* spawner.exitCode(ChildProcess.make("mkfifo", [`${h.root}/started`]));
         yield* h.learnRefresh;
         yield* fs.readFileString(`${h.root}/started`);
-        assert.deepStrictEqual(yield* h.learnPlan, {
+        assert.deepStrictEqual(yield* h.learnPlan({}), {
           state: "none",
           scan: { running: true, lastError: null },
         });
@@ -537,6 +543,42 @@ describe.skipIf(windowsHost)("CavemanService", () => {
         assert.strictEqual(error.code, "busy");
         assert.strictEqual(error.message, "A scan is already running.");
         assert.lengthOf(yield* h.recorded, 1);
+      }),
+    ),
+  );
+
+  it.effect("learnPlan returns every sink with its evidence, or only the first `limit`", () =>
+    run(
+      Effect.gen(function* () {
+        const h = yield* start();
+        const plan = Plan.parse(reportJson("2026-10-10T08:00:00Z"));
+        if (Result.isFailure(plan)) return assert.fail(plan.failure);
+        yield* LearnImport.importPlan(plan.success, {
+          source: "canonical",
+          mtime: 1,
+          size: 1,
+        }).pipe(Effect.provideService(SqlClient.SqlClient, h.sql));
+
+        const sinks = (result: CavemanLearnPlanResult) =>
+          result.state === "ready" ? result.sinks : [];
+        const all = sinks(yield* h.learnPlan({}));
+        assert.deepStrictEqual(
+          all.map((sink) => sink.sinkId),
+          [
+            "claude_md_weight:project",
+            "recurring_context:repaste:ab12cd",
+            "procedure_repeat:release",
+            "config_tax:baseline",
+          ],
+        );
+
+        const top = sinks(yield* h.learnPlan({ limit: 2 }));
+        assert.deepStrictEqual(top, all.slice(0, 2));
+        assert.deepStrictEqual(top[0]?.evidence, {
+          path: "/home/user/project/CLAUDE.md",
+          lines: [12, 40],
+        });
+        assert.lengthOf(sinks(yield* h.learnPlan({ limit: 100 })), 4);
       }),
     ),
   );
