@@ -102,6 +102,13 @@ them half-evaluated. The host hands `toolkitRegistration` to `ServerPlugin.mcp` 
   while changes are requested, and threads reopened after settlement. Agents read and add
   them over MCP. Server: `apps/server/src/plugins/learning/`. Contracts:
   `packages/contracts/src/plugins/learning.ts`. No screen yet.
+- **caveman**: whether each provider instance's model traffic goes through caveman's loopback
+  proxy, `routed`, `direct`, `other` or `unsupported`, read from the Claude `settings.json` and
+  Codex `config.toml` the instance starts with, and a switch that runs caveman's own `enable` and
+  `disable` commands. The plugin writes no file and keeps no database. Agents read it with the
+  `caveman_status` MCP tool; the panel on the Plugins page uses `caveman.status` and
+  `caveman.setRoute`. Server: `apps/server/src/plugins/caveman/`. Contracts:
+  `packages/contracts/src/plugins/caveman.ts`. Web: `apps/web/src/plugins/caveman/`.
 
 `apps/web/src/routeTree.gen.ts` is generated and committed. A conflict there is resolved by running
 the web dev server or build once, which regenerates it.
