@@ -26,24 +26,22 @@ on it, off for that start and shows as `startError` in `plugins.list`.
 These are the only lines upstream files carry for the plugin system. A merge conflict in one of
 them is resolved by keeping the line.
 
-| File                                                         | Line                                                                                                |
-| ------------------------------------------------------------ | --------------------------------------------------------------------------------------------------- |
-| `packages/contracts/src/rpc.ts`                              | `...PLUGIN_RPCS,` inside `RpcGroup.make(...)`, plus its import                                      |
-| `packages/contracts/src/clientRpcPermissions.ts`             | `...PLUGIN_GUARDED_RPC_SCOPES,` inside `CLIENT_GUARDED_RPC_SCOPES`, plus its import                 |
-| `packages/contracts/src/index.ts`                            | `export * from "./plugins/host.ts";`                                                                |
-| `apps/server/src/ws.ts`                                      | `...PluginHost.handlers,` inside `ServerWsRpcGroup.of({...})`, plus its import                      |
-| `apps/server/src/server.ts`                                  | `Layer.provideMerge(PluginHost.layerAll),` before `layerRuntimeServices`, plus its import           |
-| `apps/server/src/mcp/McpHttpServer.ts`                       | `PluginHost.layerMcp(toolkitRegistration),` inside the exported `layer`, plus its import            |
-| `apps/server/src/observability/RpcInstrumentation.ts`        | `...PLUGIN_RPC_SUBSYSTEMS,` in the subsystem map, plus the import                                   |
-| `apps/server/src/auth/RpcAuthorization.ts`                   | `...PLUGIN_RPC_SCOPES,` inside `RPC_REQUIRED_SCOPES`, plus its import                               |
-| `apps/server/src/mcp/toolkits/worktree/registration.test.ts` | the `PluginHost` mock in the service list, plus its import                                          |
-| `packages/client-runtime/src/rpc/client.ts`                  | `\| PluginSubscriptionRpcTag` in `EnvironmentSubscriptionRpcTag`, plus its import                   |
-| `apps/web/src/routes/_chat.<plugin>.tsx`                     | one route file per plugin screen; the screen itself lives in `apps/web/src/plugins/`                |
-| `apps/web/src/components/sidebar/mainAppLocation.ts`         | the plugin's path in `isSidebarUtilityPage`                                                         |
-| `apps/web/src/components/sidebar/mainAppLocation.ts`         | the `/plugins` paths in `isSidebarUtilityPage`                                                      |
-| `apps/web/src/components/sidebar/SidebarChrome.tsx`          | the plugin's `SidebarUtilityItem`, gated on its `...SupportedAtom`, plus imports                    |
-| `apps/web/src/components/sidebar/SidebarChrome.tsx`          | `<PluginSidebarEntries />` after the Usage entry, plus its import; `SidebarUtilityItem` is exported |
-| `apps/web/src/components/CommandPalette.tsx`                 | the plugin's `actionItems.push` block, gated the same way, plus imports                             |
+| File                                                         | Line                                                                                                                                                                   |
+| ------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `packages/contracts/src/rpc.ts`                              | `...PLUGIN_RPCS,` inside `RpcGroup.make(...)`, plus its import                                                                                                         |
+| `packages/contracts/src/clientRpcPermissions.ts`             | `...PLUGIN_GUARDED_RPC_SCOPES,` inside `CLIENT_GUARDED_RPC_SCOPES`, plus its import                                                                                    |
+| `packages/contracts/src/index.ts`                            | `export * from "./plugins/host.ts";`                                                                                                                                   |
+| `apps/server/src/ws.ts`                                      | `...PluginHost.handlers,` inside `ServerWsRpcGroup.of({...})`, plus its import                                                                                         |
+| `apps/server/src/server.ts`                                  | `Layer.provideMerge(PluginHost.layerAll),` before `layerRuntimeServices`, plus its import                                                                              |
+| `apps/server/src/mcp/McpHttpServer.ts`                       | `PluginHost.layerMcp(toolkitRegistration),` inside the exported `layer`, plus its import                                                                               |
+| `apps/server/src/observability/RpcInstrumentation.ts`        | `...PLUGIN_RPC_SUBSYSTEMS,` in the subsystem map, plus the import                                                                                                      |
+| `apps/server/src/auth/RpcAuthorization.ts`                   | `...PLUGIN_RPC_SCOPES,` inside `RPC_REQUIRED_SCOPES`, plus its import                                                                                                  |
+| `apps/server/src/mcp/toolkits/worktree/registration.test.ts` | the `PluginHost` mock in the service list, plus its import                                                                                                             |
+| `packages/client-runtime/src/rpc/client.ts`                  | `\| PluginSubscriptionRpcTag` in `EnvironmentSubscriptionRpcTag`, plus its import                                                                                      |
+| `apps/web/src/routes/_chat.board.tsx`                        | the kanban board's own route; a new plugin screen uses `/plugins/<id>` through the registry instead                                                                    |
+| `apps/web/src/components/sidebar/mainAppLocation.ts`         | `/board` and the `/plugins` paths in `isSidebarUtilityPage`                                                                                                            |
+| `apps/web/src/components/sidebar/SidebarChrome.tsx`          | the board's `SidebarUtilityItem`, gated on `kanbanSupportedAtom`, and `<PluginSidebarEntries />` after the Usage entry, plus imports; `SidebarUtilityItem` is exported |
+| `apps/web/src/components/CommandPalette.tsx`                 | the board's `actionItems.push` block, gated the same way, plus imports                                                                                                 |
 
 ## Plugin services and the type system
 
