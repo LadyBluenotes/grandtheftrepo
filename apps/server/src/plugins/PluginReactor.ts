@@ -223,7 +223,12 @@ export const start = Effect.fn("PluginReactor.start")(function* <E = never>(opti
     // Registered before the check, so an `advance` landing between the two cannot be missed.
     waiters.add(waiter);
     if (processed >= target) waiters.delete(waiter);
-    else yield* Deferred.await(waiter.done);
+    else {
+      // A caller that gives up (a timeout) must not leave its waiter behind for every later tick.
+      yield* Deferred.await(waiter.done).pipe(
+        Effect.onInterrupt(() => Effect.sync(() => waiters.delete(waiter))),
+      );
+    }
   });
 
   return { drain, retryFailed };
