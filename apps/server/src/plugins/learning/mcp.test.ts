@@ -1,7 +1,13 @@
 import { expect, it } from "@effect/vitest";
 import { NodeHttpServer } from "@effect/platform-node";
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import { EnvironmentId, LearningCorrection, ProjectId } from "@t3tools/contracts";
+import {
+  EnvironmentId,
+  LearningCorrection,
+  LearningItem,
+  LearningItemDetail,
+  ProjectId,
+} from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
@@ -17,7 +23,9 @@ import * as ProjectService from "../../project/ProjectService.ts";
 import * as PluginDatabase from "../PluginDatabase.ts";
 import * as PluginHost from "../PluginHost.ts";
 import * as PluginSupervisor from "../PluginSupervisor.ts";
+import * as ClassifySweep from "./ClassifySweep.ts";
 import * as CorrectionStore from "./CorrectionStore.ts";
+import * as ItemStore from "./items/ItemStore.ts";
 import { migrations } from "./migrations.ts";
 
 const environmentId = EnvironmentId.make("env-1");
@@ -48,6 +56,8 @@ const decodeCorrection = Schema.decodeUnknownSync(Schema.fromJsonString(Learning
 const decodeCorrections = Schema.decodeUnknownSync(
   Schema.fromJsonString(Schema.Array(LearningCorrection)),
 );
+const decodeItems = Schema.decodeUnknownSync(Schema.fromJsonString(Schema.Array(LearningItem)));
+const decodeItemDetail = Schema.decodeUnknownSync(Schema.fromJsonString(LearningItemDetail));
 
 /**
  * The plugin registers its tools through the host the way the server does:
@@ -66,6 +76,11 @@ it.effect(
         });
         // As `thread.created` leaves it: the plugin knows thread-1 belongs to project-1.
         yield* sql`INSERT INTO threads (thread_id, project_id) VALUES ('thread-1', ${projectId})`;
+        const stores = yield* Layer.build(
+          Layer.mergeAll(CorrectionStore.layer, ItemStore.layer).pipe(
+            Layer.provide(Layer.succeed(SqlClient.SqlClient, sql)),
+          ),
+        );
         const layerServer = PluginHost.layerMcp(McpHttpServer.toolkitRegistration).pipe(
           Layer.provide(
             Layer.mock(PluginHost.PluginHost)({
@@ -73,9 +88,7 @@ it.effect(
               databases: new Map([["learning", sql]]),
             }),
           ),
-          Layer.provide(
-            CorrectionStore.layer.pipe(Layer.provide(Layer.succeed(SqlClient.SqlClient, sql))),
-          ),
+          Layer.provide(Layer.succeedContext(stores)),
           Layer.provide(Layer.mock(ThreadManagementService.ThreadManagementService)({})),
           // Kanban's tools need it by type even though only learning is active here.
           Layer.provide(Layer.mock(ProjectService.ProjectService)({})),
@@ -133,6 +146,8 @@ it.effect(
         expect(tools).toContain('"learning_corrections"');
         expect(tools).toContain('"learning_correction"');
         expect(tools).toContain('"learning_correction_add"');
+        expect(tools).toContain('"learning_items"');
+        expect(tools).toContain('"learning_item"');
 
         const added = decodeCorrection(
           resultText(
@@ -187,6 +202,28 @@ it.effect(
           ),
         );
         expect(one).toEqual(added);
+
+        // The classify sweep turns the declared mode into an item the read tools show.
+        const classify = yield* ClassifySweep.sweep.pipe(
+          Effect.provide(stores),
+          Effect.provideService(SqlClient.SqlClient, sql),
+        );
+        yield* classify.run({ dryRun: false });
+        const items = decodeItems(
+          resultText(
+            yield* rpc(7, "tools/call", { name: "learning_items", arguments: { projectId } }),
+          ),
+        );
+        expect(
+          items.map((item) => [item.failureMode, item.ownerKind, item.state, item.occurrences]),
+        ).toEqual([["incomplete", "local_only", "open", 1]]);
+        const item = decodeItemDetail(
+          resultText(
+            yield* rpc(8, "tools/call", { name: "learning_item", arguments: { id: items[0]!.id } }),
+          ),
+        );
+        expect(item.evidence.map((e) => e.evidenceKey)).toEqual([`correction:${added.id}`]);
+        expect(item.promotions).toEqual([]);
       }),
     ).pipe(
       Effect.provide(

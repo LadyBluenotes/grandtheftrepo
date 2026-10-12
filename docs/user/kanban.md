@@ -55,11 +55,21 @@ from a card's panel, and edit or delete it later.
 A new thread started from a card is told which decisions concern its ticket and which categories
 exist, so the agent can look them up instead of relitigating them.
 
+## Emergency stop
+
+An agent can set the emergency stop to hold back everything the supervisor would start from the
+board. While it is set, a banner at the top of the board says so, with a **Clear** button. The stop
+does not interrupt running agents, and starting work yourself, including dragging a card to
+**In progress**, is never blocked. It is stored, so it survives a restart. Setting it twice, or
+clearing it when it is not set, changes nothing. Nothing on the board starts threads by itself
+yet, so the stop only matters once something does.
+
 ## Agents
 
-Agents reach the board through two MCP tools. `kanban_list` lists issues or decisions, or one of
+Agents reach the board through three MCP tools. `kanban_list` lists issues or decisions, or one of
 them in full. `kanban_write` files an issue, moves it, adds a note, blocks it when it needs you,
-links the calling thread, or records a decision. Agent-filed issues land in Triage.
+links the calling thread, or records a decision. Agent-filed issues land in Triage. `kanban_stop`
+sets or clears the emergency stop.
 
 ## Files
 

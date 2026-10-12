@@ -19,6 +19,8 @@ import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as ServerConfig from "../config.ts";
 import * as RuntimeLayer from "../orchestration-v2/runtimeLayer.ts";
+import * as Attention from "./Attention.ts";
+import * as HostDatabase from "./HostDatabase.ts";
 import * as PluginDatabase from "./PluginDatabase.ts";
 import * as PluginRpc from "./PluginRpc.ts";
 import * as PluginSupervisor from "./PluginSupervisor.ts";
@@ -28,6 +30,8 @@ import type { toolkitRegistration } from "../mcp/McpHttpServer.ts";
 import * as CavemanHandlers from "./caveman/handlers.ts";
 import * as KanbanHandlers from "./kanban/handlers.ts";
 import * as LearningHandlers from "./learning/handlers.ts";
+import * as PolicyHandlers from "./policy/handlers.ts";
+import * as ReviewHandlers from "./review/handlers.ts";
 import * as RoutingHandlers from "./routing/handlers.ts";
 import * as SupervisorToolkit from "./supervisorToolkit.ts";
 import * as TelemetryHandlers from "./telemetry/handlers.ts";
@@ -226,13 +230,17 @@ const mergeActive = <R>(
   });
 
 /**
- * The host, its supervisor and every active plugin's services, for the server's
- * layer chain. A plugin's reactor reads the event sink the orchestrator
- * publishes to; the runtime layer keeps it to itself, so the same layer is
- * provided here, and layer memoization makes it the one instance.
+ * The host, its supervisor, `Attention` and every active plugin's services, for the server's
+ * layer chain. The supervisor and `Attention` share one connection to the host's own file. A
+ * plugin's reactor reads the event sink the orchestrator publishes to; the runtime layer keeps it
+ * to itself, so the same layer is provided here, and layer memoization makes it the one instance.
  */
 export const layerAll = Layer.unwrap(mergeActive((plugin) => plugin.layer)).pipe(
-  Layer.provideMerge(PluginSupervisor.layer(registry.map((plugin) => plugin.id))),
+  Layer.provideMerge(
+    Layer.merge(PluginSupervisor.layer(registry.map((plugin) => plugin.id)), Attention.layer).pipe(
+      Layer.provide(HostDatabase.layer),
+    ),
+  ),
   Layer.provide(RuntimeLayer.layerEventSink),
   Layer.provideMerge(layer),
 );
@@ -266,6 +274,8 @@ const table: PluginRpc.DispatchTable<PluginHost | PluginSupervisor.PluginSupervi
   ...CavemanHandlers.table,
   ...KanbanHandlers.table,
   ...LearningHandlers.table,
+  ...PolicyHandlers.table,
+  ...ReviewHandlers.table,
   ...RoutingHandlers.table,
   ...TelemetryHandlers.table,
 };

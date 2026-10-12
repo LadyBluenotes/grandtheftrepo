@@ -13,6 +13,8 @@ const correction = (createdAt: string): LearningCorrection => ({
   description: "Wrong file.",
   sourceEventIds: [],
   sourceKey: null,
+  classifiedAt: null,
+  classificationReason: null,
   createdAt,
   updatedAt: createdAt,
 });

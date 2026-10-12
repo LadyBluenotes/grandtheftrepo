@@ -18,6 +18,8 @@ export * from "./caveman.ts";
 export * from "./kanban.ts";
 export * from "./learning.ts";
 export * from "./method.ts";
+export * from "./policy.ts";
+export * from "./review.ts";
 export * from "./routing.ts";
 export * from "./supervisor.ts";
 export * from "./telemetry.ts";

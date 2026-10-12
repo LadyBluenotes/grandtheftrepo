@@ -21,6 +21,7 @@ import { readCaller, resolveProjectId } from "../../mcp/threadAccess.ts";
 import * as ThreadManagementService from "../../orchestration-v2/ThreadManagementService.ts";
 import { formatLogEntry } from "./KanbanFiles.ts";
 import * as KanbanStore from "./KanbanStore.ts";
+import * as StopGate from "./StopGate.ts";
 
 const shared = {
   success: Schema.String,
@@ -57,7 +58,22 @@ const KanbanWriteTool = Tool.make("kanban_write", {
   parameters: Schema.Struct({ projectId: Schema.optional(ProjectId), ...KanbanWrite.fields }),
 }).annotate(Tool.Destructive, true);
 
-export const KanbanToolkit = Toolkit.make(KanbanListTool, KanbanWriteTool);
+const KanbanStopTool = Tool.make("kanban_stop", {
+  ...shared,
+  description:
+    "The emergency stop. action set (with an optional reason) stops everything the supervisor would launch from the board until it is cleared; action clear lifts it. It stops no running agent, and a person starting work by hand is never blocked. Setting it twice or clearing it when it is not set changes nothing. Returns the state.",
+  parameters: Schema.Struct({
+    action: Schema.Literals(["set", "clear"]),
+    reason: Schema.optional(Schema.String),
+  }),
+})
+  .annotate(Tool.Title, "Set or clear the emergency stop")
+  .annotate(Tool.Readonly, false)
+  .annotate(Tool.Destructive, false)
+  .annotate(Tool.Idempotent, true)
+  .annotate(Tool.OpenWorld, false);
+
+export const KanbanToolkit = Toolkit.make(KanbanListTool, KanbanWriteTool, KanbanStopTool);
 
 const failure = (error: KanbanError) =>
   new OrchestratorMcpFailure({
@@ -117,24 +133,28 @@ const byBoardOrder = (a: KanbanIssueSummary, b: KanbanIssueSummary) =>
   a.priority.localeCompare(b.priority) ||
   a.createdAt.localeCompare(b.createdAt);
 
+const pluginServices = Effect.all([
+  Effect.serviceOption(KanbanStore.KanbanStore),
+  Effect.serviceOption(StopGate.StopGate),
+]);
+
 /**
- * The store is read when the handlers are built, not declared as a tool dependency: plugin
- * services are typed as absent from the server chain, and these tools only register while
- * the plugin is active, which is when the store is there.
+ * The store and the stop gate are read when the handlers are built, not declared as tool
+ * dependencies: plugin services are typed as absent from the server chain, and these tools only
+ * register while the plugin is active, which is when they are there.
  */
 export const handlers = McpToolAccess.toLayer(
   KanbanToolkit,
-  Effect.map(Effect.serviceOption(KanbanStore.KanbanStore), (storeOption) => {
-    const store = Option.match(storeOption, {
-      onNone: () =>
-        Effect.fail(
-          new OrchestratorMcpFailure({
-            code: "orchestration_error",
-            message: "The kanban plugin is not active.",
-          }),
-        ),
-      onSome: Effect.succeed,
-    });
+  Effect.map(pluginServices, ([storeOption, gateOption]) => {
+    const inactive = () =>
+      Effect.fail(
+        new OrchestratorMcpFailure({
+          code: "orchestration_error",
+          message: "The kanban plugin is not active.",
+        }),
+      );
+    const store = Option.match(storeOption, { onNone: inactive, onSome: Effect.succeed });
+    const gate = Option.match(gateOption, { onNone: inactive, onSome: Effect.succeed });
     return {
       kanban_list: McpToolAccess.reads((input) =>
         Effect.gen(function* () {
@@ -193,6 +213,24 @@ export const handlers = McpToolAccess.toLayer(
             ...(threadId === undefined ? {} : { threadId }),
           });
           return result.id;
+        }).pipe(Effect.catchTags({ KanbanError: (error) => Effect.fail(failure(error)) })),
+      ),
+      kanban_stop: McpToolAccess.writes(({ action, reason }) =>
+        Effect.gen(function* () {
+          const context = yield* readCaller();
+          const stop = yield* gate;
+          if (action === "clear") {
+            yield* stop.clear;
+            return "Emergency stop is clear.";
+          }
+          const caller = context.caller;
+          const set = yield* stop.set({
+            setBy: caller === undefined ? "agent" : `thread:${caller.id}`,
+            reason,
+          });
+          return `Emergency stop is set (since ${set.setAt} by ${set.setBy}${
+            set.reason === null ? "" : `: ${set.reason}`
+          }).`;
         }).pipe(Effect.catchTags({ KanbanError: (error) => Effect.fail(failure(error)) })),
       ),
     };

@@ -7,6 +7,7 @@ import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
+import * as SqlClient from "effect/sql/SqlClient";
 import { HttpBody, HttpClient, HttpRouter } from "effect/http";
 
 import * as ServerConfig from "../../config.ts";
@@ -17,9 +18,12 @@ import * as ThreadManagementService from "../../orchestration-v2/ThreadManagemen
 import * as ProjectService from "../../project/ProjectService.ts";
 import * as ProviderRegistry from "../../provider/ProviderRegistry.ts";
 import * as ServerSettings from "../../serverSettings.ts";
+import * as PluginDatabase from "../PluginDatabase.ts";
 import * as PluginHost from "../PluginHost.ts";
 import * as PluginSupervisor from "../PluginSupervisor.ts";
 import * as KanbanStore from "./KanbanStore.ts";
+import { migrations } from "./migrations.ts";
+import * as StopGate from "./StopGate.ts";
 
 const environmentId = EnvironmentId.make("env-1");
 const projectId = ProjectId.make("project-1");
@@ -55,6 +59,23 @@ function resultText(body: string): string {
   return parsed.result?.content?.[0]?.text ?? body;
 }
 
+/** The tools a `tools/list` response carries, from a JSON or SSE response body. */
+function listedTools(body: string): ReadonlyArray<{
+  readonly name: string;
+  readonly annotations?: { readonly readOnlyHint?: boolean };
+}> {
+  const json = body.startsWith("{")
+    ? body
+    : (body
+        .split("\n")
+        .find((line) => line.startsWith("data:"))
+        ?.slice("data:".length) ?? "{}");
+  return (
+    (JSON.parse(json) as { result?: { tools?: ReturnType<typeof listedTools> } }).result?.tools ??
+    []
+  );
+}
+
 /**
  * The plugin registers its tools through the host the way the server does:
  * `PluginHost.layerMcp(toolkitRegistration)` with the store in the surrounding
@@ -63,6 +84,11 @@ function resultText(body: string): string {
 it.effect("registers kanban tools through the plugin host and files an issue over MCP", () =>
   Effect.scoped(
     Effect.gen(function* () {
+      const { sql } = yield* PluginDatabase.open({
+        id: "kanban",
+        filename: ":memory:",
+        migrations,
+      });
       const layerServer = PluginHost.layerMcp(McpHttpServer.toolkitRegistration).pipe(
         Layer.provide(
           Layer.mock(PluginHost.PluginHost)({
@@ -71,7 +97,9 @@ it.effect("registers kanban tools through the plugin host and files an issue ove
           }),
         ),
         Layer.provide(Layer.mock(PluginSupervisor.PluginSupervisor)({})),
+        Layer.provide(ServerSettings.layerTest()),
         Layer.provide(KanbanStore.layer),
+        Layer.provide(StopGate.layer.pipe(Layer.provide(Layer.succeed(SqlClient.SqlClient, sql)))),
         Layer.provide(Layer.mock(ThreadManagementService.ThreadManagementService)({})),
         Layer.provideMerge(McpHttpServer.layerMcpTransport),
         Layer.provide(
@@ -132,6 +160,24 @@ it.effect("registers kanban tools through the plugin host and files an issue ove
       const tools = yield* rpc(2, "tools/list", {});
       expect(tools).toContain('"kanban_list"');
       expect(tools).toContain('"kanban_write"');
+      expect(tools).toContain('"kanban_stop"');
+      // Setting the stop changes the environment, so MCP clients approved read-only are refused.
+      expect(listedTools(tools).find((tool) => tool.name === "kanban_stop")?.annotations).toEqual(
+        expect.objectContaining({ readOnlyHint: false }),
+      );
+
+      const callStop = (id: number, args: unknown) =>
+        rpc(id, "tools/call", { name: "kanban_stop", arguments: args }).pipe(
+          Effect.map(resultText),
+        );
+      const set = yield* callStop(10, { action: "set", reason: "hold on" });
+      expect(set).toContain("Emergency stop is set");
+      expect(set).toContain("by agent: hold on");
+      // Setting twice changes nothing: the first stop and its reason stay.
+      expect(yield* callStop(11, { action: "set", reason: "something else" })).toBe(set);
+      expect(yield* callStop(12, { action: "clear" })).toBe("Emergency stop is clear.");
+      expect(yield* callStop(13, { action: "clear" })).toBe("Emergency stop is clear.");
+      expect(yield* callStop(14, { action: "set" })).not.toContain("hold on");
 
       const created = resultText(
         yield* rpc(3, "tools/call", {

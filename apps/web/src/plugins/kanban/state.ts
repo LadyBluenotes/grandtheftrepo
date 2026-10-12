@@ -47,6 +47,23 @@ export const kanbanSetDirectory = createPluginRpcCommand(connectionAtomRuntime, 
   method: KANBAN_METHODS.setDirectory,
 });
 
+/**
+ * The emergency stop: null while it is clear. Nothing pushes a change, so while the board is open
+ * it re-reads every 30 seconds to show a stop set or cleared through MCP or another client; a
+ * later visit re-reads once the answer is 5 seconds old, and a clear from the banner at once.
+ */
+export const kanbanStop = createPluginRpcQueryAtomFamily(connectionAtomRuntime, {
+  label: "environment-data:kanban:stop",
+  method: KANBAN_METHODS.stopGet,
+  staleTimeMs: 5_000,
+  refreshIntervalMs: 30_000,
+});
+
+export const kanbanStopClear = createPluginRpcCommand(connectionAtomRuntime, {
+  label: "kanban:stop-clear",
+  method: KANBAN_METHODS.stopClear,
+});
+
 const pluginStatuses = createPluginRpcQueryAtomFamily(connectionAtomRuntime, {
   label: "environment-data:plugins",
   method: HOST_METHODS.list,

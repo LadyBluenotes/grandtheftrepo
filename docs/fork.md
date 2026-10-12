@@ -30,6 +30,10 @@ A plugin registers sweeps with `PluginSupervisor.register` from its layer. The h
 the `supervisor.json` interval, in registry order, and records each tick in `plugins/_host.sqlite`;
 `supervisor.status` reads the latest.
 
+A sweep that finds something waiting on a person raises a flag with `Attention.raise` and clears it
+with `Attention.clear` once the cause is gone. Flags live in the host's `attention` table in that
+same file, so any plugin can raise one without depending on the plugin that shows them.
+
 ## Upstream seams
 
 These are the only lines upstream files carry for the plugin system. A merge conflict in one of
@@ -78,8 +82,11 @@ them half-evaluated. The host hands `toolkitRegistration` to `ServerPlugin.mcp` 
 
 - **kanban**: a board per project. Issues and decisions are files under
   `<T3 home>/wiki/<project-slug>/`; the folder is changeable per project from the board.
-  Server: `apps/server/src/plugins/kanban/`. Contracts: `packages/contracts/src/plugins/kanban.ts`.
-  Web: `apps/web/src/plugins/kanban/`. User guide: [Kanban board](./user/kanban.md).
+  Its own database, `plugins/kanban.sqlite`, holds the emergency stop (`StopGate`, which a sweep
+  that starts a thread must ask first; no launcher calls it yet). The `writers` sweep raises an
+  attention flag when two agents write one project. Server: `apps/server/src/plugins/kanban/`.
+  Contracts: `packages/contracts/src/plugins/kanban.ts`. Web: `apps/web/src/plugins/kanban/`. User
+  guide: [Kanban board](./user/kanban.md).
 - **telemetry**: the fourteen efficiency measures of #1 over a project's window, from the
   `telemetry.measures` gateway method and the `telemetry_measures` MCP tool. Its reactor keeps
   runs, tool calls, threads and provider turn token usage from the event log in the plugin's own
@@ -99,19 +106,47 @@ them half-evaluated. The host hands `toolkitRegistration` to `ServerPlugin.mcp` 
   plugin's own database. A tier with nothing saved falls back to the built-in: one instance's model
   list, first model `strong`, last `cheap`. Agents read it with the `routing_tiers` MCP tool; the
   panel on the Plugins page reads and saves it through `routing.tiers.get` and `routing.tiers.set`.
-  Server: `apps/server/src/plugins/routing/`. Contracts: `packages/contracts/src/plugins/routing.ts`.
-  Web: `apps/web/src/plugins/routing/`.
+  A launcher starts work through `TierSelectionService.launch` or `delegate`: they pick a tier from
+  the caller's task class, one tier up per failed run of the same work, hand the launch that tier's
+  model, and append a `routing_recommended` row to `routing_events`; with the plugin off the launch
+  is unchanged. Server: `apps/server/src/plugins/routing/`. Contracts:
+  `packages/contracts/src/plugins/routing.ts`. Web: `apps/web/src/plugins/routing/`.
 - **learning**: a record of corrections, visible instances of work going wrong, taken from
   events the server already emits: failed or interrupted provider turns, pull request wakes
   while changes are requested, and threads reopened after settlement. Agents read and add
-  them over MCP. Server: `apps/server/src/plugins/learning/`. Contracts:
+  them over MCP. Two sweeps turn corrections with a declared failure mode into learning items, one
+  per mode per project, routed by fixed rules on the mode to an owner kind, and hand each item
+  over through one promotion record, at least once, keyed by the record's id so a promoter can
+  drop a repeat; no promoter is registered yet, so records wait. Server:
+  `apps/server/src/plugins/learning/`. Contracts:
   `packages/contracts/src/plugins/learning.ts`. No screen yet.
+- **policy**: reviewed working rules per project (`*` is the whole environment), versioned in the
+  plugin's database and rendered as one marked block each, with `<state dir>/RULES.md` ahead of
+  the body, into the instruction file each agent reads from the user's home. Verify re-reads the
+  block. `policy.create`, `.accept`, `.install` and `.verify` are gateway methods, and the
+  `policy_list` MCP tool reads. A supervisor sweep installs and verifies accepted policies an
+  agent lacks or holds under older rules, but only while no run is active on the project (any
+  run, for `*`). Server: `apps/server/src/plugins/policy/`. Contracts:
+  `packages/contracts/src/plugins/policy.ts`. No screen.
+- **review**: a reviewing agent's typed verdict on one checkpoint of another thread: `approve`, or
+  `changes_requested` with one of six failure modes (`defect`, `incomplete`, `scope_drift`,
+  `missing_verification`, `convention`, `unclear_spec`), so nothing reads reviewer prose to learn
+  what went wrong. A `changes_requested` verdict records a `review_verdict` correction in the
+  learning plugin, which is why the plugin depends on it. The two live in separate databases, so the
+  correction is recorded first and the verdict row second; the verdict id is derived from the
+  reviewer thread and checkpoint, so a retry finds the same correction. Agents give a verdict with
+  the `review_verdict` MCP tool, from a thread only, and read them with `review_verdicts`;
+  `review.verdicts` reads them over the gateway. Server: `apps/server/src/plugins/review/`.
+  Contracts: `packages/contracts/src/plugins/review.ts`. No screen yet.
 - **caveman**: whether each provider instance's model traffic goes through caveman's loopback
   proxy, `routed`, `direct`, `other` or `unsupported`, read from the Claude `settings.json` and
   Codex `config.toml` the instance starts with, and a switch that runs caveman's own `enable` and
-  `disable` commands. The plugin writes no file and keeps no database. Agents read it with the
-  `caveman_status` MCP tool; the panel on the Plugins page uses `caveman.status` and
-  `caveman.setRoute`. Server: `apps/server/src/plugins/caveman/`. Contracts:
+  `disable` commands. Its database keeps the newest eight `caveman learn` reports, which the
+  `caveman/learn` sweep imports from `$CAVEMAN_HOME`; the panel's Refresh runs `caveman learn scan`,
+  which writes caveman's own report, and the plugin writes no other file. Agents read it with the
+  `caveman_status` and `caveman_learn_findings` MCP tools, the latter never with a sink's evidence;
+  the panel on the Plugins page uses `caveman.status`, `caveman.setRoute`, `caveman.learnPlan` and
+  `caveman.learnRefresh`. Server: `apps/server/src/plugins/caveman/`. Contracts:
   `packages/contracts/src/plugins/caveman.ts`. Web: `apps/web/src/plugins/caveman/`.
 
 `apps/web/src/routeTree.gen.ts` is generated and committed. A conflict there is resolved by running
