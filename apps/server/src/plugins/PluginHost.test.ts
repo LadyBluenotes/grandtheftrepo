@@ -199,6 +199,7 @@ it.layer(NodeServices.layer)("plugin databases", (it) => {
           { id: "child", dependsOn: ["bad"] },
         ] as const;
       const { stateDir } = yield* ServerConfig.ServerConfig;
+      const fs = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
       const filename = path.join(stateDir, "plugins", "bad.sqlite");
 
@@ -211,6 +212,17 @@ it.layer(NodeServices.layer)("plugin databases", (it) => {
           assert.isNull(errorOf("fine"));
           assert.isString(errorOf("bad"));
           assert.strictEqual(errorOf("child"), 'Dependency "bad" failed to start.');
+          assert.deepEqual(
+            statuses.map((status) => [status.id, status.active]),
+            [
+              ["fine", true],
+              ["bad", false],
+              ["child", false],
+            ],
+          );
+          // The host scope is still open. Closing a database's last connection removes its WAL,
+          // so a WAL left behind means the failed open kept its connection until shutdown.
+          assert.isFalse(yield* fs.exists(`${filename}-wal`));
           const reopened = yield* PluginDatabase.open({ id: "bad", filename, migrations: [] });
           assert.deepEqual(yield* appliedIds(reopened.sql), []);
           assert.deepEqual(yield* tableNames(reopened.sql), ["effect_sql_migrations"]);
