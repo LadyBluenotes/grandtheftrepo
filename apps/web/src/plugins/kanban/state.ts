@@ -52,15 +52,18 @@ const pluginStatuses = createEnvironmentRpcQueryAtomFamily(connectionAtomRuntime
   staleTimeMs: 60_000,
 });
 
-/** Whether `environmentId` runs the kanban plugin; null while unknown. */
+/** Whether `environmentId` runs the kanban plugin; null while unknown. A server without the
+    plugin RPCs (upstream T3 Code) fails the call, which counts as off. */
 export const kanbanActiveAtom = Atom.family(
   (environmentId: Parameters<typeof pluginStatuses>[0]["environmentId"]) =>
-    Atom.make((get) =>
-      Option.match(AsyncResult.value(get(pluginStatuses({ environmentId, input: {} }))), {
+    Atom.make((get) => {
+      const result = get(pluginStatuses({ environmentId, input: {} }));
+      if (result._tag === "Failure") return false;
+      return Option.match(AsyncResult.value(result), {
         onNone: () => null,
         onSome: (statuses) => statuses.some((status) => status.id === "kanban" && status.active),
-      }),
-    ),
+      });
+    }),
 );
 
 /** Any connected environment runs the plugin, so the Board entry points show. */
