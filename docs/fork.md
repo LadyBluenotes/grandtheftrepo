@@ -67,6 +67,11 @@ them half-evaluated. The host hands `toolkitRegistration` to `ServerPlugin.mcp` 
   `<T3 home>/wiki/<project-slug>/`; the folder is changeable per project from the board.
   Server: `apps/server/src/plugins/kanban/`. Contracts: `packages/contracts/src/plugins/kanban.ts`.
   Web: `apps/web/src/plugins/kanban/`. User guide: [Kanban board](./user/kanban.md).
+- **learning**: a record of corrections, visible instances of work going wrong, taken from
+  events the server already emits: failed or interrupted provider turns, pull request wakes
+  while changes are requested, and threads reopened after settlement. Agents read and add
+  them over MCP. Server: `apps/server/src/plugins/learning/`. Contracts:
+  `packages/contracts/src/plugins/learning.ts`. No screen yet.
 
 `apps/web/src/routeTree.gen.ts` is generated and committed. A conflict there is resolved by running
 the web dev server or build once, which regenerates it.

@@ -12,8 +12,10 @@ import {
   KANBAN_RPCS,
   type KANBAN_WS_METHODS,
 } from "./kanban.ts";
+import { LEARNING_RPC_SCOPES, LEARNING_RPC_SUBSYSTEMS, LEARNING_RPCS } from "./learning.ts";
 
 export * from "./kanban.ts";
+export * from "./learning.ts";
 
 export const PLUGIN_WS_METHODS = {
   pluginsList: "plugins.list",
@@ -50,7 +52,12 @@ const PluginsSetEnabledRpc = Rpc.make(PLUGIN_WS_METHODS.pluginsSetEnabled, {
 });
 
 /** Spread into `WsRpcGroup`: the one place the core contract learns about plugins. */
-export const PLUGIN_RPCS = [PluginsListRpc, PluginsSetEnabledRpc, ...KANBAN_RPCS] as const;
+export const PLUGIN_RPCS = [
+  PluginsListRpc,
+  PluginsSetEnabledRpc,
+  ...KANBAN_RPCS,
+  ...LEARNING_RPCS,
+] as const;
 
 /** Writes the client must hold a grant for; spread into `CLIENT_GUARDED_RPC_SCOPES`. */
 export const PLUGIN_GUARDED_RPC_SCOPES = {
@@ -62,6 +69,7 @@ export const PLUGIN_GUARDED_RPC_SCOPES = {
 export const PLUGIN_RPC_SCOPES = {
   [PLUGIN_WS_METHODS.pluginsList]: AuthOrchestrationReadScope,
   ...KANBAN_RPC_SCOPES,
+  ...LEARNING_RPC_SCOPES,
 } as const;
 
 /** Stream RPCs plugins add; the client's subscription tag union includes it. */
@@ -72,4 +80,5 @@ export const PLUGIN_RPC_SUBSYSTEMS = {
   [PLUGIN_WS_METHODS.pluginsList]: "plugins",
   [PLUGIN_WS_METHODS.pluginsSetEnabled]: "plugins",
   ...KANBAN_RPC_SUBSYSTEMS,
+  ...LEARNING_RPC_SUBSYSTEMS,
 } as const;

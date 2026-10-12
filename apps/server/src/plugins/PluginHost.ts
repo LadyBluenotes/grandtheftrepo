@@ -11,11 +11,13 @@ import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as ServerConfig from "../config.ts";
+import { layerEventSink } from "../orchestration-v2/runtimeLayer.ts";
 import * as PluginDatabase from "./PluginDatabase.ts";
 import type { ServerPlugin } from "./Plugin.ts";
-import { type PluginRequirements, registry } from "./registry.ts";
+import { type PluginMcpRequirements, type PluginRequirements, registry } from "./registry.ts";
 import type { toolkitRegistration } from "../mcp/McpHttpServer.ts";
 import * as KanbanHandlers from "./kanban/handlers.ts";
+import * as LearningHandlers from "./learning/handlers.ts";
 
 /** `plugins.json` under the state directory: plugin id to saved choice. Absent means enabled. */
 const EnabledState = Schema.Record(Schema.String, Schema.Boolean);
@@ -182,10 +184,10 @@ export const make = (plugins: ReadonlyArray<Registered>) =>
 
 const layer = Layer.effect(PluginHost, make(registry));
 
-const mergeActive = (
+const mergeActive = <R>(
   pick: (
-    plugin: ServerPlugin<PluginRequirements>,
-  ) => Layer.Layer<never, never, PluginRequirements | SqlClient.SqlClient> | undefined,
+    plugin: ServerPlugin<PluginRequirements, PluginMcpRequirements>,
+  ) => Layer.Layer<never, never, R | SqlClient.SqlClient> | undefined,
 ) =>
   Effect.gen(function* () {
     const host = yield* PluginHost;
@@ -204,14 +206,20 @@ const mergeActive = (
           ),
         ];
       })
-      .reduce<Layer.Layer<never, never, PluginRequirements>>(
+      .reduce<Layer.Layer<never, never, R>>(
         (merged, next) => Layer.merge(merged, next),
         Layer.empty,
       );
   });
 
-/** The host plus every active plugin's services, for the server's layer chain. */
+/**
+ * The host plus every active plugin's services, for the server's layer chain.
+ * A plugin's reactor reads the event sink the orchestrator publishes to; the
+ * runtime layer keeps it to itself, so the same layer is provided here, and
+ * layer memoization makes it the one instance.
+ */
 export const layerAll = Layer.unwrap(mergeActive((plugin) => plugin.layer)).pipe(
+  Layer.provide(layerEventSink),
   Layer.provideMerge(layer),
 );
 
@@ -222,6 +230,7 @@ export const layerMcp = (register: typeof toolkitRegistration) =>
 /** Spread into the WebSocket handlers; the host service comes from the server's layer chain. */
 export const handlers = {
   ...KanbanHandlers.handlers,
+  ...LearningHandlers.handlers,
   [PLUGIN_WS_METHODS.pluginsList]: () =>
     Effect.gen(function* () {
       return yield* (yield* PluginHost).statuses;
