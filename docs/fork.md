@@ -8,7 +8,7 @@ directories and never edit an upstream file. Upstream is merged nightly by
 
 - `apps/server/src/plugins/` holds the host (`PluginHost.ts`, `Plugin.ts`, `registry.ts`) and one
   directory per plugin.
-- `packages/contracts/src/plugins/` holds each plugin's schemas and RPC definitions.
+- `packages/contracts/src/plugins/` holds each plugin's schemas and method definitions.
 - `apps/web/src/plugins/` holds each plugin's screens.
   A plugin with a screen is registered in `apps/web/src/plugins/registry.ts` and reached at
   `/plugins/<id>`; every plugin is listed, with an on/off switch, at `/plugins`.
@@ -47,6 +47,7 @@ them is resolved by keeping the line.
 | `apps/server/src/auth/RpcAuthorization.ts`                   | `...PLUGIN_RPC_SCOPES,` inside `RPC_REQUIRED_SCOPES`, plus its import                                                                                                  |
 | `apps/server/src/mcp/toolkits/worktree/registration.test.ts` | the `PluginHost` and `PluginSupervisor` mocks in the service list, plus their imports                                                                                  |
 | `packages/client-runtime/src/rpc/client.ts`                  | `\| PluginSubscriptionRpcTag` in `EnvironmentSubscriptionRpcTag`, plus its import                                                                                      |
+| `packages/client-runtime/package.json`                       | the `./plugins/rpc` entry at the end of `exports`                                                                                                                      |
 | `apps/web/src/routes/_chat.board.tsx`                        | the kanban board's own route; a new plugin screen uses `/plugins/<id>` through the registry instead                                                                    |
 | `apps/web/src/components/sidebar/mainAppLocation.ts`         | `/board` and the `/plugins` paths in `isSidebarUtilityPage`                                                                                                            |
 | `apps/web/src/components/sidebar/SidebarChrome.tsx`          | the board's `SidebarUtilityItem`, gated on `kanbanSupportedAtom`, and `<PluginSidebarEntries />` after the Usage entry, plus imports; `SidebarUtilityItem` is exported |
@@ -56,11 +57,19 @@ them is resolved by keeping the line.
 
 A plugin's layer is merged into the server only when the plugin is active, so the server's layer
 chain never types its services as present. Anything outside the plugin's own layer that needs one,
-such as a WebSocket handler (the RPC group requires every handler whether or not the plugin runs)
-or an MCP handler layer, reads it with `Effect.serviceOption` and fails with the plugin's own
-"inactive" error when it is absent. Declaring it as a `Tool` dependency or yielding the tag
-directly makes the whole server require it and fails to typecheck. See
+such as a plugin method's handler (the host dispatches to it whether or not the plugin runs) or an
+MCP handler layer, reads it with `Effect.serviceOption` and fails with the plugin's own "inactive"
+error when it is absent. Declaring it as a `Tool` dependency or yielding the tag directly makes the
+whole server require it and fails to typecheck. See
 [`plugins/kanban/handlers.ts`](../apps/server/src/plugins/kanban/handlers.ts).
+
+Plugin methods go through three gateway RPCs, `plugins.read`, `plugins.operate` and
+`plugins.settingsWrite`, one per scope, because the WebSocket RPC group sits at TypeScript's
+instantiation limit: a couple more tags and `ServerWsRpcGroup.toLayer` fails with TS2589. A plugin
+adds a method only in its own contract file (`definePluginMethods`) and its dispatch table
+(`PluginRpc.defineHandlers`); clients call it with `createPluginRpcCommand` or
+`createPluginRpcQueryAtomFamily` from `@t3tools/client-runtime/plugins/rpc`. Only stream RPCs keep
+a tag of their own.
 
 A plugin never imports `McpHttpServer`: that module imports the host, and the cycle leaves one of
 them half-evaluated. The host hands `toolkitRegistration` to `ServerPlugin.mcp` instead.
@@ -71,22 +80,21 @@ them half-evaluated. The host hands `toolkitRegistration` to `ServerPlugin.mcp` 
   `<T3 home>/wiki/<project-slug>/`; the folder is changeable per project from the board.
   Server: `apps/server/src/plugins/kanban/`. Contracts: `packages/contracts/src/plugins/kanban.ts`.
   Web: `apps/web/src/plugins/kanban/`. User guide: [Kanban board](./user/kanban.md).
-- **telemetry**: the fourteen efficiency measures of #1 over a project's window, from
-  `telemetry.measures` and the `telemetry_measures` MCP tool. Its reactor keeps runs, tool calls,
-  threads and provider turn token usage from the event log in the plugin's own tables, and pure
-  functions in `measures/` compute each measure from those rows; cost is priced with the rate
-  table the Usage page saves. A measure whose input is not recorded, or comes from a plugin that
-  is off or not built yet, answers `unavailable` with the reason. Migration 2 drops the reactor's
-  cursor so the new tables fill from the first event. The template plugin: it uses every host
-  seam once (database, reactor, sweep, RPC, MCP tool, settings panel) and is the one to copy.
-  Server: `apps/server/src/plugins/telemetry/`. Contracts:
+- **telemetry**: the fourteen efficiency measures of #1 over a project's window, from the
+  `telemetry.measures` gateway method and the `telemetry_measures` MCP tool. Its reactor keeps
+  runs, tool calls, threads and provider turn token usage from the event log in the plugin's own
+  tables, and pure functions in `measures/` compute each measure from those rows; cost is priced
+  with the rate table the Usage page saves. A measure whose input is not recorded, or comes from a
+  plugin that is off or not built yet, answers `unavailable` with the reason. Migration 2 drops
+  the reactor's cursor so the new tables fill from the first event. The template plugin: it uses
+  every host seam once (database, reactor, sweep, gateway method, MCP tool, settings panel) and is
+  the one to copy. Server: `apps/server/src/plugins/telemetry/`. Contracts:
   `packages/contracts/src/plugins/telemetry.ts`. Web: `apps/web/src/plugins/telemetry/`.
 - **routing**: which model does which work. Three tiers, `cheap`, `standard` and `strong`, each map
   to a provider instance and a model, set for the environment and overridable per project, in the
   plugin's own database. A tier with nothing saved falls back to the built-in: one instance's model
-  list, first model `strong`, last `cheap`. Agents read it with the `routing_tiers` MCP tool. The
-  panel on the Plugins page is built but not connected: `routing.tiers.get` and `.set` are plain
-  methods in `handlers.ts` until the plugin RPC gateway (#57) carries them.
+  list, first model `strong`, last `cheap`. Agents read it with the `routing_tiers` MCP tool; the
+  panel on the Plugins page reads and saves it through `routing.tiers.get` and `routing.tiers.set`.
   Server: `apps/server/src/plugins/routing/`. Contracts: `packages/contracts/src/plugins/routing.ts`.
   Web: `apps/web/src/plugins/routing/`.
 - **learning**: a record of corrections, visible instances of work going wrong, taken from

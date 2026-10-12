@@ -1,11 +1,6 @@
-import * as Rpc from "effect/rpc/Rpc";
 import * as Schema from "effect/Schema";
-import { AuthOrchestrationReadScope, EnvironmentAuthorizationError } from "../auth.ts";
 import { IsoDateTime, NonNegativeInt, ProjectId } from "../baseSchemas.ts";
-
-export const TELEMETRY_WS_METHODS = {
-  measures: "telemetry.measures",
-} as const;
+import { definePluginMethods } from "./method.ts";
 
 /** A project's window: `from` inclusive, `to` exclusive, both instants in UTC. */
 export const TelemetryMeasuresInput = Schema.Struct({
@@ -42,19 +37,12 @@ export class TelemetryError extends Schema.TaggedError<TelemetryError>()("Teleme
   message: Schema.String,
 }) {}
 
-export const TELEMETRY_RPCS = [
-  Rpc.make(TELEMETRY_WS_METHODS.measures, {
-    payload: TelemetryMeasuresInput,
-    success: TelemetryMeasuresResult,
-    error: Schema.Union([TelemetryError, EnvironmentAuthorizationError]),
-  }),
-] as const;
-
-/** Reads: server-side authorization only. */
-export const TELEMETRY_RPC_SCOPES = {
-  [TELEMETRY_WS_METHODS.measures]: AuthOrchestrationReadScope,
-} as const;
-
-export const TELEMETRY_RPC_SUBSYSTEMS = {
-  [TELEMETRY_WS_METHODS.measures]: "plugins",
-} as const;
+export const TELEMETRY_METHODS = definePluginMethods({
+  measures: {
+    method: "telemetry.measures",
+    gateway: "read",
+    input: TelemetryMeasuresInput,
+    output: TelemetryMeasuresResult,
+    error: TelemetryError,
+  },
+});

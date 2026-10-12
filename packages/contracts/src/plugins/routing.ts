@@ -1,6 +1,7 @@
 import * as Schema from "effect/Schema";
 import { ProjectId, TrimmedNonEmptyString } from "../baseSchemas.ts";
 import { ProviderInstanceId } from "../providerInstance.ts";
+import { definePluginMethods } from "./method.ts";
 
 /** How much model a task needs. */
 export const RoutingTier = Schema.Literals(["cheap", "standard", "strong"]);
@@ -57,22 +58,19 @@ export class RoutingError extends Schema.TaggedError<RoutingError>()("RoutingErr
   message: Schema.String,
 }) {}
 
-/**
- * The plugin's methods, each with the gateway scope it needs. Not WebSocket RPCs of their own: the
- * server's RPC group has no room for one tag per plugin method, so these wait for the plugin
- * gateway (#57) to carry them.
- */
-export const ROUTING_METHODS = {
+export const ROUTING_METHODS = definePluginMethods({
   tiersGet: {
     method: "routing.tiers.get",
     gateway: "read",
     input: RoutingTiersGetInput,
     output: RoutingTiers,
+    error: RoutingError,
   },
   tiersSet: {
     method: "routing.tiers.set",
     gateway: "settingsWrite",
     input: RoutingTiersSetInput,
     output: RoutingTiers,
+    error: RoutingError,
   },
-} as const;
+});

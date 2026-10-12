@@ -1,19 +1,12 @@
 import * as Rpc from "effect/rpc/Rpc";
 import * as Schema from "effect/Schema";
-import {
-  AuthOrchestrationOperateScope,
-  AuthOrchestrationReadScope,
-  AuthSettingsWriteScope,
-  EnvironmentAuthorizationError,
-} from "../auth.ts";
+import { AuthOrchestrationReadScope, EnvironmentAuthorizationError } from "../auth.ts";
 import { IsoDateTime, ProjectId, ThreadId, TrimmedNonEmptyString } from "../baseSchemas.ts";
+import { definePluginMethods } from "./method.ts";
 
+/** Stream RPCs keep their own tag; every other kanban method is in `KANBAN_METHODS`. */
 export const KANBAN_WS_METHODS = {
   subscribe: "kanban.subscribe",
-  getIssue: "kanban.getIssue",
-  listDecisions: "kanban.listDecisions",
-  write: "kanban.write",
-  setDirectory: "kanban.setDirectory",
 } as const;
 
 export const KanbanStatus = Schema.Literals([
@@ -236,54 +229,51 @@ export const KanbanSetDirectoryInput = Schema.Struct({
 });
 export type KanbanSetDirectoryInput = typeof KanbanSetDirectoryInput.Type;
 
-const error = Schema.Union([KanbanError, EnvironmentAuthorizationError]);
+export const KANBAN_METHODS = definePluginMethods({
+  getIssue: {
+    method: "kanban.getIssue",
+    gateway: "read",
+    input: KanbanGetIssueInput,
+    output: KanbanIssue,
+    error: KanbanError,
+  },
+  listDecisions: {
+    method: "kanban.listDecisions",
+    gateway: "read",
+    input: KanbanListDecisionsInput,
+    output: Schema.Array(KanbanDecision),
+    error: KanbanError,
+  },
+  write: {
+    method: "kanban.write",
+    gateway: "operate",
+    input: KanbanWriteInput,
+    output: KanbanWriteResult,
+    error: KanbanError,
+  },
+  setDirectory: {
+    method: "kanban.setDirectory",
+    gateway: "settingsWrite",
+    input: KanbanSetDirectoryInput,
+    output: Schema.Struct({}),
+    error: KanbanError,
+  },
+});
 
 export const KANBAN_RPCS = [
   Rpc.make(KANBAN_WS_METHODS.subscribe, {
     payload: KanbanProjectInput,
     success: KanbanBoard,
-    error,
+    error: Schema.Union([KanbanError, EnvironmentAuthorizationError]),
     stream: true,
-  }),
-  Rpc.make(KANBAN_WS_METHODS.getIssue, {
-    payload: KanbanGetIssueInput,
-    success: KanbanIssue,
-    error,
-  }),
-  Rpc.make(KANBAN_WS_METHODS.listDecisions, {
-    payload: KanbanListDecisionsInput,
-    success: Schema.Array(KanbanDecision),
-    error,
-  }),
-  Rpc.make(KANBAN_WS_METHODS.write, {
-    payload: KanbanWriteInput,
-    success: KanbanWriteResult,
-    error,
-  }),
-  Rpc.make(KANBAN_WS_METHODS.setDirectory, {
-    payload: KanbanSetDirectoryInput,
-    success: Schema.Struct({}),
-    error,
   }),
 ] as const;
 
-/** Reads and subscriptions: server-side authorization only. */
+/** Subscriptions: server-side authorization only. */
 export const KANBAN_RPC_SCOPES = {
   [KANBAN_WS_METHODS.subscribe]: AuthOrchestrationReadScope,
-  [KANBAN_WS_METHODS.getIssue]: AuthOrchestrationReadScope,
-  [KANBAN_WS_METHODS.listDecisions]: AuthOrchestrationReadScope,
-} as const;
-
-/** Writes: clients check the grant before calling, the server checks it again. */
-export const KANBAN_GUARDED_RPC_SCOPES = {
-  [KANBAN_WS_METHODS.write]: AuthOrchestrationOperateScope,
-  [KANBAN_WS_METHODS.setDirectory]: AuthSettingsWriteScope,
 } as const;
 
 export const KANBAN_RPC_SUBSYSTEMS = {
   [KANBAN_WS_METHODS.subscribe]: "kanban",
-  [KANBAN_WS_METHODS.getIssue]: "kanban",
-  [KANBAN_WS_METHODS.listDecisions]: "kanban",
-  [KANBAN_WS_METHODS.write]: "kanban",
-  [KANBAN_WS_METHODS.setDirectory]: "kanban",
 } as const;

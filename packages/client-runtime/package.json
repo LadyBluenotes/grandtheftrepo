@@ -414,6 +414,10 @@
     "./pull-request-markdown": {
       "types": "./src/pullRequestMarkdown.ts",
       "default": "./src/pullRequestMarkdown.ts"
+    },
+    "./plugins/rpc": {
+      "types": "./src/plugins/rpc.ts",
+      "default": "./src/plugins/rpc.ts"
     }
   },
   "scripts": {

@@ -1,7 +1,12 @@
 import { NodeHttpServer } from "@effect/platform-node";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
-import { EnvironmentId, type SupervisorStatus } from "@t3tools/contracts";
+import {
+  EnvironmentId,
+  PLUGIN_GATEWAY_WS_METHODS,
+  SUPERVISOR_METHODS,
+  SupervisorStatus,
+} from "@t3tools/contracts";
 import * as Data from "effect/Data";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -9,6 +14,7 @@ import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
+import * as Schema from "effect/Schema";
 import * as TestClock from "effect/testing/TestClock";
 import { HttpBody, HttpClient, HttpRouter } from "effect/http";
 
@@ -233,13 +239,21 @@ it.effect("the supervisor_status tool and the supervisor.status handler agree", 
       const supervisor = yield* PluginSupervisor.PluginSupervisor;
       yield* supervisor.register({ plugin: "a", name: "ping", run: () => Effect.succeed(counts) });
       yield* supervisor.tick;
-      const fromHandler: SupervisorStatus = yield* PluginHost.handlers["supervisor.status"]();
+      const layerHost = Layer.mock(PluginHost.PluginHost)({
+        activeIds: new Set<string>(),
+        databases: new Map(),
+      });
+      const fromHandler = yield* PluginHost.handlers[PLUGIN_GATEWAY_WS_METHODS.read]({
+        method: SUPERVISOR_METHODS.status.method,
+        input: {},
+      }).pipe(
+        Effect.flatMap(Schema.decodeUnknownEffect(SupervisorStatus)),
+        Effect.provide(layerHost),
+      );
       assert.strictEqual(fromHandler.latest?.sweeps.length, 1);
 
       const layerServer = PluginHost.layerMcp(McpHttpServer.toolkitRegistration).pipe(
-        Layer.provide(
-          Layer.mock(PluginHost.PluginHost)({ activeIds: new Set<string>(), databases: new Map() }),
-        ),
+        Layer.provide(layerHost),
         Layer.provide(Layer.succeed(PluginSupervisor.PluginSupervisor, supervisor)),
         // Inactive here, but the kanban tools' static requirements still type through `layerMcp`.
         Layer.provide(Layer.mock(ThreadManagementService.ThreadManagementService)({})),
