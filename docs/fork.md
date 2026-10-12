@@ -19,6 +19,10 @@ directory, opened and migrated before the plugin starts; its `layer` and `mcp` s
 `SqlClient`, never the core database. A failed migration keeps the plugin, and anything that depends
 on it, off for that start and shows as `startError` in `plugins.list`.
 
+A plugin registers sweeps with `PluginSupervisor.register` from its layer. The host runs them on
+the `supervisor.json` interval, in registry order, and records each tick in `plugins/_host.sqlite`;
+`supervisor.status` reads the latest.
+
 ## Upstream seams
 
 These are the only lines upstream files carry for the plugin system. A merge conflict in one of
@@ -34,7 +38,7 @@ them is resolved by keeping the line.
 | `apps/server/src/mcp/McpHttpServer.ts`                       | `PluginHost.layerMcp(toolkitRegistration),` inside the exported `layer`, plus its import  |
 | `apps/server/src/observability/RpcInstrumentation.ts`        | `...PLUGIN_RPC_SUBSYSTEMS,` in the subsystem map, plus the import                         |
 | `apps/server/src/auth/RpcAuthorization.ts`                   | `...PLUGIN_RPC_SCOPES,` inside `RPC_REQUIRED_SCOPES`, plus its import                     |
-| `apps/server/src/mcp/toolkits/worktree/registration.test.ts` | the `PluginHost` mock in the service list, plus its import                                |
+| `apps/server/src/mcp/toolkits/worktree/registration.test.ts` | the `PluginHost` and `PluginSupervisor` mocks in the service list, plus their imports     |
 | `packages/client-runtime/src/rpc/client.ts`                  | `\| PluginSubscriptionRpcTag` in `EnvironmentSubscriptionRpcTag`, plus its import         |
 | `apps/web/src/routes/_chat.<plugin>.tsx`                     | one route file per plugin screen; the screen itself lives in `apps/web/src/plugins/`      |
 | `apps/web/src/components/sidebar/mainAppLocation.ts`         | the plugin's path in `isSidebarUtilityPage`                                               |

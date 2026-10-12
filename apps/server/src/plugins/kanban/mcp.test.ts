@@ -16,6 +16,7 @@ import * as McpSessionRegistry from "../../mcp/McpSessionRegistry.ts";
 import * as ThreadManagementService from "../../orchestration-v2/ThreadManagementService.ts";
 import * as ProjectService from "../../project/ProjectService.ts";
 import * as PluginHost from "../PluginHost.ts";
+import * as PluginSupervisor from "../PluginSupervisor.ts";
 import * as KanbanStore from "./KanbanStore.ts";
 
 const environmentId = EnvironmentId.make("env-1");
@@ -67,6 +68,7 @@ it.effect("registers kanban tools through the plugin host and files an issue ove
             databases: new Map(),
           }),
         ),
+        Layer.provide(Layer.mock(PluginSupervisor.PluginSupervisor)({})),
         Layer.provide(KanbanStore.layer),
         Layer.provide(Layer.mock(ThreadManagementService.ThreadManagementService)({})),
         Layer.provideMerge(McpHttpServer.layerMcpTransport),

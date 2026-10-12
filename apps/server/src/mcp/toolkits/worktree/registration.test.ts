@@ -28,6 +28,7 @@ import * as ManagedProjectFolders from "../../../project/ManagedProjectFolders.t
 import * as ThreadLaunchService from "../../../orchestration-v2/ThreadLaunchService.ts";
 import * as ThreadSearch from "../../../orchestration-v2/ThreadSearch.ts";
 import * as PluginHost from "../../../plugins/PluginHost.ts";
+import * as PluginSupervisor from "../../../plugins/PluginSupervisor.ts";
 import * as PreviewManager from "../../../preview/Manager.ts";
 import * as SourceControlRepositoryService from "../../../sourceControl/SourceControlRepositoryService.ts";
 import * as GitVcsDriver from "../../../vcs/GitVcsDriver.ts";
@@ -59,6 +60,7 @@ const layerStubServices = Layer.mergeAll(
   Layer.mock(ThreadLaunchService.ThreadLaunchService)({}),
   Layer.mock(ThreadSearch.ThreadSearch)({}),
   Layer.mock(PluginHost.PluginHost)({ activeIds: new Set<string>(), databases: new Map() }),
+  Layer.mock(PluginSupervisor.PluginSupervisor)({}),
 );
 
 const ToolsListPayload = Schema.fromJsonString(
