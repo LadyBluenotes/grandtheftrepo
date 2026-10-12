@@ -2,22 +2,25 @@ import { scopeProjectRef, scopeThreadRef } from "@t3tools/client-runtime/environ
 import {
   KANBAN_PRIORITIES,
   KANBAN_STATUSES,
+  KANBAN_TIERS,
   KANBAN_VERIFICATIONS,
   type EnvironmentId,
   type KanbanDecision,
   type KanbanIssue,
   type KanbanLogEntry,
   type KanbanStatus,
+  type KanbanTier,
   type ProjectId,
   type ThreadId,
 } from "@t3tools/contracts";
 import { useNavigate } from "@tanstack/react-router";
-import { OctagonAlertIcon, PlayIcon } from "lucide-react";
+import { OctagonAlertIcon, PlayIcon, XIcon } from "lucide-react";
 import { useState, type FormEvent } from "react";
 
 import { useComposerDraftStore } from "~/composerDraftStore";
 import { Badge } from "~/components/ui/badge";
 import { Button } from "~/components/ui/button";
+import { Checkbox } from "~/components/ui/checkbox";
 import { Input } from "~/components/ui/input";
 import { ScrollArea } from "~/components/ui/scroll-area";
 import {
@@ -36,12 +39,14 @@ import {
 } from "~/components/ui/sheet";
 import { Textarea } from "~/components/ui/textarea";
 import { useNewThreadHandler } from "~/hooks/useHandleNewThread";
+import { cn } from "~/lib/utils";
 import { useThreadShell } from "~/state/entities";
 import { useEnvironmentQuery } from "~/state/query";
 import { useAtomCommand } from "~/state/use-atom-command";
 import { buildThreadRouteParams } from "~/threadRoutes";
 import { STATUS_LABEL, labelColor, reportFailure } from "./BoardPage";
 import { DecisionForm, DecisionRow } from "./DecisionsView";
+import { ReopenDialog } from "./ReopenDialog";
 import { buildIssuePrompt, kanbanDecisions, kanbanIssue, kanbanWrite } from "./state";
 
 interface IssuePanelProps {
@@ -113,6 +118,8 @@ function IssueDetails({
   const [labels, setLabels] = useState(issue.labels.join(", "));
   const [note, setNote] = useState("");
   const [blockReason, setBlockReason] = useState("");
+  const [criterion, setCriterion] = useState("");
+  const [reopenTo, setReopenTo] = useState<KanbanStatus | null>(null);
   const [recording, setRecording] = useState(false);
   const [starting, setStarting] = useState(false);
 
@@ -125,7 +132,13 @@ function IssueDetails({
     title?: string;
     description?: string;
     labels?: ReadonlyArray<string>;
+    tier?: KanbanTier;
   }) => change({ action: "issue.update", id: issue.id, ...patch });
+  // Leaving Done needs a reason, which the dialog collects before the move runs.
+  const requestMove = (status: KanbanStatus) =>
+    issue.status === "done" && status !== "done"
+      ? setReopenTo(status)
+      : void change({ action: "issue.move", id: issue.id, status });
 
   const startThread = async () => {
     setStarting(true);
@@ -167,6 +180,11 @@ function IssueDetails({
         />
         <div className="flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground">
           <code>{issue.id}</code>
+          {issue.reopened !== null ? (
+            <Badge size="sm" variant="warning">
+              reopened: {issue.reopened.reason === "defect" ? "defect" : "scope change"}
+            </Badge>
+          ) : null}
           <span>· by {issue.createdBy}</span>
           {issue.archivedAt !== null ? (
             <Badge size="sm" variant="outline">
@@ -177,18 +195,13 @@ function IssueDetails({
       </SheetHeader>
       <ScrollArea className="min-h-0 flex-1">
         <div className="flex flex-col gap-4 px-4 pb-6">
-          <div className="grid grid-cols-3 gap-2">
+          <div className="grid grid-cols-2 gap-2">
             <Field label="Status">
               <Select
                 value={issue.status}
                 disabled={!canWrite}
                 onValueChange={(status) =>
-                  typeof status === "string" &&
-                  void change({
-                    action: "issue.move",
-                    id: issue.id,
-                    status: status as KanbanStatus,
-                  })
+                  typeof status === "string" && requestMove(status as KanbanStatus)
                 }
               >
                 <SelectTrigger size="sm" aria-label="Status">
@@ -248,6 +261,28 @@ function IssueDetails({
                   {KANBAN_VERIFICATIONS.map((verification) => (
                     <SelectItem key={verification} value={verification}>
                       {verification}
+                    </SelectItem>
+                  ))}
+                </SelectPopup>
+              </Select>
+            </Field>
+            <Field label="Tier">
+              <Select
+                value={issue.tier ?? ""}
+                disabled={!canWrite}
+                onValueChange={(tier) =>
+                  typeof tier === "string" &&
+                  tier.length > 0 &&
+                  void update({ tier: tier as KanbanTier })
+                }
+              >
+                <SelectTrigger size="sm" aria-label="Tier">
+                  <SelectValue>{issue.tier ?? "unset"}</SelectValue>
+                </SelectTrigger>
+                <SelectPopup>
+                  {KANBAN_TIERS.map((tier) => (
+                    <SelectItem key={tier} value={tier}>
+                      {tier}
                     </SelectItem>
                   ))}
                 </SelectPopup>
@@ -378,6 +413,92 @@ function IssueDetails({
             />
           </Field>
 
+          <Field
+            label={`Acceptance criteria${
+              issue.criteria.length > 0
+                ? ` (${issue.criteria.filter((c) => c.checked).length}/${issue.criteria.length})`
+                : ""
+            }`}
+          >
+            {issue.criteria.length > 0 ? (
+              <ul className="flex flex-col gap-1.5">
+                {issue.criteria.map((c) => (
+                  <li key={c.id} className="flex items-start gap-2 text-sm">
+                    <Checkbox
+                      className="mt-0.5"
+                      checked={c.checked}
+                      disabled={!canWrite}
+                      aria-label={c.text}
+                      onCheckedChange={(checked) =>
+                        void change({
+                          action: "criterion.update",
+                          id: issue.id,
+                          criterionId: c.id,
+                          checked: checked === true,
+                        })
+                      }
+                    />
+                    <span
+                      className={cn(
+                        "min-w-0 flex-1",
+                        c.checked && "text-muted-foreground line-through",
+                      )}
+                    >
+                      {c.text}
+                    </span>
+                    {canWrite ? (
+                      <Button
+                        size="icon-xs"
+                        variant="ghost-muted"
+                        aria-label="Remove criterion"
+                        onClick={() =>
+                          void change({
+                            action: "criterion.remove",
+                            id: issue.id,
+                            criterionId: c.id,
+                          })
+                        }
+                      >
+                        <XIcon />
+                      </Button>
+                    ) : null}
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <p className="text-sm text-muted-foreground">
+                Nothing defines done yet. Done is refused while a criterion is open.
+              </p>
+            )}
+            {canWrite ? (
+              <form
+                className="flex gap-2 pt-1"
+                onSubmit={async (event) => {
+                  event.preventDefault();
+                  const text = criterion.trim();
+                  if (text.length === 0) return;
+                  await change({ action: "criterion.add", id: issue.id, text });
+                  setCriterion("");
+                }}
+              >
+                <Input
+                  size="sm"
+                  value={criterion}
+                  placeholder="What must be true for this to be done?"
+                  onChange={(event) => setCriterion(event.target.value)}
+                />
+                <Button
+                  type="submit"
+                  size="sm"
+                  variant="outline"
+                  disabled={criterion.trim().length === 0}
+                >
+                  Add
+                </Button>
+              </form>
+            ) : null}
+          </Field>
+
           {issue.threads.length > 0 ? (
             <Field label="Threads">
               <ul className="flex flex-col gap-1">
@@ -468,6 +589,16 @@ function IssueDetails({
           </Field>
         </div>
       </ScrollArea>
+      <ReopenDialog
+        open={reopenTo !== null}
+        onCancel={() => setReopenTo(null)}
+        onPick={(reason) => {
+          const status = reopenTo;
+          setReopenTo(null);
+          if (status !== null)
+            void change({ action: "issue.move", id: issue.id, status, reopenReason: reason });
+        }}
+      />
     </>
   );
 }
@@ -511,6 +642,10 @@ function LogRow({ entry }: { readonly entry: KanbanLogEntry }) {
           <>blocked: {entry.text}</>
         ) : entry.kind === "unblocked" ? (
           <>unblocked</>
+        ) : entry.kind === "reopened" ? (
+          <>reopened: {entry.text === "defect" ? "the work was wrong" : "the ask changed"}</>
+        ) : entry.kind === "criterion" ? (
+          <>criterion {entry.text}</>
         ) : (
           entry.text
         )}

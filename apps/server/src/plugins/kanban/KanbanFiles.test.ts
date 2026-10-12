@@ -19,11 +19,14 @@ describe("KanbanFiles", () => {
       priority: "p2" as const,
       labels: ["auth", "bug"],
       verification: "partial" as const,
+      tier: "standard" as const,
+      criteria: [{ id: "c1", text: "Redirect lands on the requested page", checked: false }],
       blocked: {
         reason: "Need a TTL decision",
         at: "2026-10-12T14:03:00.000Z",
         by: "thread:thr_1",
       },
+      reopened: { reason: "defect" as const, at: "2026-10-12T14:10:00.000Z", by: "user" },
       threads: [{ id: ThreadId.make("thr_1"), linkedAt: "2026-10-12T13:50:00.000Z" }],
       createdAt: "2026-10-12T13:40:00.000Z",
       createdBy: "thread:thr_1",
@@ -65,6 +68,9 @@ describe("KanbanFiles", () => {
     assert.strictEqual(parsed?.issue.priority, "p3");
     assert.strictEqual(parsed?.issue.verification, "unverified");
     assert.strictEqual(parsed?.issue.createdBy, "user");
+    assert.strictEqual(parsed?.issue.tier, null);
+    assert.deepStrictEqual(parsed?.issue.criteria, []);
+    assert.strictEqual(parsed?.issue.reopened, null);
     assert.strictEqual(parsed?.issue.updatedAt, "2026-10-12T00:00:00.000Z");
     assert.deepStrictEqual(parsed?.issue.log, []);
     assert.strictEqual(parsed?.issue.description, "Body only.");

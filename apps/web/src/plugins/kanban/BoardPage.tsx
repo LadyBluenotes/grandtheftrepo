@@ -64,6 +64,7 @@ import { useEnvironmentQuery } from "~/state/query";
 import { useAtomCommand } from "~/state/use-atom-command";
 import { DecisionsView } from "./DecisionsView";
 import { IssuePanel } from "./IssuePanel";
+import { ReopenDialog } from "./ReopenDialog";
 import { kanbanActiveAtom, kanbanBoard, kanbanSetDirectory, kanbanWrite } from "./state";
 
 export interface BoardSearch {
@@ -171,6 +172,16 @@ const Card = memo(function Card({
         {issue.verification !== "unverified" ? (
           <Badge size="sm" variant={issue.verification === "verified" ? "success" : "info"}>
             {issue.verification}
+          </Badge>
+        ) : null}
+        {issue.tier !== null ? (
+          <Badge size="sm" variant="outline">
+            {issue.tier}
+          </Badge>
+        ) : null}
+        {issue.criteriaTotal > 0 ? (
+          <Badge size="sm" variant={issue.criteriaOpen === 0 ? "success" : "outline"}>
+            {issue.criteriaTotal - issue.criteriaOpen}/{issue.criteriaTotal}
           </Badge>
         ) : null}
         {issue.labels.map((label) => (
@@ -328,13 +339,19 @@ export function BoardPage({ search }: { readonly search: BoardSearch }) {
     [board.data],
   );
 
+  const [reopen, setReopen] = useState<{ id: string; status: KanbanStatus } | null>(null);
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 6 } }));
   const onDragEnd = useCallback(
     async (event: DragEndEvent) => {
       if (environmentId === null || projectId === null || event.over === null) return;
       const status = event.over.id as KanbanStatus;
       const id = String(event.active.id);
-      if (board.data?.issues.find((issue) => issue.id === id)?.status === status) return;
+      const from = board.data?.issues.find((issue) => issue.id === id)?.status;
+      if (from === status) return;
+      if (from === "done") {
+        setReopen({ id, status });
+        return;
+      }
       reportFailure(
         "Could not move the issue",
         await write({ environmentId, input: { projectId, action: "issue.move", id, status } }),
@@ -533,6 +550,28 @@ export function BoardPage({ search }: { readonly search: BoardSearch }) {
           </DndContext>
         )}
       </div>
+      <ReopenDialog
+        open={reopen !== null}
+        onCancel={() => setReopen(null)}
+        onPick={async (reason) => {
+          const target = reopen;
+          setReopen(null);
+          if (target === null || environmentId === null || projectId === null) return;
+          reportFailure(
+            "Could not reopen the issue",
+            await write({
+              environmentId,
+              input: {
+                projectId,
+                action: "issue.move",
+                id: target.id,
+                status: target.status,
+                reopenReason: reason,
+              },
+            }),
+          );
+        }}
+      />
       {environmentId !== null && projectId !== null ? (
         <IssuePanel
           environmentId={environmentId}

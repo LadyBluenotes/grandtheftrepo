@@ -20,6 +20,9 @@ and **Done**. Drag a card to another column, or change its status in the card pa
   turn to **In review**, and a merged pull request or settled thread to **Done**. Automation only
   moves cards forward and never out of Triage or Inbox. Dragging a card anywhere always wins.
 
+Moving a card out of **Done** asks why: the work was wrong, or the ask changed. The reason stays on
+the card and in its log.
+
 A card that needs you shows a red marker. An agent blocks a card with a reason when it cannot
 continue; **Needs you** at the top filters the board down to those cards, and **Unblock** in the
 card panel clears it.
@@ -33,6 +36,11 @@ Click a card to open it. The panel holds the title, status, priority (P0 to P5),
 free-form labels, a markdown description, the threads working on it, the decisions about it, and
 a log of every status change, note and block with who made it and when. Add a note at the bottom
 of the log.
+
+**Acceptance criteria** define done. Add one sentence per thing that must be true, check them off
+as they hold, and the card cannot move to Done while one is open, whether you drag it or a thread
+settles. A new thread started from the card sees the checklist. The **tier** (cheap, standard,
+strong) records the model class you expect the work to need.
 
 Create a card with the **+** in a column header. Cards you create start in that column; cards an
 agent files start in Triage.

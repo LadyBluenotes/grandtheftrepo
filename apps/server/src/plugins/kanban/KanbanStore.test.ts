@@ -168,6 +168,7 @@ it.layer(layerTest)("KanbanStore", (it) => {
           action: "issue.move",
           id: todo.id,
           status: "in_review",
+          reopenReason: "scope_change",
         });
         const reopened = yield* store.getIssue({ projectId, id: todo.id });
         assert.strictEqual(reopened.status, "in_review");
@@ -207,6 +208,89 @@ it.layer(layerTest)("KanbanStore", (it) => {
         yield* store.write(projectId, "user", { action: "issue.archive", id });
         yield* store.write(projectId, "user", { action: "issue.delete", id });
         assert.strictEqual(yield* failureCode(store.getIssue({ projectId, id })), "not_found");
+      }),
+    );
+  });
+
+  describe("definition of done", () => {
+    it.effect("holds Done behind the criteria and needs a reason to come back", () =>
+      Effect.gen(function* () {
+        const store = yield* KanbanStore.KanbanStore;
+        const { id } = yield* store.write(projectId, "user", {
+          action: "issue.create",
+          title: "Ship criteria",
+          tier: "strong",
+        });
+        yield* store.write(projectId, "user", { action: "criterion.add", id, text: "Tests pass" });
+        yield* store.write(projectId, "thread:t", {
+          action: "criterion.add",
+          id,
+          text: "Docs updated",
+        });
+        let issue = yield* store.getIssue({ projectId, id });
+        assert.deepStrictEqual(
+          issue.criteria.map((c) => c.id),
+          ["c1", "c2"],
+        );
+        assert.strictEqual(issue.tier, "strong");
+        assert.strictEqual(
+          yield* failureCode(
+            store.write(projectId, "user", { action: "issue.move", id, status: "done" }),
+          ),
+          "invalid",
+        );
+        yield* store.write(projectId, "thread:t", {
+          action: "criterion.update",
+          id,
+          criterionId: "c1",
+          checked: true,
+        });
+        yield* store.write(projectId, "user", {
+          action: "criterion.remove",
+          id,
+          criterionId: "c2",
+        });
+        yield* store.write(projectId, "user", { action: "issue.move", id, status: "done" });
+        const card = (yield* store.board(projectId)).issues.find((i) => i.id === id);
+        assert.deepStrictEqual(
+          [card?.status, card?.criteriaOpen, card?.criteriaTotal],
+          ["done", 0, 1],
+        );
+        assert.strictEqual(
+          yield* failureCode(
+            store.write(projectId, "user", { action: "issue.move", id, status: "todo" }),
+          ),
+          "invalid",
+        );
+        yield* store.write(projectId, "user", {
+          action: "issue.move",
+          id,
+          status: "todo",
+          reopenReason: "defect",
+        });
+        issue = yield* store.getIssue({ projectId, id });
+        assert.strictEqual(issue.reopened?.reason, "defect");
+        assert.isNull(issue.doneAt);
+        assert.deepStrictEqual(
+          issue.log.map((e) => e.kind),
+          [
+            "status",
+            "criterion",
+            "criterion",
+            "criterion",
+            "criterion",
+            "status",
+            "status",
+            "reopened",
+          ],
+        );
+
+        // Automation respects the definition too: a settled thread cannot close an open checklist.
+        const threadId = ThreadId.make("thr_criteria");
+        yield* store.write(projectId, "user", { action: "criterion.add", id, text: "Reviewed" });
+        yield* store.write(projectId, "user", { action: "issue.link", id, threadId });
+        yield* store.advance(projectId, threadId, "done");
+        assert.strictEqual((yield* store.getIssue({ projectId, id })).status, "todo");
       }),
     );
   });
@@ -280,7 +364,10 @@ it.layer(layerTest)("KanbanStore", (it) => {
               priority: "p3",
               labels: [],
               verification: "unverified",
+              tier: null,
+              criteria: [],
               blocked: null,
+              reopened: null,
               threads: [],
               createdAt: at,
               createdBy: "user",
