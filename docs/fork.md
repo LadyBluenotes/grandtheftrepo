@@ -97,7 +97,11 @@ them half-evaluated. The host hands `toolkitRegistration` to `ServerPlugin.mcp` 
 - **learning**: a record of corrections, visible instances of work going wrong, taken from
   events the server already emits: failed or interrupted provider turns, pull request wakes
   while changes are requested, and threads reopened after settlement. Agents read and add
-  them over MCP. Server: `apps/server/src/plugins/learning/`. Contracts:
+  them over MCP. Two sweeps turn corrections with a declared failure mode into learning items, one
+  per mode per project, routed by fixed rules on the mode to an owner kind, and hand each item
+  over through one promotion record, at least once, keyed by the record's id so a promoter can
+  drop a repeat; no promoter is registered yet, so records wait. Server:
+  `apps/server/src/plugins/learning/`. Contracts:
   `packages/contracts/src/plugins/learning.ts`. No screen yet.
 - **policy**: reviewed working rules per project (`*` is the whole environment), versioned in the
   plugin's database and rendered as one marked block each, with `<state dir>/RULES.md` ahead of
