@@ -71,6 +71,10 @@ them half-evaluated. The host hands `toolkitRegistration` to `ServerPlugin.mcp` 
   `<T3 home>/wiki/<project-slug>/`; the folder is changeable per project from the board.
   Server: `apps/server/src/plugins/kanban/`. Contracts: `packages/contracts/src/plugins/kanban.ts`.
   Web: `apps/web/src/plugins/kanban/`. User guide: [Kanban board](./user/kanban.md).
+- **telemetry**: token usage per provider turn, from `provider-turn.updated`. The template plugin:
+  it uses every host seam once (database, reactor, sweep, RPC, MCP tool, settings panel) and is
+  the one to copy. Server: `apps/server/src/plugins/telemetry/`. Contracts:
+  `packages/contracts/src/plugins/telemetry.ts`. Web: `apps/web/src/plugins/telemetry/`.
 - **routing**: which model does which work. Three tiers, `cheap`, `standard` and `strong`, each map
   to a provider instance and a model, set for the environment and overridable per project, in the
   plugin's own database. A tier with nothing saved falls back to the built-in: one instance's model
