@@ -18,9 +18,10 @@ const start = Effect.gen(function* () {
 }).pipe(Effect.orDie);
 
 /**
- * Token usage per provider turn, from `provider-turn.updated`. The template
- * plugin: it uses each host seam once (database, reactor, sweep, RPC, MCP tool,
- * settings panel). The measures over its table arrive in #1.
+ * Efficiency measures over a project's window, computed from the plugin's own
+ * tables, which its reactor fills from the event log. The template plugin: it
+ * uses each host seam once (database, reactor, sweep, RPC, MCP tool, settings
+ * panel).
  */
 export const plugin = {
   id: "telemetry",

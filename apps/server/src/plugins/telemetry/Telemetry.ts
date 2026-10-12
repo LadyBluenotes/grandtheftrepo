@@ -1,7 +1,13 @@
-import type { TelemetryMeasuresInput, TelemetryMeasuresResult } from "@t3tools/contracts";
+import type {
+  TelemetryError,
+  TelemetryMeasuresInput,
+  TelemetryMeasuresResult,
+} from "@t3tools/contracts";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+
+import * as MeasureService from "./MeasureService.ts";
 
 /**
  * What the plugin answers over RPC and MCP. Both transports read it with
@@ -11,15 +17,14 @@ import * as Layer from "effect/Layer";
 export class Telemetry extends Context.Service<
   Telemetry,
   {
-    readonly measures: (input: TelemetryMeasuresInput) => Effect.Effect<TelemetryMeasuresResult>;
+    /** Every measure over a project's window, `unavailable` where its inputs are missing. */
+    readonly measures: (
+      input: TelemetryMeasuresInput,
+    ) => Effect.Effect<TelemetryMeasuresResult, TelemetryError>;
   }
 >()("t3/plugins/telemetry/Telemetry") {}
 
-// shortcut: every query is unavailable, until #1 reads telemetry_turn_usage.
-export const layer = Layer.succeed(
+export const layer = Layer.effect(
   Telemetry,
-  Telemetry.of({
-    measures: () =>
-      Effect.succeed({ state: "unavailable", missingReason: "Measures are not built yet (#1)." }),
-  }),
+  Effect.map(MeasureService.make, (measures) => Telemetry.of({ measures })),
 );

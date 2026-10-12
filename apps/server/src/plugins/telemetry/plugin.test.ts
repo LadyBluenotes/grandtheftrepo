@@ -1,11 +1,12 @@
 import { NodeHttpServer } from "@effect/platform-node";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
-import { EnvironmentId, ProjectId, type TelemetryMeasuresResult } from "@t3tools/contracts";
+import { EnvironmentId, ProjectId, TelemetryMeasuresResult } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
+import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/sql/SqlClient";
 import { HttpBody, HttpClient, HttpRouter } from "effect/http";
 
@@ -28,6 +29,8 @@ const measuresInput = {
   to: "2026-10-12T00:00:00.000Z",
 };
 
+const decodeMeasures = Schema.decodeUnknownSync(Schema.fromJsonString(TelemetryMeasuresResult));
+
 const environmentId = EnvironmentId.make("env-1");
 const clientToken = "client-payload.client-signature";
 const clientScope: McpInvocationContext.McpInvocationScope = {
@@ -42,7 +45,7 @@ const clientScope: McpInvocationContext.McpInvocationScope = {
 /** The JSON-RPC result of an MCP call, from a JSON or SSE response body. */
 function mcpResult(body: string): {
   readonly tools?: ReadonlyArray<{ readonly name: string }>;
-  readonly structuredContent?: unknown;
+  readonly content?: ReadonlyArray<{ readonly text?: string }>;
 } {
   const json = body.startsWith("{")
     ? body
@@ -169,21 +172,44 @@ const layerTest = Layer.mergeAll(
   NodeServices.layer,
 );
 
+/**
+ * One window's rows, as the reactor would have stored them: a thread settled by hand in the
+ * window, one run in it that read the same file twice.
+ */
+const seed = (sql: SqlClient.SqlClient) =>
+  Effect.gen(function* () {
+    yield* sql`INSERT INTO telemetry_threads (thread_id, project_id, created_at, settled_at)
+      VALUES ('thread:1', ${measuresInput.projectId}, '2026-10-02T00:00:00.000Z',
+        '2026-10-03T00:00:00.000Z')`;
+    yield* sql`INSERT INTO telemetry_runs
+        (run_id, thread_id, turn_id, ordinal, status, model, started_at, completed_at)
+      VALUES ('run:1', 'thread:1', 'message:1', 1, 'completed', 'test-model',
+        '2026-10-02T00:00:00.000Z', '2026-10-02T00:10:00.000Z')`;
+    yield* sql`INSERT INTO telemetry_tool_calls
+        (item_id, run_id, thread_id, ordinal, item_type, tool_name, path, status)
+      VALUES
+        ('item:1', 'run:1', 'thread:1', 1, 'dynamic_tool', 'Read', 'src/a.ts', 'completed'),
+        ('item:2', 'run:1', 'thread:1', 2, 'dynamic_tool', 'Read', 'src/a.ts', 'completed')`;
+  });
+
 it.effect(
   "enabled: its file is migrated, the reactor and sweep run, and the tool and RPC agree",
   () =>
     Effect.scoped(
       Effect.gen(function* () {
-        yield* writeStateFile("plugins.json", onlyPlugins(["telemetry"]));
+        yield* writeStateFile("plugins.json", onlyPlugins(["telemetry", "learning"]));
         yield* Effect.gen(function* () {
           const host = yield* PluginHost.PluginHost;
-          assert.deepEqual([...host.activeIds], ["telemetry"]);
+          assert.deepEqual([...host.activeIds], ["telemetry", "learning"]);
           assert.isTrue(yield* telemetryFileExists);
-          // The reactor made its cursor table in the plugin's own file next to the migrated one.
+          // The reactor made its cursor table in the plugin's own file next to the migrated ones.
           assert.deepEqual(yield* tableNames(host.databases.get("telemetry")!), [
             "effect_sql_migrations",
             "host_reactor_cursor",
             "host_reactor_failure",
+            "telemetry_runs",
+            "telemetry_threads",
+            "telemetry_tool_calls",
             "telemetry_turn_usage",
           ]);
 
@@ -198,12 +224,26 @@ it.effect(
             { plugin: "telemetry", name: "heartbeat" },
           ]);
 
-          const fromHandler: TelemetryMeasuresResult =
-            yield* PluginHost.handlers["telemetry.measures"](measuresInput);
-          assert.deepEqual(fromHandler, {
-            state: "unavailable",
-            missingReason: "Measures are not built yet (#1).",
-          });
+          yield* seed(host.databases.get("telemetry")!);
+          const fromHandler = yield* PluginHost.handlers["telemetry.measures"](measuresInput);
+          const byName = new Map(fromHandler.map((measure) => [measure.measure, measure]));
+          assert.strictEqual(fromHandler.length, 14);
+          assert.deepEqual(
+            ["time_to_accepted_outcome", "repeated_reads", "material_correction_burden"].map(
+              (name) => [byName.get(name)?.state, byName.get(name)?.value],
+            ),
+            // The learning plugin runs and has no corrections: zero is its answer.
+            [
+              ["ok", 86_400],
+              ["ok", 0.5],
+              ["ok", 0],
+            ],
+          );
+          const refused = yield* Effect.flip(
+            PluginHost.handlers["telemetry.measures"]({ ...measuresInput, from: "last week" }),
+          );
+          assert.strictEqual(refused._tag, "TelemetryError");
+
           const call = yield* mcp;
           const tools = (yield* call("tools/list", {})).tools?.map((tool) => tool.name) ?? [];
           assert.include(tools, "telemetry_measures");
@@ -211,7 +251,8 @@ it.effect(
             name: "telemetry_measures",
             arguments: measuresInput,
           });
-          assert.deepEqual(called.structuredContent, fromHandler);
+          // MCP carries a list as JSON text; the server keeps `structuredContent` for objects.
+          assert.deepEqual(decodeMeasures(called.content?.[0]?.text ?? ""), fromHandler);
         }).pipe(Effect.provide(layerHost));
       }),
     ).pipe(Effect.provide(layerTest)),
