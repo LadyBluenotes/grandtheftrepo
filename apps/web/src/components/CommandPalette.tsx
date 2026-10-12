@@ -74,6 +74,7 @@ import {
   PaletteIcon,
   RotateCcwIcon,
   SettingsIcon,
+  SquareKanbanIcon,
   SquarePenIcon,
   SunIcon,
   TextSearchIcon,
@@ -240,6 +241,7 @@ import {
 import type { Project } from "../types";
 import { PullRequestGlyph } from "~/components/pullRequest/pullRequestIcons";
 import { readPullRequestListPreferences } from "~/components/pullRequest/pullRequestListPreferences";
+import { kanbanSupportedAtom } from "~/plugins/kanban/state";
 
 const EMPTY_BROWSE_ENTRIES: FilesystemBrowseResult["entries"] = [];
 
@@ -1794,6 +1796,7 @@ function OpenCommandPaletteDialog(props: {
     });
   }, [clearOpenIntent, browseNavigation, openIntent, projectThreadItems, pushPaletteView]);
 
+  const kanbanSupported = useAtomValue(kanbanSupportedAtom);
   const actionItems: Array<CommandPaletteActionItem | CommandPaletteSubmenuItem> = [];
 
   if (projects.length > 0) {
@@ -2158,6 +2161,19 @@ function OpenCommandPaletteDialog(props: {
       icon: <PullRequestGlyph.pullRequest className={ITEM_ICON_CLASS} />,
       run: async () => {
         await navigate({ to: "/pull-requests", search: readPullRequestListPreferences() });
+      },
+    });
+  }
+
+  if (kanbanSupported) {
+    actionItems.push({
+      kind: "action",
+      value: "action:board",
+      searchTerms: ["board", "kanban", "issues", "tickets", "tasks", "decisions"],
+      title: "Open board",
+      icon: <SquareKanbanIcon className={ITEM_ICON_CLASS} />,
+      run: async () => {
+        await navigate({ to: "/board", search: {} });
       },
     });
   }

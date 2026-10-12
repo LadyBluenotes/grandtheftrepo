@@ -1,6 +1,6 @@
 import {
   ORCHESTRATION_V2_WS_METHODS,
-  PLUGIN_WS_METHODS,
+  PLUGIN_RPC_SUBSYSTEMS,
   WS_METHODS,
   type WsRpcGroup,
 } from "@t3tools/contracts";
@@ -213,8 +213,7 @@ const RPC_AGGREGATES = {
   [WS_METHODS.subscribeServerLifecycle]: "server",
   [WS_METHODS.subscribeAuthAccess]: "auth",
   [WS_METHODS.subscribeBackgroundPolicy]: "server",
-  [PLUGIN_WS_METHODS.pluginsList]: "plugins",
-  [PLUGIN_WS_METHODS.pluginsSetEnabled]: "plugins",
+  ...PLUGIN_RPC_SUBSYSTEMS,
 } as const satisfies Readonly<Record<WsRpcMethod, string>>;
 
 const RPC_SPAN_PREFIX = "ws.rpc";

@@ -10,6 +10,8 @@ import * as Schema from "effect/Schema";
 import * as ServerConfig from "../config.ts";
 import type { ServerPlugin } from "./Plugin.ts";
 import { type PluginRequirements, registry } from "./registry.ts";
+import type { toolkitRegistration } from "../mcp/McpHttpServer.ts";
+import * as KanbanHandlers from "./kanban/handlers.ts";
 
 /** `plugins.json` under the state directory: plugin id to saved choice. Absent means enabled. */
 const EnabledState = Schema.Record(Schema.String, Schema.Boolean);
@@ -142,10 +144,12 @@ export const layerAll = Layer.unwrap(mergeActive((plugin) => plugin.layer)).pipe
 );
 
 /** Every active plugin's MCP tools, for the `/mcp` server layer. */
-export const layerMcp = Layer.unwrap(mergeActive((plugin) => plugin.mcp));
+export const layerMcp = (register: typeof toolkitRegistration) =>
+  Layer.unwrap(mergeActive((plugin) => plugin.mcp?.(register)));
 
 /** Spread into the WebSocket handlers; the host service comes from the server's layer chain. */
 export const handlers = {
+  ...KanbanHandlers.handlers,
   [PLUGIN_WS_METHODS.pluginsList]: () =>
     Effect.gen(function* () {
       return yield* (yield* PluginHost).statuses;
