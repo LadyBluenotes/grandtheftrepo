@@ -87,7 +87,7 @@ const KanbanTicketSpecifyTool = Tool.make("kanban_ticket_specify", {
 })
   .annotate(Tool.Title, "Draft or check an issue's spec")
   .annotate(Tool.Readonly, false)
-  .annotate(Tool.Destructive, false)
+  .annotate(Tool.Destructive, true)
   .annotate(Tool.Idempotent, false)
   .annotate(Tool.OpenWorld, false);
 

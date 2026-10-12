@@ -30,7 +30,7 @@ export type SpecCheck =
 const HEADING = /^ {0,3}(#{1,6})(?:[ \t]+(.*?))?[ \t]*$/;
 /** A top-level item starts with at most one space; anything indented further continues one. */
 const LIST_ITEM = /^ ?(?:[-*+]|\d{1,9}[.)])[ \t]+\S/;
-const CHECKLIST_ITEM = /^ ?[-*+][ \t]+\[ \][ \t]+(\S.*?)[ \t]*$/;
+const CHECKLIST_ITEM = /^ ?-[ \t]+\[ \][ \t]+(\S.*?)[ \t]*$/;
 const CONTINUATION = /^(?: {2,}|\t)\S/;
 
 const refuse = (reason: string): SpecCheck => ({ valid: false, reason });

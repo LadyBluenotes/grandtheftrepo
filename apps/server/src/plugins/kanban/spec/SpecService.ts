@@ -44,6 +44,12 @@ const ENDED = new Set<OrchestrationV2Run["status"]>([
  * the description as written, or starts a drafting thread in plan mode on routing's cheap tier;
  * `finish`, called by the reactor when that thread's run ends, validates what it wrote. A valid
  * spec admits the issue with its Acceptance items as criteria; a malformed one only records why.
+ *
+ * The attempt is stored, with its outcome, before the issue is admitted: admitting renames the
+ * issue file, which no SQL transaction can cover, and a card admitted without an attempt would
+ * have nothing to show for it. A crash between the two leaves a `valid` attempt for a card still
+ * in Triage or Inbox. A person recovers it by calling `specify` again: the "already admitted"
+ * refusal only applies once the card has left those columns.
  */
 export class SpecService extends Context.Service<
   SpecService,
@@ -174,26 +180,20 @@ const make = Effect.gen(function* () {
   ) {
     const check = validateSpec(issue.description);
     const createdAt = yield* nowIso;
-    // The row and the admission land together: an admission that fails leaves no valid attempt.
-    return yield* sql
-      .withTransaction(
-        Effect.gen(function* () {
-          const attempt = yield* insert({
-            projectId,
-            issueId: issue.id,
-            source: "existing",
-            childThreadId: null,
-            status: check.valid ? "valid" : "malformed",
-            text: issue.description,
-            reason: check.valid ? null : check.reason,
-            createdAt,
-            completedAt: createdAt,
-          });
-          if (check.valid) yield* store.admit(projectId, issue.id, "spec", check.acceptance);
-          return attempt;
-        }),
-      )
-      .pipe(Effect.catchTags({ SqlError: io }));
+    // The attempt first, then the issue file; see the order note on `SpecService`.
+    const attempt = yield* insert({
+      projectId,
+      issueId: issue.id,
+      source: "existing",
+      childThreadId: null,
+      status: check.valid ? "valid" : "malformed",
+      text: issue.description,
+      reason: check.valid ? null : check.reason,
+      createdAt,
+      completedAt: createdAt,
+    }).pipe(Effect.catchTags({ SqlError: io }));
+    if (check.valid) yield* store.admit(projectId, issue.id, "spec", check.acceptance);
+    return attempt;
   });
 
   const draft = Effect.fn("SpecService.draft")(function* (
@@ -346,14 +346,17 @@ const make = Effect.gen(function* () {
         reason: "The drafting run finished without a message.",
       });
     const check = validateSpec(text);
-    if (check.valid)
-      yield* store.admit(attempt.project_id, attempt.issue_id, "spec", check.acceptance);
+    // The attempt first, then the issue file; see the order note on `SpecService`. The reactor runs
+    // this inside the transaction that holds its cursor, so an admission that fails rolls the
+    // attempt back to running and the event is retried.
     yield* close({
       id: attempt.id,
       status: check.valid ? "valid" : "malformed",
       text,
       reason: check.valid ? null : check.reason,
     });
+    if (check.valid)
+      yield* store.admit(attempt.project_id, attempt.issue_id, "spec", check.acceptance);
   });
 
   return SpecService.of({ specify, latest, finish });

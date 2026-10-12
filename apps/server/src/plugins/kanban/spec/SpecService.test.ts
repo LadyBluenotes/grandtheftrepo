@@ -234,9 +234,25 @@ const runUpdated = (
 const start = Effect.gen(function* () {
   const { sql } = yield* PluginDatabase.open({ id: "kanban", filename: ":memory:", migrations });
   const projections = yield* ProjectionStore.ProjectionStoreV2;
+  // The real store, except that `admit` can be made to fail, as a rename that cannot complete would.
+  let admitFails = false;
+  const breakableStore = Layer.effect(
+    KanbanStore.KanbanStore,
+    Effect.map(KanbanStore.KanbanStore, (real) =>
+      KanbanStore.KanbanStore.of({
+        ...real,
+        admit: (...args) =>
+          admitFails
+            ? Effect.fail(
+                new KanbanError({ code: "io", message: "The issue file could not be written." }),
+              )
+            : real.admit(...args),
+      }),
+    ),
+  ).pipe(Layer.provide(KanbanStore.layer));
   const services = yield* Layer.build(
     SpecService.layer.pipe(
-      Layer.provideMerge(Layer.merge(KanbanStore.layer, StopGate.layer)),
+      Layer.provideMerge(Layer.merge(breakableStore, StopGate.layer)),
       Layer.provide(
         Layer.mergeAll(
           Layer.succeed(SqlClient.SqlClient, sql),
@@ -321,7 +337,11 @@ const start = Effect.gen(function* () {
       return yield* fs.readFileString(path.join(directory, "issues", `${id}.md`));
     });
 
-  return { spec, store, gate, launched, routed, specify, react, file, fileText };
+  const failAdmit = (fails: boolean) => {
+    admitFails = fails;
+  };
+
+  return { spec, store, gate, launched, routed, specify, react, file, fileText, failAdmit };
 });
 
 const refusal = <A>(effect: Effect.Effect<A, KanbanError>) =>
@@ -480,6 +500,33 @@ describe("SpecService", () => {
         assert.lengthOf(routed, 0);
       }),
     ).pipe(Effect.provide(layerTest)),
+  );
+
+  it.effect(
+    "useExisting stores the valid attempt before admitting, and specify again recovers",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const { spec, store, specify, file, failAdmit } = yield* start;
+          const { id } = yield* file("Login loops", validSpec);
+
+          // The admission cannot finish, as after a crash between the attempt and the issue file.
+          failAdmit(true);
+          const error = yield* refusal(specify({ projectId, id, useExisting: true }));
+          assert.strictEqual(error.code, "io");
+          const stored = yield* spec.latest({ projectId, id });
+          assert.strictEqual(stored?.status, "valid");
+          assert.strictEqual(stored?.source, "existing");
+          assert.strictEqual((yield* store.getIssue({ projectId, id })).status, "triage");
+
+          // The card is still in Triage, so the "already admitted" refusal does not apply.
+          failAdmit(false);
+          const again = yield* specify({ projectId, id, useExisting: true });
+          assert.strictEqual(again.status, "valid");
+          assert.notStrictEqual(again.id, stored?.id);
+          assert.strictEqual((yield* store.getIssue({ projectId, id })).status, "todo");
+        }),
+      ).pipe(Effect.provide(layerTest)),
   );
 
   it.effect("no model for the cheap tier: refused, nothing launched or stored", () =>

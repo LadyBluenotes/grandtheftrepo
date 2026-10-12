@@ -115,6 +115,15 @@ describe("validateSpec", () => {
       reason(spec(goal, approach, "## Acceptance\n- [x] Already done.")),
       'Acceptance must be a checklist of "- [ ]" items.',
     );
+    // Only a dash starts an item, as the format and the reason both say.
+    assert.strictEqual(
+      reason(spec(goal, approach, "## Acceptance\n* [ ] Starred.\n* [ ] Also starred.")),
+      'Acceptance must be a checklist of "- [ ]" items.',
+    );
+    assert.strictEqual(
+      reason(spec(goal, approach, "## Acceptance\n+ [ ] Plussed.")),
+      'Acceptance must be a checklist of "- [ ]" items.',
+    );
     assert.strictEqual(
       reason(spec(goal, approach, "## Acceptance\n")),
       'Acceptance has no items; it needs at least one "- [ ]" item.',
