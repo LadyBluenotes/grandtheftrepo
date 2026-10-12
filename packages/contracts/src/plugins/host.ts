@@ -17,6 +17,7 @@ import { TELEMETRY_RPC_SCOPES, TELEMETRY_RPC_SUBSYSTEMS, TELEMETRY_RPCS } from "
 
 export * from "./kanban.ts";
 export * from "./learning.ts";
+export * from "./routing.ts";
 export * from "./supervisor.ts";
 export * from "./telemetry.ts";
 

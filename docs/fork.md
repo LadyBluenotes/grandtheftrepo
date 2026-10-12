@@ -75,6 +75,14 @@ them half-evaluated. The host hands `toolkitRegistration` to `ServerPlugin.mcp` 
   it uses every host seam once (database, reactor, sweep, RPC, MCP tool, settings panel) and is
   the one to copy. Server: `apps/server/src/plugins/telemetry/`. Contracts:
   `packages/contracts/src/plugins/telemetry.ts`. Web: `apps/web/src/plugins/telemetry/`.
+- **routing**: which model does which work. Three tiers, `cheap`, `standard` and `strong`, each map
+  to a provider instance and a model, set for the environment and overridable per project, in the
+  plugin's own database. A tier with nothing saved falls back to the built-in: one instance's model
+  list, first model `strong`, last `cheap`. Agents read it with the `routing_tiers` MCP tool. The
+  panel on the Plugins page is built but not connected: `routing.tiers.get` and `.set` are plain
+  methods in `handlers.ts` until the plugin RPC gateway (#57) carries them.
+  Server: `apps/server/src/plugins/routing/`. Contracts: `packages/contracts/src/plugins/routing.ts`.
+  Web: `apps/web/src/plugins/routing/`.
 - **learning**: a record of corrections, visible instances of work going wrong, taken from
   events the server already emits: failed or interrupted provider turns, pull request wakes
   while changes are requested, and threads reopened after settlement. Agents read and add

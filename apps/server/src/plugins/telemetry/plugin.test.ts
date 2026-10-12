@@ -16,6 +16,8 @@ import * as McpSessionRegistry from "../../mcp/McpSessionRegistry.ts";
 import * as ThreadManagementService from "../../orchestration-v2/ThreadManagementService.ts";
 import * as SqlitePersistence from "../../persistence/Sqlite.ts";
 import * as ProjectService from "../../project/ProjectService.ts";
+import * as ProviderRegistry from "../../provider/ProviderRegistry.ts";
+import * as ServerSettings from "../../serverSettings.ts";
 import * as PluginHost from "../PluginHost.ts";
 import * as PluginSupervisor from "../PluginSupervisor.ts";
 import { registry } from "../registry.ts";
@@ -69,6 +71,9 @@ const layerHost = PluginHost.layerAll.pipe(
       SqlitePersistence.layerMemory,
       Layer.mock(ThreadManagementService.ThreadManagementService)({}),
       Layer.mock(ProjectService.ProjectService)({}),
+      // Inactive routing still types its catalog and settings reads through `layerAll`.
+      Layer.mock(ProviderRegistry.ProviderRegistry)({}),
+      ServerSettings.layerTest(),
     ),
   ),
 );
@@ -79,6 +84,8 @@ const mcp = Effect.gen(function* () {
     // Inactive here, but the kanban tools' static requirements still type through `layerMcp`.
     Layer.provide(Layer.mock(ThreadManagementService.ThreadManagementService)({})),
     Layer.provide(Layer.mock(ProjectService.ProjectService)({})),
+    Layer.provide(Layer.mock(ProviderRegistry.ProviderRegistry)({})),
+    Layer.provide(ServerSettings.layerTest()),
     Layer.provideMerge(McpHttpServer.layerMcpTransport),
     Layer.provide(
       Layer.mock(McpSessionRegistry.McpSessionRegistry)({

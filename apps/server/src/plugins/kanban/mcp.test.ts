@@ -15,6 +15,8 @@ import type * as McpInvocationContext from "../../mcp/McpInvocationContext.ts";
 import * as McpSessionRegistry from "../../mcp/McpSessionRegistry.ts";
 import * as ThreadManagementService from "../../orchestration-v2/ThreadManagementService.ts";
 import * as ProjectService from "../../project/ProjectService.ts";
+import * as ProviderRegistry from "../../provider/ProviderRegistry.ts";
+import * as ServerSettings from "../../serverSettings.ts";
 import * as PluginHost from "../PluginHost.ts";
 import * as PluginSupervisor from "../PluginSupervisor.ts";
 import * as KanbanStore from "./KanbanStore.ts";
@@ -91,6 +93,9 @@ it.effect("registers kanban tools through the plugin host and files an issue ove
               Effect.succeed(id === projectId ? Option.some(project) : Option.none()),
           }),
         ),
+        // Every registered plugin's requirements are in the MCP layer's type; kanban never uses these.
+        Layer.provide(Layer.mock(ProviderRegistry.ProviderRegistry)({})),
+        Layer.provide(ServerSettings.layerTest()),
       );
       yield* HttpRouter.serve(layerServer, { disableListenLog: true, disableLogger: true }).pipe(
         Layer.build,
