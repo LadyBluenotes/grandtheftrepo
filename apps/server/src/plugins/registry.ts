@@ -1,7 +1,10 @@
 import type { ServerPlugin } from "./Plugin.ts";
 import * as Kanban from "./kanban/index.ts";
+import * as Telemetry from "./telemetry/index.ts";
 
-const plugins = [Kanban.plugin] as const satisfies ReadonlyArray<ServerPlugin<unknown>>;
+const plugins = [Kanban.plugin, Telemetry.plugin] as const satisfies ReadonlyArray<
+  ServerPlugin<unknown>
+>;
 
 type RequirementsOf<P> = P extends ServerPlugin<infer R> ? R : never;
 /** Services the registered plugins need from the server; the layer chain provides them. */

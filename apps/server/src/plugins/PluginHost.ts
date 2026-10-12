@@ -16,6 +16,7 @@ import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as ServerConfig from "../config.ts";
+import * as RuntimeLayer from "../orchestration-v2/runtimeLayer.ts";
 import * as PluginDatabase from "./PluginDatabase.ts";
 import * as PluginSupervisor from "./PluginSupervisor.ts";
 import type { ServerPlugin } from "./Plugin.ts";
@@ -23,6 +24,7 @@ import { type PluginRequirements, registry } from "./registry.ts";
 import type { toolkitRegistration } from "../mcp/McpHttpServer.ts";
 import * as KanbanHandlers from "./kanban/handlers.ts";
 import * as SupervisorToolkit from "./supervisorToolkit.ts";
+import * as TelemetryHandlers from "./telemetry/handlers.ts";
 
 /** `plugins.json` under the state directory: plugin id to saved choice. Absent means enabled. */
 const EnabledState = Schema.Record(Schema.String, Schema.Boolean);
@@ -189,10 +191,10 @@ export const make = (plugins: ReadonlyArray<Registered>) =>
 
 const layer = Layer.effect(PluginHost, make(registry));
 
-const mergeActive = (
+const mergeActive = <R>(
   pick: (
     plugin: ServerPlugin<PluginRequirements>,
-  ) => Layer.Layer<never, never, PluginRequirements | SqlClient.SqlClient> | undefined,
+  ) => Layer.Layer<never, never, R | SqlClient.SqlClient> | undefined,
 ) =>
   Effect.gen(function* () {
     const host = yield* PluginHost;
@@ -211,7 +213,7 @@ const mergeActive = (
           ),
         ];
       })
-      .reduce<Layer.Layer<never, never, PluginRequirements>>(
+      .reduce<Layer.Layer<never, never, Exclude<R, SqlClient.SqlClient>>>(
         (merged, next) => Layer.merge(merged, next),
         Layer.empty,
       );
@@ -220,6 +222,9 @@ const mergeActive = (
 /** The host, its supervisor and every active plugin's services, for the server's layer chain. */
 export const layerAll = Layer.unwrap(mergeActive((plugin) => plugin.layer)).pipe(
   Layer.provideMerge(PluginSupervisor.layer(registry.map((plugin) => plugin.id))),
+  // The orchestrator's own sink object: a build makes one instance of a layer, so the reactors
+  // share its live stream instead of listening on a second sink nothing publishes to.
+  Layer.provide(RuntimeLayer.layerEventSink),
   Layer.provideMerge(layer),
 );
 
@@ -233,6 +238,7 @@ export const layerMcp = (register: typeof toolkitRegistration) =>
 /** Spread into the WebSocket handlers; the host services come from the server's layer chain. */
 export const handlers = {
   ...KanbanHandlers.handlers,
+  ...TelemetryHandlers.handlers,
   // The host's own file answered at boot, so a read failing afterwards is a defect, not a reply.
   [SUPERVISOR_WS_METHODS.status]: () =>
     Effect.flatMap(PluginSupervisor.PluginSupervisor, (supervisor) => supervisor.status).pipe(
