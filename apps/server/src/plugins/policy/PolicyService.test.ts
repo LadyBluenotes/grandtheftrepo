@@ -398,7 +398,7 @@ it.layer(layerTest)("PolicyService", (it) => {
           providerInstances: {
             ...instance("claudeAgent", "CLAUDE_CONFIG_DIR", "~/instance-claude"),
             ...instance("codex", "CODEX_HOME", "~/instance-codex"),
-            ...instance("copilot", "COPILOT_HOME", path.join(home, "instance-copilot")),
+            ...instance("copilot", "COPILOT_HOME", "~/instance-copilot"),
           },
         }),
         {

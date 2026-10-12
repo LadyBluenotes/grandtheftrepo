@@ -5,6 +5,7 @@ import {
   type PolicyAgent,
 } from "@t3tools/contracts";
 import { mergeProviderInstanceEnvironment } from "@t3tools/provider-core/server/instanceEnvironment";
+import { expandHomePath } from "@t3tools/provider-core/server/pathExpansion";
 import { writeFileStringAtomically } from "@t3tools/shared/atomicWrite";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as Effect from "effect/Effect";
@@ -57,8 +58,11 @@ export const targets = Effect.fn("InstructionFiles.targets")(function* () {
       : codex,
   );
 
-  const copilotHome =
-    (yield* environmentOf("copilot")).COPILOT_HOME?.trim() || path.join(home, ".copilot");
+  // The merge expands only CODEX_HOME and CLAUDE_CONFIG_DIR; a `~` here is expanded as the usage reader does.
+  const copilotHome = expandHomePath(
+    (yield* environmentOf("copilot")).COPILOT_HOME?.trim() || path.join(home, ".copilot"),
+    home,
+  );
   return {
     claude: path.join(claudeDir, "CLAUDE.md"),
     codex: path.join(codexHome.sharedHomePath, "AGENTS.md"),
