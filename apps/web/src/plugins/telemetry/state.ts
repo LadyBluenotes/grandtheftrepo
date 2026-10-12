@@ -8,6 +8,8 @@ import { useEnvironmentQuery } from "~/state/query";
 const supervisorStatus = createEnvironmentRpcQueryAtomFamily(connectionAtomRuntime, {
   label: "environment-data:plugins:supervisor",
   tag: SUPERVISOR_WS_METHODS.status,
+  // The supervisor ticks every 60 seconds by default; "Last tick" follows it while the page is open.
+  refreshIntervalMs: 60_000,
 });
 
 /** The primary environment's supervisor, as `usePluginStatuses` reads its plugins; null while loading or failed. */

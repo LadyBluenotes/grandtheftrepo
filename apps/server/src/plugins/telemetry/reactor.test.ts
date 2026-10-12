@@ -92,7 +92,10 @@ const rows = (sql: SqlClient.SqlClient) =>
   sql<Row>`SELECT provider_turn_id, thread_id, input_tokens, cached_input_tokens, output_tokens,
     reasoning_output_tokens, usage_updated_at FROM telemetry_turn_usage`;
 
-/** The plugin's database with its real migrations, and one reactor run over it until it is caught up. */
+/**
+ * The plugin's database with its real migrations. Each `drain` starts a new reactor over that
+ * database and the shared event sink and waits until it is caught up, so a second one is a restart.
+ */
 const react = Effect.gen(function* () {
   const { sql } = yield* PluginDatabase.open({ id: "telemetry", filename: ":memory:", migrations });
   const drain = Effect.scoped(
@@ -150,16 +153,34 @@ it.effect("writes nothing without tokenUsage and NULL for a counter the provider
   ).pipe(Effect.provide(layerSink)),
 );
 
-it.effect("a rebuild over the same database replays nothing it already has", () =>
+it.effect("a restarted reactor over the same database replays nothing it already handled", () =>
   Effect.scoped(
     Effect.gen(function* () {
       const { sql, drain } = yield* react;
       yield* write(full, { ...full, outputTokens: 200 });
       yield* drain;
-      const before = yield* rows(sql);
-      assert.strictEqual(before.length, 1);
+      assert.strictEqual((yield* rows(sql)).length, 1);
+
+      // An upsert hides a replay, so empty the table: only a replayed event could refill it.
+      yield* sql`DELETE FROM telemetry_turn_usage`;
       yield* drain;
-      assert.deepEqual(yield* rows(sql), before);
+      assert.deepEqual(yield* rows(sql), []);
+    }),
+  ).pipe(Effect.provide(layerSink)),
+);
+
+it.effect("an older report for a turn never replaces a newer one", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const { sql, drain } = yield* react;
+      const newer = { ...full, inputTokens: 5000, updatedAt: "2026-10-12T00:00:01.000Z" };
+      yield* write(newer);
+      yield* drain;
+      yield* write(full);
+      yield* drain;
+      const [row] = yield* rows(sql);
+      assert.strictEqual(row?.input_tokens, 5000);
+      assert.strictEqual(row?.usage_updated_at, newer.updatedAt);
     }),
   ).pipe(Effect.provide(layerSink)),
 );

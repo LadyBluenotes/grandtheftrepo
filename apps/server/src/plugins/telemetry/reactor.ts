@@ -7,6 +7,8 @@ import type * as PluginReactor from "../PluginReactor.ts";
 /**
  * Keeps the provider's latest usage report per provider turn. A turn reports
  * several times, so the row is replaced each time and a replay changes nothing.
+ * A report older than the stored one is ignored, so a retried event cannot
+ * move a turn backwards.
  */
 export const handlers: PluginReactor.Handlers<SqlError.SqlError> = {
   "provider-turn.updated": ({ event }) =>
@@ -31,6 +33,7 @@ export const handlers: PluginReactor.Handlers<SqlError.SqlError> = {
           reasoning_output_tokens = excluded.reasoning_output_tokens,
           usage_updated_at = excluded.usage_updated_at,
           recorded_at = excluded.recorded_at
+        WHERE excluded.usage_updated_at >= telemetry_turn_usage.usage_updated_at
       `;
     }),
 };

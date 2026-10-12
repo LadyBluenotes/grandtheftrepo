@@ -7,7 +7,7 @@ import { lastHeartbeat, useSupervisorStatus } from "./state";
 /** Under the plugin's row on the Plugins page: what the host says about it, and when its sweep last ran. */
 export function TelemetrySettingsPanel({ status }: { readonly status: PluginStatus }) {
   const finishedAt = lastHeartbeat(useSupervisorStatus());
-  useRelativeTimeTick();
+  useRelativeTimeTick(60_000);
   return (
     <>
       <SettingsRow title="Enabled" status={status.enabled ? "Yes" : "No"} />
