@@ -102,7 +102,8 @@ export const markPromoted = (itemId: number, ownerKind: LearningOwnerKind, now: 
 /**
  * Up to `limit` pending promotions for `ownerKinds` whose time has come and whose item still wants
  * them: a candidate with the same owner kind. One a person closed or moved to another owner kind
- * waits. The earliest due go first; one never attempted is due from the start.
+ * waits. The earliest due go first; one never attempted is due from when it was created, so a
+ * backlog of new records cannot keep a retry waiting.
  */
 export const due = (
   now: DateTime.Utc,
@@ -116,7 +117,7 @@ export const due = (
       WHERE p.state = 'pending' AND p.owner_kind IN ${sql.in(ownerKinds)}
         AND (p.next_attempt_at IS NULL OR p.next_attempt_at <= ${DateTime.formatIso(now)})
         AND i.state = 'candidate' AND i.owner_kind = p.owner_kind
-      ORDER BY p.next_attempt_at, p.id
+      ORDER BY COALESCE(p.next_attempt_at, p.created_at), p.id
       LIMIT ${limit}`,
   ).pipe(Effect.map((rows) => rows.map(toPromotion)));
 
