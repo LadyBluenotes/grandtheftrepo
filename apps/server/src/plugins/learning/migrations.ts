@@ -74,7 +74,17 @@ const learningItems: PluginMigration[2] = Effect.gen(function* () {
   )`;
 });
 
+// The promote sweep reads candidates by state and owner kind, and due promotions by state, owner
+// kind and time, one batch at a time.
+const promoteIndexes: PluginMigration[2] = Effect.gen(function* () {
+  const sql = yield* SqlClient.SqlClient;
+  yield* sql`CREATE INDEX learning_items_state_owner ON learning_items (state, owner_kind)`;
+  yield* sql`CREATE INDEX learning_promotions_due
+    ON learning_promotions (state, owner_kind, next_attempt_at)`;
+});
+
 export const migrations = [
   [1, "Corrections", corrections],
   [2, "LearningItems", learningItems],
+  [3, "PromoteIndexes", promoteIndexes],
 ] as const satisfies ReadonlyArray<PluginMigration>;

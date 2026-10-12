@@ -114,6 +114,17 @@ it.effect("lists, reads and disposes items through the gateway, refusing promote
           method: LEARNING_METHODS.itemsSetDisposition.method,
           input,
         }).pipe(Effect.provide(layer));
+      // Neither an owner kind nor a state is refused, and records no person's disposition.
+      const empty = yield* dispose({ id: item.id }).pipe(
+        Effect.andThen(Effect.die("expected a failure")),
+        Effect.flip,
+      );
+      if (empty._tag !== "PluginHostError") throw new Error("expected the input to be refused");
+      assert.include(empty.message, "A disposition needs an owner kind, a state or both.");
+      assert.deepInclude(yield* items.get(item.id).pipe(Effect.map((d) => d.item)), {
+        dispositionBy: "rule",
+        updatedAt: item.updatedAt,
+      });
       const closed = yield* dispose({ id: item.id, state: "closed" }).pipe(
         Effect.flatMap(decodeItem),
       );

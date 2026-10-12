@@ -8,7 +8,9 @@ import {
   ThreadId,
 } from "@t3tools/contracts";
 import * as Context from "effect/Context";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Ref from "effect/Ref";
 import * as SqlClient from "effect/sql/SqlClient";
@@ -78,23 +80,30 @@ const setup = Effect.gen(function* () {
   };
 });
 
-/** A promoter for `ownerKind` that fails while `failing` holds and counts its calls. */
-const fakePromoter = (ownerKind: LearningOwnerKind, failing: boolean) =>
+/**
+ * A promoter for `ownerKind` that records the item and key of each call, as a real one would write
+ * them, then answers with `then` for that call, numbered from one.
+ */
+const fakePromoter = (
+  ownerKind: LearningOwnerKind,
+  then: (call: number) => Effect.Effect<void, Promoter.PromotionError> = () => Effect.void,
+) =>
   Effect.gen(function* () {
-    const calls = yield* Ref.make<ReadonlyArray<LearningItemDetail>>([]);
+    const calls = yield* Ref.make<
+      ReadonlyArray<{ readonly item: LearningItemDetail; readonly key: Promoter.PromotionKey }>
+    >([]);
     const promoter: Promoter.Promoter = {
       ownerKind,
-      promote: (item) =>
-        Ref.update(calls, (all) => [...all, item]).pipe(
-          Effect.andThen(
-            failing
-              ? Effect.fail(new Promoter.PromotionError({ ownerKind, message: "Page is locked." }))
-              : Effect.void,
-          ),
+      promote: (item, key) =>
+        Ref.updateAndGet(calls, (all) => [...all, { item, key }]).pipe(
+          Effect.flatMap((all) => then(all.length)),
         ),
     };
     return { promoter, calls };
   });
+
+const pageLocked = () =>
+  Effect.fail(new Promoter.PromotionError({ ownerKind: "policy", message: "Page is locked." }));
 
 it.effect(
   "a convention verdict becomes a candidate item for project knowledge and one record",
@@ -127,16 +136,29 @@ it.effect(
             last_error: null,
           },
         ]);
-        assert.deepEqual((yield* learning.tick).promote, { examined: 1, acted: 0, flags: 0 });
+        // A candidate whose record is pending is not read again.
+        assert.deepEqual((yield* learning.tick).promote, { examined: 0, acted: 0, flags: 0 });
         assert.strictEqual((yield* learning.promotions)[0]?.attempts, 0);
 
-        const { promoter, calls } = yield* fakePromoter("project_knowledge", false);
+        const { promoter, calls } = yield* fakePromoter("project_knowledge");
         yield* learning.promoters.register(promoter);
-        assert.deepEqual((yield* learning.tick).promote, { examined: 2, acted: 1, flags: 0 });
+        assert.deepEqual((yield* learning.tick).promote, { examined: 1, acted: 1, flags: 0 });
         const handed = yield* Ref.get(calls);
         assert.deepEqual(
-          handed.map((detail) => detail.evidence.map((e) => [e.evidenceKey, e.summary])),
+          handed.map(({ item }) => item.evidence.map((e) => [e.evidenceKey, e.summary])),
           [[[`correction:${first.id}`, "Reviewer found a problem."]]],
+        );
+        const [record] = (yield* learning.items.get(item!.id)).promotions;
+        assert.deepEqual(
+          handed.map(({ key }) => key),
+          [
+            {
+              promotionId: record!.id,
+              itemId: item!.id,
+              failureMode: "convention",
+              ownerKind: "project_knowledge",
+            },
+          ],
         );
         assert.strictEqual((yield* learning.items.get(item!.id)).item.state, "promoted");
         assert.strictEqual((yield* learning.promotions)[0]?.state, "delivered");
@@ -235,7 +257,7 @@ it.effect("a failing promoter is retried after six hours and gives up after five
   Effect.scoped(
     Effect.gen(function* () {
       const learning = yield* setup;
-      const { promoter, calls } = yield* fakePromoter("policy", true);
+      const { promoter, calls } = yield* fakePromoter("policy", pageLocked);
       yield* learning.promoters.register(promoter);
       yield* learning.correction("scope_drift");
       const callCount = Effect.map(Ref.get(calls), (all) => all.length);
@@ -322,7 +344,7 @@ it.effect("a person's disposition survives later sweeps; promoted is never set b
       });
 
       // Closed, the item's pending record is not attempted, even with a promoter there.
-      const { promoter, calls } = yield* fakePromoter("policy", false);
+      const { promoter, calls } = yield* fakePromoter("policy");
       yield* learning.promoters.register(promoter);
       const closed = yield* learning.items.setDisposition({ id: ruled!.id, state: "closed" });
       assert.strictEqual(closed.state, "closed");
@@ -379,15 +401,111 @@ it.effect("a dry run counts and writes nothing", () =>
 
       // With a record waiting and a promoter there, a dry run counts the attempt and makes none.
       yield* learning.promote.run({ dryRun: false });
-      const { promoter, calls } = yield* fakePromoter("policy", false);
+      const { promoter, calls } = yield* fakePromoter("policy");
       yield* learning.promoters.register(promoter);
       assert.deepEqual(yield* learning.promote.run({ dryRun: true }), {
-        examined: 2,
+        examined: 1,
         acted: 1,
         flags: 0,
       });
       assert.strictEqual((yield* Ref.get(calls)).length, 0);
       assert.deepInclude((yield* learning.promotions)[0], { state: "pending", attempts: 0 });
+    }),
+  ),
+);
+
+it.effect("an interrupted handover is offered again with the same key", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const learning = yield* setup;
+      const wrote = yield* Deferred.make<void>();
+      // The first call writes and is interrupted before it returns, as the supervisor's timeout does.
+      const { promoter, calls } = yield* fakePromoter("policy", (call) =>
+        call === 1
+          ? Deferred.succeed(wrote, undefined).pipe(Effect.andThen(Effect.never))
+          : Effect.void,
+      );
+      yield* learning.promoters.register(promoter);
+      yield* learning.correction("scope_drift");
+      yield* learning.classify.run({ dryRun: false });
+
+      const first = yield* Effect.forkChild(learning.promote.run({ dryRun: false }));
+      yield* Deferred.await(wrote);
+      yield* Fiber.interrupt(first);
+      assert.deepInclude((yield* learning.promotions)[0], { state: "pending", attempts: 0 });
+
+      yield* learning.tick;
+      const keys = (yield* Ref.get(calls)).map(({ key }) => key);
+      assert.strictEqual(keys.length, 2);
+      assert.deepEqual(keys[1], keys[0]);
+      const [item] = yield* learning.items.list({ projectId });
+      assert.strictEqual(
+        keys[0]?.promotionId,
+        (yield* learning.items.get(item!.id)).promotions[0]?.id,
+      );
+      assert.strictEqual(item?.state, "promoted");
+      assert.strictEqual((yield* learning.promotions)[0]?.state, "delivered");
+    }),
+  ),
+);
+
+it.effect("an item a person moves during its handover stays a candidate for the new owner", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const learning = yield* setup;
+      yield* learning.correction("convention");
+      yield* learning.tick;
+      const [item] = yield* learning.items.list({ projectId });
+      const { promoter } = yield* fakePromoter("project_knowledge", () =>
+        learning.items
+          .setDisposition({ id: item!.id, ownerKind: "policy" })
+          .pipe(Effect.orDie, Effect.asVoid),
+      );
+      yield* learning.promoters.register(promoter);
+
+      yield* learning.tick;
+      assert.deepInclude((yield* learning.items.get(item!.id)).item, {
+        state: "candidate",
+        ownerKind: "policy",
+        dispositionBy: "person",
+      });
+      // The old owner's handover is done; the new owner gets its own record.
+      yield* learning.tick;
+      assert.deepEqual(
+        (yield* learning.promotions).map((p) => [p.owner_kind, p.state]),
+        [
+          ["project_knowledge", "delivered"],
+          ["policy", "pending"],
+        ],
+      );
+    }),
+  ),
+);
+
+it.effect("a tick takes at most one batch of candidates and one of due promotions", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const learning = yield* setup;
+      const total = PromoteSweep.BATCH_SIZE + 1;
+      for (let n = 1; n <= total; n += 1) {
+        const item = yield* learning.items.strengthen(projectId, `mode:${n}`, `key:${n}`, "Again.");
+        yield* learning.items.setDisposition({ id: item.id, ownerKind: "policy" });
+      }
+      const promote = learning.promote.run({ dryRun: false });
+      const batch = { examined: PromoteSweep.BATCH_SIZE, acted: PromoteSweep.BATCH_SIZE, flags: 0 };
+      const rest = { examined: 1, acted: 1, flags: 0 };
+
+      assert.deepEqual(yield* promote, batch);
+      assert.strictEqual((yield* learning.promotions).length, PromoteSweep.BATCH_SIZE);
+      assert.deepEqual(yield* promote, rest);
+      assert.strictEqual((yield* learning.promotions).length, total);
+
+      const { promoter, calls } = yield* fakePromoter("policy");
+      yield* learning.promoters.register(promoter);
+      assert.deepEqual(yield* promote, batch);
+      assert.deepEqual(yield* promote, rest);
+      assert.deepEqual(yield* promote, { examined: 0, acted: 0, flags: 0 });
+      assert.strictEqual((yield* Ref.get(calls)).length, total);
     }),
   ),
 );

@@ -151,15 +151,22 @@ export const LearningItemInput = Schema.Struct({ id: Schema.Int });
 export type LearningItemInput = typeof LearningItemInput.Type;
 
 /**
- * A person's disposition: an owner kind, null to clear it, and `open` or `closed`. An open item is
- * a `candidate` while its owner kind has something to hand over; `candidate` and `promoted`
- * themselves are refused, since the owner kind and delivery set them.
+ * A person's disposition: an owner kind, null to clear it, and `open` or `closed`, at least one of
+ * the two. An open item is a `candidate` while its owner kind has something to hand over;
+ * `candidate` and `promoted` themselves are refused, since the owner kind and delivery set them.
  */
 export const LearningItemsSetDispositionInput = Schema.Struct({
   id: Schema.Int,
   ownerKind: Schema.optional(Schema.NullOr(LearningOwnerKind)),
   state: Schema.optional(LearningItemState),
-});
+}).check(
+  Schema.makeFilter(
+    (input) =>
+      input.ownerKind !== undefined ||
+      input.state !== undefined ||
+      "A disposition needs an owner kind, a state or both.",
+  ),
+);
 export type LearningItemsSetDispositionInput = typeof LearningItemsSetDispositionInput.Type;
 
 /**

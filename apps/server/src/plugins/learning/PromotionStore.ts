@@ -43,24 +43,28 @@ export const forItem = (itemId: number) =>
   ).pipe(Effect.map((rows) => rows.map(toPromotion)));
 
 /**
- * Every candidate item with the state of the promotion for its owner kind, null when it has none.
- * The record is keyed by project, failure mode and owner kind, so a repeat finds the old one.
+ * Up to `limit` candidate items that need a record or were already handed over, with the state of
+ * the promotion for their owner kind: null when there is none, `delivered` when there is. The
+ * record is keyed by project, failure mode and owner kind, so a repeat finds the old one. One
+ * whose record is pending or failed is left out; the record carries it from there.
  */
-export const candidates = Effect.flatMap(
-  SqlClient.SqlClient,
-  (sql) => sql<{
-    readonly id: number;
-    readonly project_id: ProjectId;
-    readonly failure_mode: string;
-    readonly owner_kind: LearningOwnerKind;
-    readonly promotion_state: LearningPromotion["state"] | null;
-  }>`SELECT i.id, i.project_id, i.failure_mode, i.owner_kind, p.state AS promotion_state
-    FROM learning_items i
-    LEFT JOIN learning_promotions p ON p.project_id = i.project_id
-      AND p.failure_mode = i.failure_mode AND p.owner_kind = i.owner_kind
-    WHERE i.state = 'candidate'
-    ORDER BY i.id`,
-);
+export const candidates = (limit: number) =>
+  Effect.flatMap(
+    SqlClient.SqlClient,
+    (sql) => sql<{
+      readonly id: number;
+      readonly project_id: ProjectId;
+      readonly failure_mode: string;
+      readonly owner_kind: LearningOwnerKind;
+      readonly promotion_state: "delivered" | null;
+    }>`SELECT i.id, i.project_id, i.failure_mode, i.owner_kind, p.state AS promotion_state
+      FROM learning_items i
+      LEFT JOIN learning_promotions p ON p.project_id = i.project_id
+        AND p.failure_mode = i.failure_mode AND p.owner_kind = i.owner_kind
+      WHERE i.state = 'candidate' AND (p.state IS NULL OR p.state = 'delivered')
+      ORDER BY i.id
+      LIMIT ${limit}`,
+  );
 
 /** Opens the pending record for a candidate; one that is already there is left alone. */
 export const open = (
@@ -81,31 +85,45 @@ export const open = (
       ON CONFLICT (project_id, failure_mode, owner_kind) DO NOTHING`;
   }).pipe(Effect.asVoid);
 
-/** Marks a candidate whose owner kind was already handed this lesson as promoted. */
-export const markPromoted = (itemId: number, now: DateTime.Utc) =>
+/**
+ * Marks a candidate whose owner kind was handed this lesson as promoted, only while `ownerKind`,
+ * the one the caller saw, is still its owner kind. One a person moved meanwhile stays a candidate
+ * for its new owner kind.
+ */
+export const markPromoted = (itemId: number, ownerKind: LearningOwnerKind, now: DateTime.Utc) =>
   Effect.flatMap(
     SqlClient.SqlClient,
     (
       sql,
     ) => sql`UPDATE learning_items SET state = 'promoted', updated_at = ${DateTime.formatIso(now)}
-      WHERE id = ${itemId} AND state = 'candidate'`,
+      WHERE id = ${itemId} AND state = 'candidate' AND owner_kind = ${ownerKind}`,
   ).pipe(Effect.asVoid);
 
 /**
- * Pending promotions whose time has come and whose item still wants them: a candidate with the
- * same owner kind. One a person closed or moved to another owner kind waits.
+ * Up to `limit` pending promotions for `ownerKinds` whose time has come and whose item still wants
+ * them: a candidate with the same owner kind. One a person closed or moved to another owner kind
+ * waits. The earliest due go first; one never attempted is due from the start.
  */
-export const due = (now: DateTime.Utc) =>
+export const due = (
+  now: DateTime.Utc,
+  ownerKinds: ReadonlyArray<LearningOwnerKind>,
+  limit: number,
+) =>
   Effect.flatMap(
     SqlClient.SqlClient,
     (sql) => sql<Row>`SELECT p.* FROM learning_promotions p
       JOIN learning_items i ON i.id = p.item_id
-      WHERE p.state = 'pending' AND i.state = 'candidate' AND i.owner_kind = p.owner_kind
+      WHERE p.state = 'pending' AND p.owner_kind IN ${sql.in(ownerKinds)}
         AND (p.next_attempt_at IS NULL OR p.next_attempt_at <= ${DateTime.formatIso(now)})
-      ORDER BY p.id`,
+        AND i.state = 'candidate' AND i.owner_kind = p.owner_kind
+      ORDER BY p.next_attempt_at, p.id
+      LIMIT ${limit}`,
   ).pipe(Effect.map((rows) => rows.map(toPromotion)));
 
-/** The promoter took it: the record is delivered and the item promoted, together. */
+/**
+ * The promoter took it: the record is delivered and the item promoted, together, unless a person
+ * moved the item to another owner kind while it was being handed over.
+ */
 export const deliver = (promotion: LearningPromotion, now: DateTime.Utc) =>
   Effect.flatMap(SqlClient.SqlClient, (sql) =>
     sql.withTransaction(
@@ -114,7 +132,7 @@ export const deliver = (promotion: LearningPromotion, now: DateTime.Utc) =>
         yield* sql`UPDATE learning_promotions
           SET state = 'delivered', next_attempt_at = NULL, updated_at = ${at}
           WHERE id = ${promotion.id}`;
-        yield* markPromoted(promotion.itemId, now);
+        yield* markPromoted(promotion.itemId, promotion.ownerKind, now);
       }),
     ),
   );

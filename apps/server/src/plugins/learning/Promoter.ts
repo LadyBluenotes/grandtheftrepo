@@ -11,11 +11,29 @@ export class PromotionError extends Schema.TaggedError<PromotionError>()("Promot
   message: Schema.String,
 }) {}
 
+/** Names one handover. A promotion is offered with the same key on every attempt. */
+export interface PromotionKey {
+  /** The promotion record's id, durable across restarts. */
+  readonly promotionId: number;
+  readonly itemId: number;
+  readonly failureMode: string;
+  readonly ownerKind: LearningOwnerKind;
+}
+
 /** Hands items to one owner kind, such as writing a project knowledge page. */
 export interface Promoter {
   readonly ownerKind: LearningOwnerKind;
-  /** A failure is tried again six hours later, five attempts in all. */
-  readonly promote: (item: LearningItemDetail) => Effect.Effect<void, PromotionError>;
+  /**
+   * Delivery is at least once. The record is marked delivered only after this returns, so a crash,
+   * an interrupt or a failed write after the owner took the item offers the same promotion again
+   * with the same key. A promoter must deduplicate on `key.promotionId`, such as by storing it with
+   * what it wrote and treating a second call as done. A failure is tried again six hours later,
+   * five attempts in all.
+   */
+  readonly promote: (
+    item: LearningItemDetail,
+    key: PromotionKey,
+  ) => Effect.Effect<void, PromotionError>;
 }
 
 /**
@@ -28,6 +46,8 @@ export class PromoterRegistry extends Context.Service<
     /** Fails when that owner kind already has one. */
     readonly register: (promoter: Promoter) => Effect.Effect<void, LearningError>;
     readonly get: (ownerKind: LearningOwnerKind) => Effect.Effect<Option.Option<Promoter>>;
+    /** The owner kinds that have a promoter. */
+    readonly ownerKinds: Effect.Effect<ReadonlyArray<LearningOwnerKind>>;
   }
 >()("t3/plugins/learning/Promoter/PromoterRegistry") {}
 
@@ -48,5 +68,6 @@ export const layer = Layer.sync(PromoterRegistry, () => {
         return Effect.void;
       }),
     get: (ownerKind) => Effect.sync(() => Option.fromNullishOr(promoters.get(ownerKind))),
+    ownerKinds: Effect.sync(() => [...promoters.keys()]),
   });
 });
