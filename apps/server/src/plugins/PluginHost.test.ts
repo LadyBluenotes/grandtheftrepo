@@ -56,11 +56,11 @@ it.layer(NodeServices.layer)("plugin host", (it) => {
 
       const after = yield* host.setEnabled("review", false);
       assert.deepEqual(
-        after.map((status) => [status.id, status.enabled, status.active]),
+        after.map((status) => [status.id, status.enabled, status.active, status.missing]),
         [
-          ["telemetry", true, true],
-          ["learning", true, false],
-          ["review", false, false],
+          ["telemetry", true, true, []],
+          ["learning", true, true, ["review"]],
+          ["review", false, true, []],
         ],
       );
       assert.deepEqual([...host.activeIds], ["telemetry", "learning", "review"]);
@@ -73,8 +73,12 @@ it.layer(NodeServices.layer)("plugin host", (it) => {
         '{\n  "review": false\n}\n',
       );
       assert.deepEqual(
-        (yield* host.statuses).map((status) => status.active),
-        [true, false, false],
+        (yield* host.statuses).map((status) => [status.enabled, status.active]),
+        [
+          [true, true],
+          [true, true],
+          [false, true],
+        ],
       );
     }).pipe(Effect.provide(layerHost)),
   );
