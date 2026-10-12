@@ -163,14 +163,11 @@ export const start = Effect.fn("PluginReactor.start")(function* <E = never>(opti
       const outcome = yield* sql
         .withTransaction(
           handler(stored).pipe(
-            Effect.andThen(
-              sql`DELETE FROM host_reactor_failure WHERE sequence = ${row.sequence}`,
-            ),
+            Effect.andThen(sql`DELETE FROM host_reactor_failure WHERE sequence = ${row.sequence}`),
           ),
         )
         .pipe(Effect.exit);
       if (Exit.isSuccess(outcome)) continue;
-      }
       if (Cause.hasInterruptsOnly(outcome.cause)) return yield* Effect.failCause(outcome.cause);
       const attempts = row.attempts + 1;
       const message = describe(outcome.cause);
@@ -219,10 +216,11 @@ export const start = Effect.fn("PluginReactor.start")(function* <E = never>(opti
 
   const drain = Effect.gen(function* () {
     const target = yield* sink.latestSequence();
-    if (processed >= target) return;
-    const done = yield* Deferred.make<void>();
-    waiters.add({ target, done });
-    yield* Deferred.await(done);
+    const waiter = { target, done: yield* Deferred.make<void>() };
+    // Registered before the check, so an `advance` landing between the two cannot be missed.
+    waiters.add(waiter);
+    if (processed >= target) waiters.delete(waiter);
+    else yield* Deferred.await(waiter.done);
   });
 
   return { drain, retryFailed };
