@@ -51,6 +51,9 @@ const migrations: ReadonlyArray<PluginMigration> = [
         )
       `;
       yield* sql`
+        CREATE INDEX host_supervisor_tick_started_at ON host_supervisor_tick (started_at)
+      `;
+      yield* sql`
         CREATE TABLE host_supervisor_sweep (
           tick_id INTEGER NOT NULL REFERENCES host_supervisor_tick(id) ON DELETE CASCADE,
           plugin TEXT NOT NULL,
@@ -110,7 +113,19 @@ const NO_COUNTS = { examined: 0, acted: 0, flags: 0 };
 const settle = <E>(
   exit: Exit.Exit<SweepCounts, E | Cause.TimeoutError>,
 ): Effect.Effect<Outcome> => {
-  if (Exit.isSuccess(exit)) return Effect.succeed({ status: "ok", ...exit.value, error: null });
+  if (Exit.isSuccess(exit)) {
+    const { examined, acted, flags } = exit.value;
+    // A count that is not a whole number can neither be stored nor encoded, and would break `status` until the tick ages out.
+    return Effect.succeed(
+      [examined, acted, flags].every((count) => Number.isInteger(count) && count >= 0)
+        ? { status: "ok", ...exit.value, error: null }
+        : {
+            status: "failed",
+            ...NO_COUNTS,
+            error: "Sweep returned a count that is not a whole number.",
+          },
+    );
+  }
   if (Cause.hasInterruptsOnly(exit.cause)) return Effect.interrupt;
   const error = Cause.squash(exit.cause);
   return Effect.succeed(

@@ -89,6 +89,22 @@ it.layer(NodeServices.layer)("plugin supervisor", (it) => {
     }).pipe(Effect.provide(layerSupervisor)),
   );
 
+  it.effect("records a sweep whose counts are not whole numbers as failed", () =>
+    Effect.gen(function* () {
+      const supervisor = yield* PluginSupervisor.PluginSupervisor;
+      yield* supervisor.register({
+        plugin: "a",
+        name: "half",
+        run: () => Effect.succeed({ examined: 1.5, acted: 0, flags: 0 }),
+      });
+      const summary = yield* supervisor.tick;
+      assert.deepEqual(
+        summary.sweeps.map((s) => [s.status, s.examined, s.error]),
+        [["failed", 0, "Sweep returned a count that is not a whole number."]],
+      );
+    }).pipe(Effect.provide(layerSupervisor)),
+  );
+
   it.effect("ticks one interval after activation", () =>
     Effect.gen(function* () {
       const activation = yield* Deferred.make<void>();
