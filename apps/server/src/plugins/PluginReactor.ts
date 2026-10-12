@@ -12,8 +12,11 @@ import { forkParked } from "../serverActivation.ts";
 
 type EventType = OrchestrationV2DomainEvent["type"];
 
+/** The union member whose `type` includes `T`; some members group several types, which `Extract` misses. */
+type EventOf<E, T> = E extends { readonly type: infer U } ? (T extends U ? E : never) : never;
+
 type StoredEventOf<T extends EventType> = Omit<OrchestrationV2StoredEvent, "event"> & {
-  readonly event: Extract<OrchestrationV2DomainEvent, { readonly type: T }>;
+  readonly event: EventOf<OrchestrationV2DomainEvent, T> & { readonly type: T };
 };
 
 /** One handler per event type a plugin cares about. Each runs with the plugin's own `SqlClient`. */
