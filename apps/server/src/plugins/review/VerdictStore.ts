@@ -15,6 +15,7 @@ import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Semaphore from "effect/Semaphore";
 import * as SqlClient from "effect/sql/SqlClient";
 import type * as SqlError from "effect/sql/SqlError";
 
@@ -91,6 +92,9 @@ export class VerdictStore extends Context.Service<
 const make = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
   const threads = yield* ThreadManagementService.ThreadManagementService;
+  // The checks, the correction and the verdict row span two databases, so callers for the same
+  // checkpoint are serialized here rather than by a transaction.
+  const recordLock = yield* Semaphore.make(1);
 
   const io = (cause: SqlError.SqlError | Orchestrator.OrchestratorV2Error) =>
     Effect.logWarning("review: a read or write failed", { cause }).pipe(
@@ -202,7 +206,7 @@ const make = Effect.gen(function* () {
          ${input.outcome}, ${failureMode}, ${input.summary}, ${correction?.id ?? null}, ${at})
         ON CONFLICT (id) DO NOTHING`;
       return yield* settle((yield* find(id))!);
-    }).pipe(Effect.catchTags({ SqlError: io }));
+    }).pipe(recordLock.withPermits(1), Effect.catchTags({ SqlError: io }));
 
   const list: VerdictStore["Service"]["list"] = ({ threadId }) =>
     sql<Row>`SELECT * FROM review_verdicts WHERE reviewed_thread_id = ${threadId}
