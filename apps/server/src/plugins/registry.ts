@@ -2,6 +2,7 @@ import type { ServerPlugin } from "./Plugin.ts";
 import * as Caveman from "./caveman/index.ts";
 import * as Kanban from "./kanban/index.ts";
 import * as Learning from "./learning/index.ts";
+import * as Policy from "./policy/index.ts";
 import * as Routing from "./routing/index.ts";
 import * as Telemetry from "./telemetry/index.ts";
 
@@ -10,6 +11,7 @@ const plugins = [
   Telemetry.plugin,
   Routing.plugin,
   Learning.plugin,
+  Policy.plugin,
   Caveman.plugin,
 ] as const satisfies ReadonlyArray<ServerPlugin<unknown, unknown>>;
 

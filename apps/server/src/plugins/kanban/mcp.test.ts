@@ -71,6 +71,7 @@ it.effect("registers kanban tools through the plugin host and files an issue ove
           }),
         ),
         Layer.provide(Layer.mock(PluginSupervisor.PluginSupervisor)({})),
+        Layer.provide(ServerSettings.layerTest()),
         Layer.provide(KanbanStore.layer),
         Layer.provide(Layer.mock(ThreadManagementService.ThreadManagementService)({})),
         Layer.provideMerge(McpHttpServer.layerMcpTransport),
