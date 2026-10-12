@@ -1,5 +1,6 @@
 import {
   POLICY_AGENTS,
+  POLICY_ENVIRONMENT_PROJECT_ID,
   PolicyError,
   PolicyKey,
   type PolicyAcceptInput,
@@ -331,7 +332,7 @@ const make = Effect.gen(function* () {
 
   const list = Effect.fn("PolicyService.list")(
     function* (projectId: ProjectId) {
-      const scope = sql.in("project_id", [projectId, "*"]);
+      const scope = sql.in("project_id", [projectId, POLICY_ENVIRONMENT_PROJECT_ID]);
       const policies = yield* sql<PolicyRow>`
         SELECT * FROM policies WHERE ${scope} ORDER BY project_id, "key"
       `;

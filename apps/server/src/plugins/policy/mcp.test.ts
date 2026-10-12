@@ -1,7 +1,7 @@
 import { expect, it } from "@effect/vitest";
 import { NodeHttpServer } from "@effect/platform-node";
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import { EnvironmentId, ProjectId } from "@t3tools/contracts";
+import { EnvironmentId, POLICY_ENVIRONMENT_PROJECT_ID, ProjectId } from "@t3tools/contracts";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -13,6 +13,7 @@ import * as McpHttpServer from "../../mcp/McpHttpServer.ts";
 import type * as McpInvocationContext from "../../mcp/McpInvocationContext.ts";
 import * as McpSessionRegistry from "../../mcp/McpSessionRegistry.ts";
 import * as ThreadManagementService from "../../orchestration-v2/ThreadManagementService.ts";
+import * as ProjectService from "../../project/ProjectService.ts";
 import * as ServerSettings from "../../serverSettings.ts";
 import * as PluginDatabase from "../PluginDatabase.ts";
 import * as PluginHost from "../PluginHost.ts";
@@ -77,8 +78,11 @@ it.effect(
             }),
           ),
           Layer.provide(Layer.mock(PluginSupervisor.PluginSupervisor)({})),
-        Layer.provide(Layer.succeedContext(services)),
+          Layer.provide(Layer.succeedContext(services)),
           Layer.provide(Layer.mock(ThreadManagementService.ThreadManagementService)({})),
+          // The host's MCP layer carries every registered plugin's requirements, kanban's included.
+          Layer.provide(Layer.mock(ProjectService.ProjectService)({})),
+          Layer.provide(ServerSettings.layerTest()),
           Layer.provideMerge(McpHttpServer.layerMcpTransport),
           Layer.provide(
             Layer.mock(McpSessionRegistry.McpSessionRegistry)({
@@ -143,12 +147,16 @@ it.effect(
           body: "Run the tests.",
         });
         yield* policies.create({
-          projectId: ProjectId.make("*"),
+          projectId: POLICY_ENVIRONMENT_PROJECT_ID,
           key: "tone",
           title: "Tone",
           body: "Be brief.",
         });
-        yield* policies.accept({ projectId: ProjectId.make("*"), key: "tone", version: 1 });
+        yield* policies.accept({
+          projectId: POLICY_ENVIRONMENT_PROJECT_ID,
+          key: "tone",
+          version: 1,
+        });
         const listed = resultText(
           yield* rpc(4, "tools/call", { name: "policy_list", arguments: { projectId } }),
         );

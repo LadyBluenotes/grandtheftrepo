@@ -1,9 +1,8 @@
 import {
   POLICY_WS_METHODS,
   PolicyError,
-  type PolicyAcceptInput,
-  type PolicyAgentsInput,
-  type PolicyCreateInput,
+  type PolicyWriteInput,
+  type PolicyWriteResult,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
@@ -21,14 +20,24 @@ const service = Effect.serviceOption(PolicyService.PolicyService).pipe(
   ),
 );
 
+const write = (
+  policies: PolicyService.PolicyService["Service"],
+  input: PolicyWriteInput,
+): Effect.Effect<PolicyWriteResult, PolicyError> => {
+  switch (input.action) {
+    case "create":
+      return policies.create(input);
+    case "accept":
+      return policies.accept(input);
+    case "install":
+      return policies.install(input);
+    case "verify":
+      return policies.verify(input);
+  }
+};
+
 /** Spread into the WebSocket handlers through `PluginHost.handlers`. */
 export const handlers = {
-  [POLICY_WS_METHODS.create]: (input: PolicyCreateInput) =>
-    Effect.flatMap(service, (s) => s.create(input)),
-  [POLICY_WS_METHODS.accept]: (input: PolicyAcceptInput) =>
-    Effect.flatMap(service, (s) => s.accept(input)),
-  [POLICY_WS_METHODS.install]: (input: PolicyAgentsInput) =>
-    Effect.flatMap(service, (s) => s.install(input)),
-  [POLICY_WS_METHODS.verify]: (input: PolicyAgentsInput) =>
-    Effect.flatMap(service, (s) => s.verify(input)),
+  [POLICY_WS_METHODS.write]: (input: PolicyWriteInput) =>
+    Effect.flatMap(service, (policies) => write(policies, input)),
 };

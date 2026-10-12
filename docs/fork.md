@@ -74,7 +74,8 @@ them half-evaluated. The host hands `toolkitRegistration` to `ServerPlugin.mcp` 
 - **policy**: reviewed working rules per project (`*` is the whole environment), versioned in the
   plugin's database and rendered as one marked block each, with `<state dir>/RULES.md` ahead of
   the body, into the instruction file each agent reads from the user's home. Verify re-reads the
-  block. Server: `apps/server/src/plugins/policy/`. Contracts:
+  block. One RPC, `policy.write`, carries create, accept, install and verify as `action`, and the
+  `policy_list` MCP tool reads. Server: `apps/server/src/plugins/policy/`. Contracts:
   `packages/contracts/src/plugins/policy.ts`. No screen.
 
 `apps/web/src/routeTree.gen.ts` is generated and committed. A conflict there is resolved by running

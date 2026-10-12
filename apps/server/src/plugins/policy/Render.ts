@@ -1,3 +1,5 @@
+// @effect-diagnostics nodeBuiltinImport:off - a plain sha256 of text; Effect's Crypto has no digest.
+import { POLICY_ENVIRONMENT_PROJECT_ID } from "@t3tools/contracts";
 import * as NodeCrypto from "node:crypto";
 
 /** The hash form every marker header and delivery row carries. */
@@ -5,7 +7,7 @@ export const sha256 = (text: string) => NodeCrypto.createHash("sha256").update(t
 
 /** The id in the markers: the key alone for the environment-wide project `*`. */
 export const blockId = (projectId: string, key: string) =>
-  projectId === "*" ? key : `${projectId}/${key}`;
+  projectId === POLICY_ENVIRONMENT_PROJECT_ID ? key : `${projectId}/${key}`;
 
 const startMarker = (id: string) => `<!-- fork-policy:start key=${id} -->`;
 const endMarker = (id: string) => `<!-- fork-policy:end key=${id} -->`;

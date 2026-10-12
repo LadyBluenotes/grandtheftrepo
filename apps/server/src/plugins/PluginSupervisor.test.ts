@@ -18,6 +18,7 @@ import type * as McpInvocationContext from "../mcp/McpInvocationContext.ts";
 import * as McpSessionRegistry from "../mcp/McpSessionRegistry.ts";
 import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
 import * as ProjectService from "../project/ProjectService.ts";
+import * as ServerSettings from "../serverSettings.ts";
 import * as ServerActivation from "../serverActivation.ts";
 import * as PluginDatabase from "./PluginDatabase.ts";
 import * as PluginHost from "./PluginHost.ts";
@@ -242,6 +243,7 @@ it.effect("the supervisor_status tool and the supervisor.status handler agree", 
         // Inactive here, but the kanban tools' static requirements still type through `layerMcp`.
         Layer.provide(Layer.mock(ThreadManagementService.ThreadManagementService)({})),
         Layer.provide(Layer.mock(ProjectService.ProjectService)({})),
+        Layer.provide(ServerSettings.layerTest()),
         Layer.provideMerge(McpHttpServer.layerMcpTransport),
         Layer.provide(
           Layer.mock(McpSessionRegistry.McpSessionRegistry)({
