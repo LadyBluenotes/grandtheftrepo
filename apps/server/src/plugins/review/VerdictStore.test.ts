@@ -1,7 +1,9 @@
 import { assert, it } from "@effect/vitest";
 import type { ReviewVerdictError, ReviewVerdictInput, ThreadId } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
+import * as Ref from "effect/Ref";
 
+import * as CorrectionStore from "../learning/CorrectionStore.ts";
 import {
   approve,
   foreign,
@@ -215,4 +217,60 @@ it.effect(
         assert.strictEqual((yield* list({ threadId: other })).length, 1);
       }),
     ),
+);
+
+/**
+ * A learning store that takes turns with other fibers, as two requests on a busy server do. Both
+ * callers get past the leftover check before either writes, and the first one to write a
+ * correction stalls before its row, so the other reaches the insert first. Without `record`'s
+ * lock, that other call's verdict would point at the first call's correction.
+ */
+const interleaved = (corrections: CorrectionStore.CorrectionStore["Service"]) =>
+  Effect.gen(function* () {
+    const writes = yield* Ref.make(0);
+    return CorrectionStore.CorrectionStore.of({
+      ...corrections,
+      findBySourceKey: (failureKind, sourceKey) =>
+        corrections.findBySourceKey(failureKind, sourceKey).pipe(Effect.tap(() => Effect.yieldNow)),
+      record: (input) =>
+        corrections.record(input).pipe(
+          Effect.tap(() =>
+            Effect.flatMap(
+              Ref.getAndUpdate(writes, (count) => count + 1),
+              (earlier) => (earlier === 0 ? Effect.yieldNow : Effect.void),
+            ),
+          ),
+        ),
+    });
+  });
+
+it.effect("keeps one verdict and the correction it declared when conflicting calls overlap", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const { store, review, corrections, verdictCount, correctionCount } = yield* harness;
+      const overlapping = yield* interleaved(corrections);
+      const call = (input: ReviewVerdictInput) =>
+        store
+          .record(reviewer, input)
+          .pipe(Effect.provideService(CorrectionStore.CorrectionStore, overlapping), Effect.result);
+      const outcomes = yield* Effect.all(
+        [call(sendBack), call({ ...sendBack, failureMode: "defect" })],
+        { concurrency: "unbounded" },
+      );
+
+      // One call wins and the other is refused, whichever of them it was.
+      assert.deepEqual(
+        outcomes.flatMap((outcome) => (outcome._tag === "Failure" ? [outcome.failure.code] : [])),
+        ["conflict"],
+      );
+      assert.strictEqual(yield* verdictCount, 1);
+      assert.strictEqual(yield* correctionCount, 1);
+      const [verdict] = yield* review<{
+        failure_mode: string;
+        correction_id: number;
+      }>`SELECT failure_mode, correction_id FROM review_verdicts`;
+      const correction = yield* corrections.get(verdict!.correction_id);
+      assert.strictEqual(verdict!.failure_mode, correction.declaredMode);
+    }),
+  ),
 );
