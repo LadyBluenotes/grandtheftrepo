@@ -151,8 +151,12 @@ export const make = (plugins: ReadonlyArray<Registered>) =>
       }
     }
     const activeIds = new Set(wanted.filter((id) => databases.has(id)));
+    // `resolve` knows only the saved choice; a plugin that failed to start this boot is not running.
     const withStartErrors = (statuses: ReadonlyArray<PluginStatus>) =>
-      statuses.map((status) => ({ ...status, startError: startErrors.get(status.id) ?? null }));
+      statuses.map((status) => {
+        const startError = startErrors.get(status.id) ?? null;
+        return { ...status, active: activeIds.has(status.id), startError };
+      });
 
     const setEnabled = Effect.fn("PluginHost.setEnabled")(function* (id: string, enabled: boolean) {
       if (!plugins.some((plugin) => plugin.id === id))
