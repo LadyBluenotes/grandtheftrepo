@@ -6,7 +6,7 @@ import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import { ChildProcess, type ChildProcessSpawner } from "effect/process";
 
-/** The one message for a missing binary; the status panel and #34 show the same command. */
+/** The one message for a missing binary; the status panel and the learn scan show the same command. */
 export const INSTALL_REFUSAL = `caveman is not installed. Run: ${CAVEMAN_INSTALL_COMMAND}`;
 
 export type Outcome =
@@ -39,3 +39,8 @@ export const run = (input: {
       Effect.map(Option.getOrElse((): Outcome => ({ _tag: "TimedOut" }))),
     );
   }).pipe(Effect.catch(() => Effect.succeed<Outcome>({ _tag: "Missing" })));
+
+/** A failed command's last stderr line, bounded, or its exit code when stderr is empty. */
+export const failureLine = (result: CommandResult) =>
+  result.stderr.trim().split("\n").pop()?.trim().slice(0, 300) ||
+  `caveman exited with code ${result.code}.`;

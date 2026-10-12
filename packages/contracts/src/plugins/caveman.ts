@@ -1,4 +1,5 @@
 import * as Schema from "effect/Schema";
+import { IsoDateTime } from "../baseSchemas.ts";
 import { ProviderInstanceId } from "../providerInstance.ts";
 import { definePluginMethods } from "./method.ts";
 
@@ -47,8 +48,120 @@ export type CavemanSetRouteInput = typeof CavemanSetRouteInput.Type;
 /** What the panel shows when caveman is missing; the server's refusal carries the same command. */
 export const CAVEMAN_INSTALL_COMMAND = "npm install -g @caveman-ai/cli && caveman setup --install";
 
+/**
+ * What a sink is. `reducible`: a mechanical fix exists. `recurring_context`: text re-pasted across
+ * sessions. `behavioral`: a habit, observation only. `load_bearing`: needed, never changed.
+ */
+export const CavemanLearnClass = Schema.Literals([
+  "reducible",
+  "recurring_context",
+  "behavioral",
+  "load_bearing",
+]);
+export type CavemanLearnClass = typeof CavemanLearnClass.Type;
+
+/** `forward_rate`: costs tokens per message from now on. `historical`: only an observed total. */
+export const CavemanLearnFraming = Schema.Literals(["forward_rate", "historical"]);
+export type CavemanLearnFraming = typeof CavemanLearnFraming.Type;
+
+/**
+ * Which report a plan came from. `canonical`: `$CAVEMAN_HOME/reports/caveman-learn.json`, which this
+ * server's refresh writes from the home directory. `autopilot`: caveman's own rescan after a session
+ * ends, from that session's directory and environment.
+ */
+export const CavemanLearnSource = Schema.Literals(["canonical", "autopilot"]);
+export type CavemanLearnSource = typeof CavemanLearnSource.Type;
+
+/**
+ * One place tokens go, ranked from 1, without its evidence. Every count is caveman's estimate from
+ * an offline tokenizer, null when caveman did not report it.
+ */
+export const CavemanLearnFinding = Schema.Struct({
+  rank: Schema.Int,
+  sinkId: Schema.String,
+  title: Schema.String,
+  class: CavemanLearnClass,
+  framing: CavemanLearnFraming,
+  basis: Schema.String,
+  tokensPerTurn: Schema.NullOr(Schema.Number),
+  tokensObserved: Schema.NullOr(Schema.Number),
+  tokensPerDayRate: Schema.NullOr(Schema.Number),
+  suggestion: Schema.String,
+});
+export type CavemanLearnFinding = typeof CavemanLearnFinding.Type;
+
+/** A finding with its evidence, which can hold file paths and line locators: never sent over MCP. */
+export const CavemanLearnSink = Schema.Struct({
+  ...CavemanLearnFinding.fields,
+  evidence: Schema.JsonObject,
+});
+export type CavemanLearnSink = typeof CavemanLearnSink.Type;
+
+/** What a plan says about itself: its score, what it scanned, when it was generated and from where. */
+export const CavemanLearnHeader = Schema.Struct({
+  generatedAt: IsoDateTime,
+  source: CavemanLearnSource,
+  windowFrom: Schema.String,
+  windowTo: Schema.String,
+  /** The Setup Score, 0 to 100. */
+  caveScore: Schema.Number,
+  sessionsScanned: Schema.Number,
+});
+export type CavemanLearnHeader = typeof CavemanLearnHeader.Type;
+
+/** One imported `caveman learn` report. `spend` and `wrapMeasured` are caveman's own blocks. */
+export const CavemanLearnPlan = Schema.Struct({
+  ...CavemanLearnHeader.fields,
+  caveats: Schema.Array(Schema.String),
+  spend: Schema.NullOr(Schema.Json),
+  wrapMeasured: Schema.NullOr(Schema.Json),
+  importedAt: IsoDateTime,
+});
+export type CavemanLearnPlan = typeof CavemanLearnPlan.Type;
+
+/** The refresh scan: whether one runs now, and why the last one failed. */
+export const CavemanLearnScan = Schema.Struct({
+  running: Schema.Boolean,
+  lastError: Schema.NullOr(Schema.String),
+});
+export type CavemanLearnScan = typeof CavemanLearnScan.Type;
+
+/** How many sinks or findings, from rank 1. */
+const SinkLimit = Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 100 }));
+
+export const CavemanLearnPlanInput = Schema.Struct({
+  /** How many sinks, from rank 1; all of them when left out. */
+  limit: Schema.optional(SinkLimit),
+});
+export type CavemanLearnPlanInput = typeof CavemanLearnPlanInput.Type;
+
+/** The newest imported plan with its first sinks in rank order, or `none` before the first import. */
+export const CavemanLearnPlanResult = Schema.Union([
+  Schema.Struct({ state: Schema.Literal("none"), scan: CavemanLearnScan }),
+  Schema.Struct({
+    state: Schema.Literal("ready"),
+    plan: CavemanLearnPlan,
+    sinks: Schema.Array(CavemanLearnSink),
+    scan: CavemanLearnScan,
+  }),
+]);
+export type CavemanLearnPlanResult = typeof CavemanLearnPlanResult.Type;
+
+export const CavemanLearnFindingsInput = Schema.Struct({
+  /** How many findings, from rank 1; 10 when left out. */
+  limit: Schema.optional(SinkLimit),
+});
+export type CavemanLearnFindingsInput = typeof CavemanLearnFindingsInput.Type;
+
+/** The newest plan's header, null before the first import, and its top findings without evidence. */
+export const CavemanLearnFindings = Schema.Struct({
+  plan: Schema.NullOr(CavemanLearnHeader),
+  findings: Schema.Array(CavemanLearnFinding),
+});
+export type CavemanLearnFindings = typeof CavemanLearnFindings.Type;
+
 export class CavemanError extends Schema.TaggedError<CavemanError>()("CavemanError", {
-  code: Schema.Literals(["inactive", "not_installed", "not_routed", "failed"]),
+  code: Schema.Literals(["inactive", "not_installed", "not_routed", "busy", "failed"]),
   message: Schema.String,
 }) {}
 
@@ -65,6 +178,21 @@ export const CAVEMAN_METHODS = definePluginMethods({
     gateway: "settingsWrite",
     input: CavemanSetRouteInput,
     output: CavemanStatus,
+    error: CavemanError,
+  },
+  learnPlan: {
+    method: "caveman.learnPlan",
+    gateway: "read",
+    input: CavemanLearnPlanInput,
+    output: CavemanLearnPlanResult,
+    error: CavemanError,
+  },
+  /** Starts `caveman learn scan` in the background; the next sweep imports its report. */
+  learnRefresh: {
+    method: "caveman.learnRefresh",
+    gateway: "settingsWrite",
+    input: Schema.Struct({}),
+    output: Schema.Struct({ started: Schema.Literal(true) }),
     error: CavemanError,
   },
 });

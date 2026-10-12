@@ -4,6 +4,10 @@ import {
   CodexSettings,
   type CavemanAgent,
   type CavemanAgentRoute,
+  type CavemanLearnFindings,
+  type CavemanLearnFindingsInput,
+  type CavemanLearnPlanInput,
+  type CavemanLearnPlanResult,
   type CavemanSetRouteInput,
   type CavemanStatus,
 } from "@t3tools/contracts";
@@ -17,6 +21,8 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
+import * as SqlClient from "effect/sql/SqlClient";
+import type * as SqlError from "effect/sql/SqlError";
 import { ChildProcessSpawner } from "effect/process";
 import * as NodeNet from "node:net";
 
@@ -26,6 +32,8 @@ import { resolveCodexHomeLayout } from "../../provider/Drivers/CodexHomeLayout.t
 import * as ProviderRegistry from "../../provider/ProviderRegistry.ts";
 import * as ServerSettings from "../../serverSettings.ts";
 import * as Cli from "./Cli.ts";
+import * as LearnImport from "./learn/import.ts";
+import * as LearnScan from "./learn/scan.ts";
 import { claudeRoute, codexRoute, proxyOrigin } from "./RouteStatus.ts";
 
 export class CavemanService extends Context.Service<
@@ -35,6 +43,20 @@ export class CavemanService extends Context.Service<
     readonly status: Effect.Effect<CavemanStatus, CavemanError>;
     /** Runs `caveman enable` or `disable` for the instance, then returns `status`. */
     readonly setRoute: (input: CavemanSetRouteInput) => Effect.Effect<CavemanStatus, CavemanError>;
+    /** The newest imported `caveman learn` plan with its sinks and their evidence, every sink unless `limit` says otherwise, and the scan's state. */
+    readonly learnPlan: (
+      input: CavemanLearnPlanInput,
+    ) => Effect.Effect<CavemanLearnPlanResult, CavemanError>;
+    /**
+     * Starts `caveman learn scan` from the home directory, pointed at the first Claude and Codex
+     * instances' homes when they have a custom `homePath`. Refuses while caveman is missing or a
+     * scan runs.
+     */
+    readonly learnRefresh: Effect.Effect<{ readonly started: true }, CavemanError>;
+    /** The newest plan's header and top findings, 10 unless `limit` says otherwise, without evidence. */
+    readonly learnFindings: (
+      input: CavemanLearnFindingsInput,
+    ) => Effect.Effect<CavemanLearnFindings, CavemanError>;
   }
 >()("t3/plugins/caveman/CavemanService") {}
 
@@ -63,6 +85,7 @@ const decodeVersion = Schema.decodeUnknownOption(
   Schema.fromJsonString(Schema.Struct({ version: Schema.String })),
 );
 
+const DEFAULT_FINDINGS = 10;
 const VERSION_TIMEOUT = "10 seconds";
 const VERSION_TTL = "60 seconds";
 const ROUTE_TIMEOUT_SECONDS = 60;
@@ -100,6 +123,8 @@ const listening = (origin: string) => {
 interface Resolved {
   readonly row: CavemanAgentRoute;
   readonly environment?: NodeJS.ProcessEnv;
+  /** The variable that points a learn scan at the instance's home; only for a custom `homePath`. */
+  readonly scanHome?: NodeJS.ProcessEnv;
 }
 
 const make = Effect.gen(function* () {
@@ -109,6 +134,8 @@ const make = Effect.gen(function* () {
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
+  const sql = yield* SqlClient.SqlClient;
+  const scanner = yield* LearnScan.make;
 
   const run = (input: Parameters<typeof Cli.run>[0]) =>
     Cli.run(input).pipe(Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner));
@@ -150,10 +177,8 @@ const make = Effect.gen(function* () {
       if (agent === "claude") {
         const config = decodeClaude(saved?.config ?? {});
         if (Option.isNone(config)) continue;
-        const configPath = path.join(
-          yield* resolveClaudeHomePath(config.value, processEnv),
-          "settings.json",
-        );
+        const home = yield* resolveClaudeHomePath(config.value, processEnv);
+        const configPath = path.join(home, "settings.json");
         resolved.push({
           row: {
             instanceId,
@@ -162,6 +187,7 @@ const make = Effect.gen(function* () {
             configPath,
           },
           environment: yield* makeClaudeEnvironment(config.value, processEnv),
+          ...(config.value.homePath.trim() === "" ? {} : { scanHome: { CLAUDE_CONFIG_DIR: home } }),
         });
       } else if (agent === "codex") {
         const config = decodeCodex(saved?.config ?? {});
@@ -191,6 +217,9 @@ const make = Effect.gen(function* () {
             codexConfig.homePath === ""
               ? processEnv
               : { ...processEnv, CODEX_HOME: sharedHomePath },
+          ...(config.value.homePath.trim() === ""
+            ? {}
+            : { scanHome: { CODEX_HOME: sharedHomePath } }),
         });
       } else {
         unsupported(
@@ -262,16 +291,64 @@ const make = Effect.gen(function* () {
       });
     }
     if (outcome.code !== 0) {
-      const lastLine = outcome.stderr.trim().split("\n").pop()?.trim().slice(0, 300);
-      return yield* new CavemanError({
-        code: "failed",
-        message: lastLine || `caveman exited with code ${outcome.code}.`,
-      });
+      return yield* new CavemanError({ code: "failed", message: Cli.failureLine(outcome) });
     }
     return yield* status();
   });
 
-  return CavemanService.of({ status: status(), setRoute });
+  const unreadable = (cause: SqlError.SqlError) =>
+    Effect.logWarning("caveman: database operation failed", { cause }).pipe(
+      Effect.andThen(
+        Effect.fail(
+          new CavemanError({ code: "failed", message: "Could not read the caveman database." }),
+        ),
+      ),
+    );
+
+  const learnPlan = Effect.fn("CavemanService.learnPlan")(function* ({
+    limit,
+  }: CavemanLearnPlanInput) {
+    const scan = yield* scanner.state;
+    const newest = yield* LearnImport.latest(limit).pipe(
+      Effect.provideService(SqlClient.SqlClient, sql),
+      Effect.catchTags({ SqlError: unreadable }),
+    );
+    return (
+      newest === undefined ? { state: "none", scan } : { state: "ready", ...newest, scan }
+    ) satisfies CavemanLearnPlanResult;
+  });
+
+  const learnRefresh = Effect.gen(function* () {
+    if (!(yield* probe).installed) {
+      return yield* new CavemanError({ code: "not_installed", message: Cli.INSTALL_REFUSAL });
+    }
+    // Only the first instance of each provider is scanned; caveman reads one home per provider.
+    const resolved = yield* instances;
+    const scanHome = (agent: CavemanAgent) =>
+      resolved.find(({ row }) => row.agent === agent)?.scanHome;
+    yield* scanner.start({
+      env: { ...(yield* HostProcess.Environment), ...scanHome("claude"), ...scanHome("codex") },
+      cwd: yield* HostProcess.HomeDirectory,
+    });
+    return { started: true } as const;
+  }).pipe(Effect.withSpan("CavemanService.learnRefresh"));
+
+  const learnFindings = Effect.fn("CavemanService.learnFindings")(function* ({
+    limit,
+  }: CavemanLearnFindingsInput) {
+    return yield* LearnImport.findings(limit ?? DEFAULT_FINDINGS).pipe(
+      Effect.provideService(SqlClient.SqlClient, sql),
+      Effect.catchTags({ SqlError: unreadable }),
+    );
+  });
+
+  return CavemanService.of({
+    status: status(),
+    setRoute,
+    learnPlan,
+    learnRefresh,
+    learnFindings,
+  });
 });
 
 export const layer = Layer.effect(CavemanService, make);

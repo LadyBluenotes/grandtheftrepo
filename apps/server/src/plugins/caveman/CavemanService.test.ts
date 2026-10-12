@@ -5,6 +5,8 @@ import {
   ProviderInstanceId,
   type CavemanAgent,
   type CavemanAgentRoute,
+  type CavemanLearnPlanInput,
+  type CavemanLearnPlanResult,
   type CavemanRoute,
   type CavemanStatus,
   type ServerProvider,
@@ -16,7 +18,9 @@ import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
+import * as Result from "effect/Result";
 import * as Scope from "effect/Scope";
+import * as SqlClient from "effect/sql/SqlClient";
 import * as TestClock from "effect/testing/TestClock";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import * as NodeNet from "node:net";
@@ -26,6 +30,9 @@ import * as ProviderRegistry from "../../provider/ProviderRegistry.ts";
 import * as ServerSettings from "../../serverSettings.ts";
 import * as CavemanService from "./CavemanService.ts";
 import * as Cli from "./Cli.ts";
+import * as LearnImport from "./learn/import.ts";
+import * as Plan from "./learn/Plan.ts";
+import { openDatabase, reportJson } from "./learn/Plan.testkit.ts";
 
 const windowsHost = HostProcess.Platform.defaultValue() === "win32";
 
@@ -83,9 +90,34 @@ case "$*" in
 esac
 `;
 
-/** The service over a temp `PATH`, home and gateway; `stub` is the `caveman` script, when there is one. */
+/**
+ * A `caveman` that answers `--version`, and for anything else records
+ * `argv|CLAUDE_CONFIG_DIR|CODEX_HOME|CAVE_LEARN_TIMEOUT|cwd`, writes to the `started` pipe, then runs
+ * `rest`.
+ */
+const learnStub =
+  (rest: string) =>
+  ({ root, calls }: Stub) =>
+    `#!/bin/sh
+case "$*" in
+  --version) printf '{"version":"9.9.9"}\\n' ;;
+  *)
+    printf '%s|%s|%s|%s|%s\\n' "$*" "\${CLAUDE_CONFIG_DIR-unset}" "\${CODEX_HOME-unset}" "\${CAVE_LEARN_TIMEOUT-unset}" "$PWD" >> '${calls}'
+    echo started > '${root}/started'
+    ${rest} ;;
+esac
+`;
+
+/**
+ * The service over a temp `PATH`, home, gateway and database; `stub` is the `caveman` script, when
+ * there is one, and `providers` the instances in the order the registry lists them.
+ */
 const start = Effect.fn("test.start")(function* (
-  options: { readonly stub?: (stub: Stub) => string; readonly gateway?: string } = {},
+  options: {
+    readonly stub?: (stub: Stub) => string;
+    readonly gateway?: string;
+    readonly providers?: ReadonlyArray<ServerProvider>;
+  } = {},
 ) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
@@ -113,8 +145,11 @@ const start = Effect.fn("test.start")(function* (
   const services = yield* Layer.build(
     CavemanService.layer.pipe(
       Layer.provideMerge(
-        Layer.mock(ProviderRegistry.ProviderRegistry)({ getProviders: Effect.succeed(providers) }),
+        Layer.mock(ProviderRegistry.ProviderRegistry)({
+          getProviders: Effect.succeed(options.providers ?? providers),
+        }),
       ),
+      Layer.provideMerge(Layer.effect(SqlClient.SqlClient, openDatabase)),
       Layer.provideMerge(
         ServerSettings.layerTest({
           providerInstances: {
@@ -159,6 +194,9 @@ const start = Effect.fn("test.start")(function* (
     status: within(caveman.status),
     setRoute: (instanceId: string, enabled: boolean) =>
       within(caveman.setRoute({ instanceId: ProviderInstanceId.make(instanceId), enabled })),
+    sql: Context.get(services, SqlClient.SqlClient),
+    learnPlan: (input: CavemanLearnPlanInput) => within(caveman.learnPlan(input)),
+    learnRefresh: within(caveman.learnRefresh),
     /** What `caveman` recorded, in order. */
     recorded: fs.readFileString(calls).pipe(
       Effect.orElseSucceed(() => ""),
@@ -211,6 +249,9 @@ describe.skipIf(windowsHost)("CavemanService", () => {
             "caveman is not installed. Run: npm install -g @caveman-ai/cli && caveman setup --install",
           );
           assert.strictEqual(error.message, Cli.INSTALL_REFUSAL);
+          const refused = yield* Effect.flip(h.learnRefresh);
+          assert.strictEqual(refused.code, "not_installed");
+          assert.strictEqual(refused.message, Cli.INSTALL_REFUSAL);
         }),
       ),
   );
@@ -434,6 +475,110 @@ describe.skipIf(windowsHost)("CavemanService", () => {
         yield* Effect.callback<void>((resume) => {
           server.close(() => resume(Effect.void));
         });
+      }),
+    ),
+  );
+
+  it.effect(
+    "learnRefresh scans from the home directory with the first instances' custom homes",
+    () =>
+      run(
+        Effect.gen(function* () {
+          const h = yield* start({
+            stub: learnStub(""),
+            providers: [
+              provider("claude_work", "claudeAgent"),
+              provider("claudeAgent", "claudeAgent"),
+              provider("codex_work", "codex"),
+              provider("codex", "codex"),
+            ],
+          });
+          const fs = yield* FileSystem.FileSystem;
+          const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+          yield* spawner.exitCode(ChildProcess.make("mkfifo", [`${h.root}/started`]));
+          assert.deepStrictEqual(yield* h.learnPlan({}), {
+            state: "none",
+            scan: { running: false, lastError: null },
+          });
+
+          assert.deepStrictEqual(yield* h.learnRefresh, { started: true });
+          yield* fs.readFileString(`${h.root}/started`);
+          assert.deepStrictEqual(yield* h.recorded, [
+            `learn scan --write-report --no-remember|${h.dirs.claudeWork}|${h.dirs.codexWork}|120|${h.dirs.home}`,
+          ]);
+        }),
+      ),
+  );
+
+  it.effect("learnRefresh leaves CLAUDE_CONFIG_DIR and CODEX_HOME alone for default homes", () =>
+    run(
+      Effect.gen(function* () {
+        const h = yield* start({ stub: learnStub("") });
+        const fs = yield* FileSystem.FileSystem;
+        const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+        yield* spawner.exitCode(ChildProcess.make("mkfifo", [`${h.root}/started`]));
+        yield* h.learnRefresh;
+        yield* fs.readFileString(`${h.root}/started`);
+        assert.deepStrictEqual(yield* h.recorded, [
+          `learn scan --write-report --no-remember|unset|unset|120|${h.dirs.home}`,
+        ]);
+      }),
+    ),
+  );
+
+  it.effect("learnRefresh while a scan runs refuses with A scan is already running.", () =>
+    run(
+      Effect.gen(function* () {
+        const h = yield* start({ stub: learnStub("exec sleep 120") });
+        const fs = yield* FileSystem.FileSystem;
+        const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+        yield* spawner.exitCode(ChildProcess.make("mkfifo", [`${h.root}/started`]));
+        yield* h.learnRefresh;
+        yield* fs.readFileString(`${h.root}/started`);
+        assert.deepStrictEqual(yield* h.learnPlan({}), {
+          state: "none",
+          scan: { running: true, lastError: null },
+        });
+        const error = yield* Effect.flip(h.learnRefresh);
+        assert.strictEqual(error.code, "busy");
+        assert.strictEqual(error.message, "A scan is already running.");
+        assert.lengthOf(yield* h.recorded, 1);
+      }),
+    ),
+  );
+
+  it.effect("learnPlan returns every sink with its evidence, or only the first `limit`", () =>
+    run(
+      Effect.gen(function* () {
+        const h = yield* start();
+        const plan = Plan.parse(reportJson("2026-10-10T08:00:00Z"));
+        if (Result.isFailure(plan)) return assert.fail(plan.failure);
+        yield* LearnImport.importPlan(plan.success, {
+          source: "canonical",
+          mtime: 1,
+          size: 1,
+        }).pipe(Effect.provideService(SqlClient.SqlClient, h.sql));
+
+        const sinks = (result: CavemanLearnPlanResult) =>
+          result.state === "ready" ? result.sinks : [];
+        const all = sinks(yield* h.learnPlan({}));
+        assert.deepStrictEqual(
+          all.map((sink) => sink.sinkId),
+          [
+            "claude_md_weight:project",
+            "recurring_context:repaste:ab12cd",
+            "procedure_repeat:release",
+            "config_tax:baseline",
+          ],
+        );
+
+        const top = sinks(yield* h.learnPlan({ limit: 2 }));
+        assert.deepStrictEqual(top, all.slice(0, 2));
+        assert.deepStrictEqual(top[0]?.evidence, {
+          path: "/home/user/project/CLAUDE.md",
+          lines: [12, 40],
+        });
+        assert.lengthOf(sinks(yield* h.learnPlan({ limit: 100 })), 4);
       }),
     ),
   );
