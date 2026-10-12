@@ -10,7 +10,9 @@ import {
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
+import * as SqlClient from "effect/sql/SqlClient";
 import { HttpBody, HttpClient, HttpRouter } from "effect/http";
 
 import * as ServerConfig from "../../config.ts";
@@ -26,6 +28,9 @@ import * as PluginRpc from "../PluginRpc.ts";
 import * as PluginSupervisor from "../PluginSupervisor.ts";
 import * as CavemanService from "./CavemanService.ts";
 import * as CavemanHandlers from "./handlers.ts";
+import * as LearnImport from "./learn/import.ts";
+import * as Plan from "./learn/Plan.ts";
+import { openDatabase, reportJson } from "./learn/Plan.testkit.ts";
 
 const decodeStatus = Schema.decodeUnknownEffect(CavemanStatus);
 const decodeError = Schema.decodeUnknownEffect(CavemanError);
@@ -63,6 +68,9 @@ const status: CavemanStatus = {
 const caveman: CavemanService.CavemanService["Service"] = {
   status: Effect.succeed(status),
   setRoute: () => Effect.succeed(status),
+  learnPlan: Effect.die("not called"),
+  learnRefresh: Effect.die("not called"),
+  learnFindings: () => Effect.die("not called"),
 };
 
 /** The text an MCP tool call returned, from a JSON or SSE response body. */
@@ -78,72 +86,85 @@ function resultText(body: string): string {
 }
 
 /**
- * The plugin registers its tool through the host the way the server does:
- * `PluginHost.layerMcp(toolkitRegistration)` with the service in the surrounding context.
+ * `/mcp` with the plugin's tools registered through the host the way the server does,
+ * `PluginHost.layerMcp(toolkitRegistration)`, with `service` in the surrounding context. Answers
+ * with a JSON-RPC call that returns the response body.
  */
+const serve = <E, R>(service: Layer.Layer<CavemanService.CavemanService, E, R>) =>
+  Effect.gen(function* () {
+    const layerServer = PluginHost.layerMcp(McpHttpServer.toolkitRegistration).pipe(
+      Layer.provide(
+        Layer.mock(PluginHost.PluginHost)({
+          activeIds: new Set(["caveman"]),
+          databases: new Map(),
+        }),
+      ),
+      Layer.provide(Layer.mock(PluginSupervisor.PluginSupervisor)({})),
+      Layer.provide(service),
+      Layer.provide(Layer.mock(ThreadManagementService.ThreadManagementService)({})),
+      Layer.provideMerge(McpHttpServer.layerMcpTransport),
+      Layer.provide(
+        Layer.mock(McpSessionRegistry.McpSessionRegistry)({
+          resolve: () => Effect.succeed(undefined),
+        }),
+      ),
+      Layer.provide(
+        Layer.succeed(McpHttpServer.McpClientAuthenticator, {
+          authenticate: (request) =>
+            Effect.succeed(
+              request.headers.authorization === `Bearer ${clientToken}` ? clientScope : undefined,
+            ),
+        }),
+      ),
+      Layer.provide(Layer.mock(ProjectService.ProjectService)({})),
+      Layer.provide(Layer.mock(ProviderRegistry.ProviderRegistry)({})),
+      Layer.provide(ServerSettings.layerTest()),
+    );
+    yield* HttpRouter.serve(layerServer, { disableListenLog: true, disableLogger: true }).pipe(
+      Layer.build,
+    );
+    const httpClient = yield* HttpClient.HttpClient;
+    const headers = {
+      accept: "application/json, text/event-stream",
+      authorization: `Bearer ${clientToken}`,
+    };
+    const initialize = yield* httpClient.post("/mcp", {
+      headers,
+      body: HttpBody.text(
+        `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"probe","version":"1.0.0"}}}`,
+        "application/json",
+      ),
+    });
+    expect(initialize.status).toBe(200);
+    const session = {
+      ...headers,
+      "mcp-session-id": initialize.headers["mcp-session-id"]!,
+      "mcp-protocol-version": "2025-06-18",
+    };
+    return (id: number, method: string, params: unknown) =>
+      httpClient
+        .post("/mcp", {
+          headers: session,
+          body: HttpBody.text(
+            JSON.stringify({ jsonrpc: "2.0", id, method, params }),
+            "application/json",
+          ),
+        })
+        .pipe(Effect.flatMap((response) => response.text));
+  });
+
+const layerTest = Layer.mergeAll(
+  NodeHttpServer.layerTest,
+  Layer.fresh(ServerConfig.layerTest(process.cwd(), { prefix: "t3code-caveman-mcp-" })).pipe(
+    Layer.provide(NodeServices.layer),
+  ),
+  NodeServices.layer,
+);
+
 it.effect("the MCP tool returns what the plugin method returns", () =>
   Effect.scoped(
     Effect.gen(function* () {
-      const layerServer = PluginHost.layerMcp(McpHttpServer.toolkitRegistration).pipe(
-        Layer.provide(
-          Layer.mock(PluginHost.PluginHost)({
-            activeIds: new Set(["caveman"]),
-            databases: new Map(),
-          }),
-        ),
-        Layer.provide(Layer.mock(PluginSupervisor.PluginSupervisor)({})),
-        Layer.provide(Layer.succeed(CavemanService.CavemanService, caveman)),
-        Layer.provide(Layer.mock(ThreadManagementService.ThreadManagementService)({})),
-        Layer.provideMerge(McpHttpServer.layerMcpTransport),
-        Layer.provide(
-          Layer.mock(McpSessionRegistry.McpSessionRegistry)({
-            resolve: () => Effect.succeed(undefined),
-          }),
-        ),
-        Layer.provide(
-          Layer.succeed(McpHttpServer.McpClientAuthenticator, {
-            authenticate: (request) =>
-              Effect.succeed(
-                request.headers.authorization === `Bearer ${clientToken}` ? clientScope : undefined,
-              ),
-          }),
-        ),
-        Layer.provide(Layer.mock(ProjectService.ProjectService)({})),
-        Layer.provide(Layer.mock(ProviderRegistry.ProviderRegistry)({})),
-        Layer.provide(ServerSettings.layerTest()),
-      );
-      yield* HttpRouter.serve(layerServer, { disableListenLog: true, disableLogger: true }).pipe(
-        Layer.build,
-      );
-      const httpClient = yield* HttpClient.HttpClient;
-      const headers = {
-        accept: "application/json, text/event-stream",
-        authorization: `Bearer ${clientToken}`,
-      };
-      const initialize = yield* httpClient.post("/mcp", {
-        headers,
-        body: HttpBody.text(
-          `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"probe","version":"1.0.0"}}}`,
-          "application/json",
-        ),
-      });
-      expect(initialize.status).toBe(200);
-      const session = {
-        ...headers,
-        "mcp-session-id": initialize.headers["mcp-session-id"]!,
-        "mcp-protocol-version": "2025-06-18",
-      };
-      const rpc = (id: number, method: string, params: unknown) =>
-        httpClient
-          .post("/mcp", {
-            headers: session,
-            body: HttpBody.text(
-              JSON.stringify({ jsonrpc: "2.0", id, method, params }),
-              "application/json",
-            ),
-          })
-          .pipe(Effect.flatMap((response) => response.text));
-
+      const rpc = yield* serve(Layer.succeed(CavemanService.CavemanService, caveman));
       expect(yield* rpc(2, "tools/list", {})).toContain('"caveman_status"');
 
       const fromTool = JSON.parse(
@@ -156,17 +177,74 @@ it.effect("the MCP tool returns what the plugin method returns", () =>
       expect(fromTool).toEqual(fromHandler);
       expect(fromHandler.agents[0]?.route).toBe("routed");
     }),
-  ).pipe(
-    Effect.provide(
-      Layer.mergeAll(
-        NodeHttpServer.layerTest,
-        Layer.fresh(ServerConfig.layerTest(process.cwd(), { prefix: "t3code-caveman-mcp-" })).pipe(
-          Layer.provide(NodeServices.layer),
-        ),
-        NodeServices.layer,
-      ),
-    ),
-  ),
+  ).pipe(Effect.provide(layerTest)),
+);
+
+it.effect(
+  "caveman_learn_findings returns the ranked findings of the fixture, without evidence",
+  () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const sql = yield* openDatabase;
+        const plan = Plan.parse(reportJson("2026-10-10T08:00:00Z"));
+        if (Result.isFailure(plan)) return expect.fail(plan.failure);
+        yield* LearnImport.importPlan(plan.success, {
+          source: "canonical",
+          mtime: 1,
+          size: 1,
+        }).pipe(Effect.provideService(SqlClient.SqlClient, sql));
+        // The real service over the imported plan; nothing here reaches caveman itself.
+        const rpc = yield* serve(
+          CavemanService.layer.pipe(
+            Layer.provide(Layer.succeed(SqlClient.SqlClient, sql)),
+            Layer.provide(Layer.mock(ProviderRegistry.ProviderRegistry)({})),
+            Layer.provide(ServerSettings.layerTest()),
+          ),
+        );
+        const listed = yield* rpc(2, "tools/list", {});
+        expect(listed).toContain('"caveman_learn_findings"');
+
+        const body = yield* rpc(3, "tools/call", {
+          name: "caveman_learn_findings",
+          arguments: { limit: 3 },
+        });
+        expect(body).not.toContain("evidence");
+        expect(body).not.toContain("/home/user");
+        const result = JSON.parse(resultText(body));
+        expect(result.plan.caveScore).toBe(72);
+        expect(result.plan.sessionsScanned).toBe(41);
+        expect(
+          result.findings.map((finding: { rank: number; sinkId: string; class: string }) => [
+            finding.rank,
+            finding.sinkId,
+            finding.class,
+          ]),
+        ).toEqual([
+          [1, "claude_md_weight:project", "reducible"],
+          [2, "recurring_context:repaste:ab12cd", "recurring_context"],
+          [3, "procedure_repeat:release", "behavioral"],
+        ]);
+        expect(Object.keys(result.findings[0]).toSorted()).toEqual([
+          "basis",
+          "class",
+          "framing",
+          "rank",
+          "sinkId",
+          "suggestion",
+          "title",
+          "tokensObserved",
+          "tokensPerDayRate",
+          "tokensPerTurn",
+        ]);
+
+        const defaulted = JSON.parse(
+          resultText(
+            yield* rpc(4, "tools/call", { name: "caveman_learn_findings", arguments: {} }),
+          ),
+        );
+        expect(defaulted.findings).toHaveLength(4);
+      }),
+    ).pipe(Effect.provide(layerTest)),
 );
 
 it.effect("the plugin methods answer with the plugin's own error while it is not running", () =>
