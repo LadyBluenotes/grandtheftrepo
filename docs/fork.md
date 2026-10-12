@@ -87,10 +87,20 @@ them half-evaluated. The host hands `toolkitRegistration` to `ServerPlugin.mcp` 
   attention flag when two agents write one project. Server: `apps/server/src/plugins/kanban/`.
   Contracts: `packages/contracts/src/plugins/kanban.ts`. Web: `apps/web/src/plugins/kanban/`. User
   guide: [Kanban board](./user/kanban.md).
-- **telemetry**: token usage per provider turn, from `provider-turn.updated`. The template plugin:
-  it uses every host seam once (database, reactor, sweep, gateway method, MCP tool, settings
-  panel) and is the one to copy. Server: `apps/server/src/plugins/telemetry/`. Contracts:
-  `packages/contracts/src/plugins/telemetry.ts`. Web: `apps/web/src/plugins/telemetry/`.
+- **telemetry**: the fourteen efficiency measures of #1 over a project's window, from the
+  `telemetry.measures` gateway method and the `telemetry_measures` MCP tool. Its reactor keeps
+  runs, tool calls, threads and provider turn token usage from the event log in the plugin's own
+  tables, and pure functions in `measures/` compute each measure from those rows; cost is priced
+  with the rate table the Usage page saves. A measure whose input is not recorded, or comes from a
+  plugin that is off or not built yet, answers `unavailable` with the reason. Migration 2 drops
+  the reactor's cursor so the new tables fill from the first event; a request waits a few seconds
+  for the reactor to catch up, and past that every measure answers `unavailable`. Where
+  compaction before the upgrade kept a later thread event in place of a `thread.settled`, who
+  settled is lost, and a thread settled by hand that way counts as an accepted outcome only if a
+  pull request merged. The template plugin: it uses every host seam once (database, reactor,
+  sweep, gateway method, MCP tool, settings panel) and is the one to copy. Server:
+  `apps/server/src/plugins/telemetry/`. Contracts: `packages/contracts/src/plugins/telemetry.ts`.
+  Web: `apps/web/src/plugins/telemetry/`.
 - **routing**: which model does which work. Three tiers, `cheap`, `standard` and `strong`, each map
   to a provider instance and a model, set for the environment and overridable per project, in the
   plugin's own database. A tier with nothing saved falls back to the built-in: one instance's model

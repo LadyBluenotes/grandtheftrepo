@@ -12,7 +12,7 @@ import * as Telemetry from "./Telemetry.ts";
 
 const TelemetryMeasuresTool = Tool.make("telemetry_measures", {
   description:
-    "Report a project's token usage between two ISO instants, from the telemetry plugin. Until the measures are built it answers state unavailable with the reason.",
+    "Report a project's efficiency measures over a window: from (inclusive) and to (exclusive), ISO instants in UTC. Each measure has a value with its unit and direction, how many turns, runs or threads contributed, and the event fields it read; a measure whose inputs are missing answers state unavailable with the reason instead of a value.",
   parameters: TelemetryMeasuresInput,
   success: TelemetryMeasuresResult,
   failure: OrchestratorMcpFailure,
@@ -43,7 +43,14 @@ export const handlers = McpToolAccess.toLayer(
     });
     return {
       telemetry_measures: McpToolAccess.reads((input) =>
-        Effect.flatMap(telemetry, (t) => t.measures(input)),
+        Effect.flatMap(telemetry, (t) => t.measures(input)).pipe(
+          Effect.catchTags({
+            TelemetryError: (error) =>
+              Effect.fail(
+                new OrchestratorMcpFailure({ code: "orchestration_error", message: error.message }),
+              ),
+          }),
+        ),
       ),
     };
   }),
