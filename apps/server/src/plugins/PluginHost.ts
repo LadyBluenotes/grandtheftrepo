@@ -20,7 +20,7 @@ import * as RuntimeLayer from "../orchestration-v2/runtimeLayer.ts";
 import * as PluginDatabase from "./PluginDatabase.ts";
 import * as PluginSupervisor from "./PluginSupervisor.ts";
 import type { ServerPlugin } from "./Plugin.ts";
-import { type PluginRequirements, registry } from "./registry.ts";
+import { type PluginMcpRequirements, type PluginRequirements, registry } from "./registry.ts";
 import type { toolkitRegistration } from "../mcp/McpHttpServer.ts";
 import * as KanbanHandlers from "./kanban/handlers.ts";
 import * as SupervisorToolkit from "./supervisorToolkit.ts";
@@ -193,7 +193,7 @@ const layer = Layer.effect(PluginHost, make(registry));
 
 const mergeActive = <R>(
   pick: (
-    plugin: ServerPlugin<PluginRequirements>,
+    plugin: ServerPlugin<PluginRequirements, PluginMcpRequirements>,
   ) => Layer.Layer<never, never, R | SqlClient.SqlClient> | undefined,
 ) =>
   Effect.gen(function* () {
@@ -219,11 +219,14 @@ const mergeActive = <R>(
       );
   });
 
-/** The host, its supervisor and every active plugin's services, for the server's layer chain. */
+/**
+ * The host, its supervisor and every active plugin's services, for the server's
+ * layer chain. A plugin's reactor reads the event sink the orchestrator
+ * publishes to; the runtime layer keeps it to itself, so the same layer is
+ * provided here, and layer memoization makes it the one instance.
+ */
 export const layerAll = Layer.unwrap(mergeActive((plugin) => plugin.layer)).pipe(
   Layer.provideMerge(PluginSupervisor.layer(registry.map((plugin) => plugin.id))),
-  // The orchestrator's own sink object: a build makes one instance of a layer, so the reactors
-  // share its live stream instead of listening on a second sink nothing publishes to.
   Layer.provide(RuntimeLayer.layerEventSink),
   Layer.provideMerge(layer),
 );
