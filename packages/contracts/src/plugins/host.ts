@@ -16,6 +16,7 @@ import { definePluginMethods } from "./method.ts";
 
 export * from "./kanban.ts";
 export * from "./method.ts";
+export * from "./routing.ts";
 export * from "./supervisor.ts";
 export * from "./telemetry.ts";
 

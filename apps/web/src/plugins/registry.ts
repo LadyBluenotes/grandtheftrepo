@@ -1,7 +1,8 @@
 import type { PluginStatus } from "@t3tools/contracts";
-import { ActivityIcon, SquareKanbanIcon, type LucideIcon } from "lucide-react";
+import { ActivityIcon, RouteIcon, SquareKanbanIcon, type LucideIcon } from "lucide-react";
 import type { ComponentType, LazyExoticComponent } from "react";
 
+import { SettingsPanel as RoutingSettingsPanel } from "./routing/SettingsPanel";
 import { TelemetrySettingsPanel } from "./telemetry/SettingsPanel";
 
 /**
@@ -26,4 +27,5 @@ export const pluginRegistry: ReadonlyArray<PluginEntry> = [
     icon: ActivityIcon,
     SettingsPanel: TelemetrySettingsPanel,
   },
+  { id: "routing", title: "Routing", icon: RouteIcon, SettingsPanel: RoutingSettingsPanel },
 ];
