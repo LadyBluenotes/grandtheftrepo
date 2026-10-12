@@ -279,6 +279,17 @@ export const KanbanSpecAttempt = Schema.Struct({
 });
 export type KanbanSpecAttempt = typeof KanbanSpecAttempt.Type;
 
+/**
+ * The latest attempt with the status its issue is in now. A `valid` attempt says the spec passed,
+ * not that the card moved: the admission can have failed after the attempt was stored, or the card
+ * can have been moved on while a drafting thread worked.
+ */
+export const KanbanSpecReport = Schema.Struct({
+  attempt: KanbanSpecAttempt,
+  issueStatus: KanbanStatus,
+});
+export type KanbanSpecReport = typeof KanbanSpecReport.Type;
+
 export const KanbanSpecifyInput = Schema.Struct({
   projectId: ProjectId,
   id: KanbanSlug,
@@ -350,12 +361,12 @@ export const KANBAN_METHODS = definePluginMethods({
     output: KanbanSpecAttempt,
     error: KanbanError,
   },
-  /** The issue's latest spec attempt, or null. */
+  /** The issue's latest spec attempt and the status the issue is in now, or null without an attempt. */
   specGet: {
     method: "kanban.spec.get",
     gateway: "read",
     input: KanbanGetIssueInput,
-    output: Schema.NullOr(KanbanSpecAttempt),
+    output: Schema.NullOr(KanbanSpecReport),
     error: KanbanError,
   },
 });

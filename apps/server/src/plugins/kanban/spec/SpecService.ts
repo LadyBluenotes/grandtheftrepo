@@ -6,12 +6,14 @@ import {
   type KanbanIssue,
   type KanbanSpecAttempt,
   type KanbanSpecifyInput,
+  type KanbanSpecReport,
   type KanbanSpecSource,
   type KanbanSpecStatus,
   type OrchestrationV2Run,
   type OrchestrationV2TurnItem,
   type ProjectId,
 } from "@t3tools/contracts";
+import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
@@ -50,6 +52,11 @@ const ENDED = new Set<OrchestrationV2Run["status"]>([
  * have nothing to show for it. A crash between the two leaves a `valid` attempt for a card still
  * in Triage or Inbox. A person recovers it by calling `specify` again: the "already admitted"
  * refusal only applies once the card has left those columns.
+ *
+ * A drafting thread that fails to launch closes its attempt as `malformed` instead of deleting it:
+ * the launcher stores the thread and its first message before its later checks, so a failure can
+ * come after the run has started. That run has no attempt to report into, since `finish` only
+ * decides `running` attempts, and the person runs `specify` again.
  */
 export class SpecService extends Context.Service<
   SpecService,
@@ -59,9 +66,10 @@ export class SpecService extends Context.Service<
      * routing plugin's tier service the caller's context holds.
      */
     readonly specify: (input: KanbanSpecifyInput) => Effect.Effect<KanbanSpecAttempt, KanbanError>;
+    /** The latest attempt with the status its issue is in now; null while there is no attempt. */
     readonly latest: (
       input: KanbanGetIssueInput,
-    ) => Effect.Effect<KanbanSpecAttempt | null, KanbanError>;
+    ) => Effect.Effect<KanbanSpecReport | null, KanbanError>;
     /** Decides the running attempt whose drafting thread `run` belongs to, once the run has ended. */
     readonly finish: (run: OrchestrationV2Run) => Effect.Effect<void, KanbanError>;
   }
@@ -252,6 +260,17 @@ const make = Effect.gen(function* () {
                   creationSource: "server",
                 })
                 .pipe(
+                  Effect.onError((cause) => {
+                    const failure = Cause.squash(cause);
+                    return close({
+                      id: attempt.id,
+                      status: "malformed",
+                      text: null,
+                      reason: `The drafting thread could not be started: ${
+                        failure instanceof Error ? failure.message : "the launch did not finish."
+                      }`,
+                    }).pipe(Effect.ignore);
+                  }),
                   Effect.catchTags({
                     ThreadLaunchError: (cause) =>
                       Effect.logWarning("kanban: drafting thread did not start", { cause }).pipe(
@@ -267,9 +286,6 @@ const make = Effect.gen(function* () {
                     ThreadManagementProviderInstanceDisabledError: (error) =>
                       Effect.fail(invalid(error.message)),
                   }),
-                  Effect.onError(() =>
-                    sql`DELETE FROM spec_attempt WHERE id = ${attempt.id}`.pipe(Effect.ignore),
-                  ),
                 );
               return { threadId: childThreadId, attempt };
             }),
@@ -295,13 +311,17 @@ const make = Effect.gen(function* () {
       : yield* draft(issue, projectId);
   });
 
-  const latest: SpecService["Service"]["latest"] = ({ projectId, id }) =>
-    sql<AttemptRow>`SELECT * FROM spec_attempt
-      WHERE project_id = ${projectId} AND issue_id = ${id}
-      ORDER BY id DESC LIMIT 1`.pipe(
-      Effect.map((rows) => (rows[0] === undefined ? null : toAttempt(rows[0]))),
-      Effect.catchTags({ SqlError: io }),
-    );
+  const latest: SpecService["Service"]["latest"] = Effect.fn("SpecService.latest")(function* ({
+    projectId,
+    id,
+  }) {
+    const rows = yield* sql<AttemptRow>`SELECT * FROM spec_attempt
+        WHERE project_id = ${projectId} AND issue_id = ${id}
+        ORDER BY id DESC LIMIT 1`.pipe(Effect.catchTags({ SqlError: io }));
+    if (rows[0] === undefined) return null;
+    const issue = yield* store.getIssue({ projectId, id });
+    return { attempt: toAttempt(rows[0]), issueStatus: issue.status };
+  });
 
   const finish: SpecService["Service"]["finish"] = Effect.fn("SpecService.finish")(function* (run) {
     if (!ENDED.has(run.status)) return;

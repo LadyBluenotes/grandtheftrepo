@@ -224,16 +224,24 @@ it.effect("registers kanban tools through the plugin host and files an issue ove
           name: "kanban_ticket_specify",
           arguments: { projectId, id: "spec-me", useExisting: true },
         }).pipe(Effect.map(resultText));
-      expect(yield* specify(6)).toContain("from the description: valid.");
-      expect(
-        resultText(
-          yield* rpc(7, "tools/call", {
-            name: "kanban_spec_get",
-            arguments: { projectId, id: "spec-me" },
-          }),
-        ),
-      ).toContain("from the description: valid.");
+      expect(yield* specify(6)).toContain("from the description: valid. The spec passed.");
+      const specGet = (id: number) =>
+        rpc(id, "tools/call", {
+          name: "kanban_spec_get",
+          arguments: { projectId, id: "spec-me" },
+        }).pipe(Effect.map(resultText));
+      // A valid attempt says the spec passed, and spec_get says where the card is.
+      expect(yield* specGet(7)).toContain(
+        "from the description: valid. The spec passed; the issue is in todo.",
+      );
       expect(yield* specify(8)).toContain("This ticket is already admitted.");
+      yield* rpc(20, "tools/call", {
+        name: "kanban_write",
+        arguments: { projectId, action: "issue.move", id: "spec-me", status: "triage" },
+      });
+      const waiting = yield* specGet(21);
+      expect(waiting).toContain("valid. The spec passed, but the issue is still in triage");
+      expect(waiting).not.toContain("the issue is in todo");
 
       const fs = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;

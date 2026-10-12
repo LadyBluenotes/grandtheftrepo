@@ -94,7 +94,7 @@ const KanbanTicketSpecifyTool = Tool.make("kanban_ticket_specify", {
 const KanbanSpecGetTool = Tool.make("kanban_spec_get", {
   ...shared,
   description:
-    "The latest spec attempt for a kanban issue: running, valid or malformed, with the reason a malformed one was refused and the text that was checked.",
+    "The latest spec attempt for a kanban issue: running, valid or malformed, with the reason a malformed one was refused and the text that was checked. valid means the spec passed, not that the card moved: the result also gives the status the issue is in now.",
   parameters: Schema.Struct({ projectId: Schema.optional(ProjectId), id: KanbanSlug }),
 })
   .annotate(Tool.Readonly, true)
@@ -161,7 +161,13 @@ const issueText = (issue: KanbanIssue, decisions: ReadonlyArray<KanbanDecision>)
       : []),
   ].join("\n");
 
-const attemptText = (attempt: KanbanSpecAttempt) => {
+/** Where the issue is now, after a spec that passed: a passed spec does not say the card moved. */
+const placement = (issueStatus: KanbanStatus) =>
+  issueStatus === "triage" || issueStatus === "inbox"
+    ? `, but the issue is still in ${issueStatus}, waiting to be admitted: call kanban_ticket_specify again`
+    : `; the issue is in ${issueStatus}`;
+
+const attemptText = (attempt: KanbanSpecAttempt, issueStatus?: KanbanStatus) => {
   const from =
     attempt.childThreadId === null ? "the description" : `drafting thread ${attempt.childThreadId}`;
   const head = `Spec attempt ${attempt.id} for ${attempt.issueId}, from ${from}: ${attempt.status}.`;
@@ -170,7 +176,7 @@ const attemptText = (attempt: KanbanSpecAttempt) => {
     case "running":
       return `${head} kanban_spec_get shows the result once the thread's run ends.`;
     case "valid":
-      return `${head} The issue is admitted with the Acceptance items as its criteria.${text}`;
+      return `${head} The spec passed${issueStatus === undefined ? "" : placement(issueStatus)}.${text}`;
     case "malformed":
       return `${head} ${attempt.reason ?? ""} The issue is unchanged.${text}`;
   }
@@ -297,8 +303,10 @@ export const handlers = McpToolAccess.toLayer(
       kanban_spec_get: McpToolAccess.reads(({ projectId: given, id }) =>
         Effect.gen(function* () {
           const projectId = yield* resolveProjectId(yield* readCaller(), given);
-          const attempt = yield* (yield* spec).latest({ projectId, id });
-          return attempt === null ? `No spec attempt for ${id}.` : attemptText(attempt);
+          const report = yield* (yield* spec).latest({ projectId, id });
+          return report === null
+            ? `No spec attempt for ${id}.`
+            : attemptText(report.attempt, report.issueStatus);
         }).pipe(Effect.catchTags({ KanbanError: (error) => Effect.fail(failure(error)) })),
       ),
     };

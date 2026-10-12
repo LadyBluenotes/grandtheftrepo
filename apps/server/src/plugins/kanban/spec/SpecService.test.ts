@@ -274,16 +274,28 @@ const start = Effect.gen(function* () {
 
   const launched: Array<ThreadLaunchService.ThreadLaunchInput> = [];
   const routed: Array<TierSelectionService.Work> = [];
+  // The step a launch fails at, after it has recorded the input as the real launcher records the
+  // thread; null launches fine.
+  let launchFailsAt: ThreadLaunchService.ThreadLaunchError["operation"] | null = null;
   const launcher = ThreadLaunchService.ThreadLaunchService.of({
     launch: (input) =>
-      Effect.sync(() => {
+      Effect.suspend(() => {
         launched.push(input);
+        if (launchFailsAt !== null)
+          return Effect.fail(
+            new ThreadLaunchService.ThreadLaunchError({
+              operation: launchFailsAt,
+              commandId: input.commandId,
+              projectId: input.projectId,
+              cause: new Error("The provider is offline."),
+            }),
+          );
         // Only the thread id is read.
-        return {
+        return Effect.succeed({
           threadId: input.threadId ?? ThreadId.make("unused"),
           resumed: false,
           projection: {} as never,
-        };
+        });
       }),
     checkWorktreeBase: () => Effect.void,
     retryPreparation: () => Effect.die("unused"),
@@ -341,7 +353,23 @@ const start = Effect.gen(function* () {
     admitFails = fails;
   };
 
-  return { spec, store, gate, launched, routed, specify, react, file, fileText, failAdmit };
+  const failLaunch = (operation: typeof launchFailsAt) => {
+    launchFailsAt = operation;
+  };
+
+  return {
+    spec,
+    store,
+    gate,
+    launched,
+    routed,
+    specify,
+    react,
+    file,
+    fileText,
+    failAdmit,
+    failLaunch,
+  };
 });
 
 const refusal = <A>(effect: Effect.Effect<A, KanbanError>) =>
@@ -379,7 +407,7 @@ describe("SpecService", () => {
         assert.deepEqual(child.modelSelection, modelSelection);
         assert.include(child.initialMessage?.text, rough);
         assert.include(child.initialMessage?.text, "## Acceptance");
-        assert.deepEqual(yield* spec.latest({ projectId, id }), attempt);
+        assert.deepEqual(yield* spec.latest({ projectId, id }), { attempt, issueStatus: "triage" });
 
         // Plan mode answers with a proposed plan; the chatter after it is not the spec.
         const threadId = child.threadId!;
@@ -411,10 +439,11 @@ describe("SpecService", () => {
         );
         assert.strictEqual(issue.description, rough);
         const decided = yield* spec.latest({ projectId, id });
-        assert.strictEqual(decided?.status, "valid");
-        assert.strictEqual(decided?.text, validSpec);
-        assert.isNull(decided?.reason);
-        assert.isNotNull(decided?.completedAt);
+        assert.strictEqual(decided?.issueStatus, "todo");
+        assert.strictEqual(decided?.attempt.status, "valid");
+        assert.strictEqual(decided?.attempt.text, validSpec);
+        assert.isNull(decided?.attempt.reason);
+        assert.isNotNull(decided?.attempt.completedAt);
       }),
     ).pipe(Effect.provide(layerTest)),
   );
@@ -435,10 +464,11 @@ describe("SpecService", () => {
           runUpdated(threadId, runId, "completed"),
         ]);
 
-        const attempt = yield* spec.latest({ projectId, id });
-        assert.strictEqual(attempt?.status, "malformed");
-        assert.strictEqual(attempt?.reason, "Approach has 6 items; the limit is 5.");
-        assert.strictEqual(attempt?.text, sixSteps);
+        const report = yield* spec.latest({ projectId, id });
+        assert.strictEqual(report?.attempt.status, "malformed");
+        assert.strictEqual(report?.attempt.reason, "Approach has 6 items; the limit is 5.");
+        assert.strictEqual(report?.attempt.text, sixSteps);
+        assert.strictEqual(report?.issueStatus, "triage");
         assert.strictEqual(yield* fileText(id), before);
         assert.strictEqual((yield* store.getIssue({ projectId, id })).status, "triage");
       }),
@@ -459,9 +489,12 @@ describe("SpecService", () => {
           runUpdated(threadId, RunId.make("run:spec-failed"), "failed"),
         ]);
 
-        const attempt = yield* spec.latest({ projectId, id });
-        assert.strictEqual(attempt?.status, "malformed");
-        assert.strictEqual(attempt?.reason, "The drafting run ended failed before it sent a spec.");
+        const report = yield* spec.latest({ projectId, id });
+        assert.strictEqual(report?.attempt.status, "malformed");
+        assert.strictEqual(
+          report?.attempt.reason,
+          "The drafting run ended failed before it sent a spec.",
+        );
         assert.strictEqual(yield* fileText(id), before);
       }),
     ).pipe(Effect.provide(layerTest)),
@@ -515,16 +548,85 @@ describe("SpecService", () => {
           const error = yield* refusal(specify({ projectId, id, useExisting: true }));
           assert.strictEqual(error.code, "io");
           const stored = yield* spec.latest({ projectId, id });
-          assert.strictEqual(stored?.status, "valid");
-          assert.strictEqual(stored?.source, "existing");
+          assert.strictEqual(stored?.attempt.status, "valid");
+          assert.strictEqual(stored?.attempt.source, "existing");
+          // A valid spec is not an admitted card, and the report says where the card is.
+          assert.strictEqual(stored?.issueStatus, "triage");
           assert.strictEqual((yield* store.getIssue({ projectId, id })).status, "triage");
 
           // The card is still in Triage, so the "already admitted" refusal does not apply.
           failAdmit(false);
           const again = yield* specify({ projectId, id, useExisting: true });
           assert.strictEqual(again.status, "valid");
-          assert.notStrictEqual(again.id, stored?.id);
+          assert.notStrictEqual(again.id, stored?.attempt.id);
           assert.strictEqual((yield* store.getIssue({ projectId, id })).status, "todo");
+        }),
+      ).pipe(Effect.provide(layerTest)),
+  );
+
+  it.effect("a valid draft for a card that moved meanwhile does not admit it", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { spec, store, launched, specify, react, file } = yield* start;
+        const { id } = yield* file("Login loops", rough);
+
+        yield* specify({ projectId, id });
+        // A person moves the card while the child drafts.
+        yield* store.write(projectId, "user", { action: "issue.move", id, status: "in_progress" });
+        const threadId = launched[0]!.threadId!;
+        yield* react([
+          threadCreated(threadId),
+          planned(threadId, RunId.make("run:spec-moved"), 1, validSpec),
+          runUpdated(threadId, RunId.make("run:spec-moved"), "completed"),
+        ]);
+
+        const report = yield* spec.latest({ projectId, id });
+        assert.strictEqual(report?.attempt.status, "valid");
+        assert.strictEqual(report?.issueStatus, "in_progress");
+        assert.lengthOf((yield* store.getIssue({ projectId, id })).criteria, 0);
+      }),
+    ).pipe(Effect.provide(layerTest)),
+  );
+
+  it.effect(
+    "a launch that fails closes its attempt, and the run it may have started is ignored",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const { spec, store, launched, specify, react, file, failLaunch } = yield* start;
+          const { id } = yield* file("Login loops", rough);
+
+          // The launcher stores the thread and its message before a later step fails.
+          failLaunch("dispatch-message");
+          const error = yield* refusal(specify({ projectId, id }));
+          assert.strictEqual(error.code, "io");
+          assert.lengthOf(launched, 1);
+          const child = launched[0]!;
+          const closed = yield* spec.latest({ projectId, id });
+          assert.strictEqual(closed?.attempt.status, "malformed");
+          assert.strictEqual(closed?.attempt.childThreadId, child.threadId);
+          assert.strictEqual(
+            closed?.attempt.reason,
+            `The drafting thread could not be started: Thread launch ${child.commandId} failed during dispatch-message.`,
+          );
+          assert.isNotNull(closed?.attempt.completedAt);
+
+          // The run went on regardless and sends a valid spec: there is no attempt to report into.
+          const threadId = child.threadId!;
+          const runId = RunId.make("run:spec-orphan");
+          yield* react([
+            threadCreated(threadId),
+            planned(threadId, runId, 1, validSpec),
+            runUpdated(threadId, runId, "completed"),
+          ]);
+          assert.deepEqual(yield* spec.latest({ projectId, id }), closed);
+          assert.strictEqual((yield* store.getIssue({ projectId, id })).status, "triage");
+
+          // The card is still in Triage, so the person can run `specify` again.
+          failLaunch(null);
+          const again = yield* specify({ projectId, id });
+          assert.strictEqual(again.status, "running");
+          assert.notStrictEqual(again.id, closed?.attempt.id);
         }),
       ).pipe(Effect.provide(layerTest)),
   );

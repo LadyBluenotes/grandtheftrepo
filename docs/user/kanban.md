@@ -78,7 +78,9 @@ spec you wrote in the description instead, with no model. A spec has `## Goal`, 
 list of two to five steps) and `## Acceptance` (a `- [ ]` checklist), in that order, optionally
 followed by `## Out of scope`, and no other headings. A valid spec becomes the card's acceptance
 criteria and moves it to **Todo**; a malformed one leaves the card where it is and says why. The
-description is never changed. `kanban_spec_get` shows the latest attempt.
+description is never changed. `kanban_spec_get` shows the latest attempt and the column the card is
+in now, which differs if you moved it while a draft was running. If the drafting thread cannot be
+started, the attempt is closed as malformed with the reason, and you run it again.
 
 ## Files
 
