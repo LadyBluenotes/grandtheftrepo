@@ -19,6 +19,11 @@ directory, opened and migrated before the plugin starts; its `layer` and `mcp` s
 `SqlClient`, never the core database. A failed migration keeps the plugin, and anything that depends
 on it, off for that start and shows as `startError` in `plugins.list`.
 
+A plugin reacts to committed orchestration events through `PluginReactor.start` in
+`apps/server/src/plugins/PluginReactor.ts`, which keeps its cursor and failed events in the plugin's
+own database, so a restart replays only what the plugin missed. It reads `EventSinkV2.stream`, not
+`Orchestrator.streamDomainEvents`, because only the former carries a sequence to resume from.
+
 ## Upstream seams
 
 These are the only lines upstream files carry for the plugin system. A merge conflict in one of
