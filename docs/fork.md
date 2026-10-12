@@ -71,6 +71,14 @@ them half-evaluated. The host hands `toolkitRegistration` to `ServerPlugin.mcp` 
   `<T3 home>/wiki/<project-slug>/`; the folder is changeable per project from the board.
   Server: `apps/server/src/plugins/kanban/`. Contracts: `packages/contracts/src/plugins/kanban.ts`.
   Web: `apps/web/src/plugins/kanban/`. User guide: [Kanban board](./user/kanban.md).
+- **routing**: which model does which work. Three tiers, `cheap`, `standard` and `strong`, each map
+  to a provider instance and a model, set for the environment and overridable per project, in the
+  plugin's own database. A tier with nothing saved falls back to the built-in: one instance's model
+  list, first model `strong`, last `cheap`. Agents read it with the `routing_tiers` MCP tool. The
+  panel on the Plugins page is built but not connected: `routing.tiers.get` and `.set` are plain
+  methods in `handlers.ts` until the plugin RPC gateway (#57) carries them.
+  Server: `apps/server/src/plugins/routing/`. Contracts: `packages/contracts/src/plugins/routing.ts`.
+  Web: `apps/web/src/plugins/routing/`.
 
 `apps/web/src/routeTree.gen.ts` is generated and committed. A conflict there is resolved by running
 the web dev server or build once, which regenerates it.

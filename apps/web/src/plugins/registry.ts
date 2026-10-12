@@ -1,6 +1,8 @@
 import type { PluginStatus } from "@t3tools/contracts";
-import { SquareKanbanIcon, type LucideIcon } from "lucide-react";
+import { RouteIcon, SquareKanbanIcon, type LucideIcon } from "lucide-react";
 import type { ComponentType, LazyExoticComponent } from "react";
+
+import { SettingsPanel as RoutingSettingsPanel } from "./routing/SettingsPanel";
 
 /**
  * What the web knows about a plugin. The server's `plugins.list` says whether it runs.
@@ -18,4 +20,5 @@ export interface PluginEntry {
 export const pluginRegistry: ReadonlyArray<PluginEntry> = [
   // The board keeps its own route, `/board`, so it has no `Screen` here.
   { id: "kanban", title: "Board", icon: SquareKanbanIcon },
+  { id: "routing", title: "Routing", icon: RouteIcon, SettingsPanel: RoutingSettingsPanel },
 ];

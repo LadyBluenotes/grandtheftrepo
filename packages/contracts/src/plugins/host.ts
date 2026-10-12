@@ -15,6 +15,7 @@ import {
 import { SUPERVISOR_RPC_SCOPES, SUPERVISOR_RPC_SUBSYSTEMS, SUPERVISOR_RPCS } from "./supervisor.ts";
 
 export * from "./kanban.ts";
+export * from "./routing.ts";
 export * from "./supervisor.ts";
 
 export const PLUGIN_WS_METHODS = {
