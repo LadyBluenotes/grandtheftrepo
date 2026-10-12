@@ -12,8 +12,10 @@ import {
   KANBAN_RPCS,
   type KANBAN_WS_METHODS,
 } from "./kanban.ts";
+import { POLICY_GUARDED_RPC_SCOPES, POLICY_RPC_SUBSYSTEMS, POLICY_RPCS } from "./policy.ts";
 
 export * from "./kanban.ts";
+export * from "./policy.ts";
 
 export const PLUGIN_WS_METHODS = {
   pluginsList: "plugins.list",
@@ -50,12 +52,18 @@ const PluginsSetEnabledRpc = Rpc.make(PLUGIN_WS_METHODS.pluginsSetEnabled, {
 });
 
 /** Spread into `WsRpcGroup`: the one place the core contract learns about plugins. */
-export const PLUGIN_RPCS = [PluginsListRpc, PluginsSetEnabledRpc, ...KANBAN_RPCS] as const;
+export const PLUGIN_RPCS = [
+  PluginsListRpc,
+  PluginsSetEnabledRpc,
+  ...KANBAN_RPCS,
+  ...POLICY_RPCS,
+] as const;
 
 /** Writes the client must hold a grant for; spread into `CLIENT_GUARDED_RPC_SCOPES`. */
 export const PLUGIN_GUARDED_RPC_SCOPES = {
   [PLUGIN_WS_METHODS.pluginsSetEnabled]: AuthSettingsWriteScope,
   ...KANBAN_GUARDED_RPC_SCOPES,
+  ...POLICY_GUARDED_RPC_SCOPES,
 } as const;
 
 /** Reads and subscriptions the server alone authorizes; spread into `RPC_REQUIRED_SCOPES`. */
@@ -72,4 +80,5 @@ export const PLUGIN_RPC_SUBSYSTEMS = {
   [PLUGIN_WS_METHODS.pluginsList]: "plugins",
   [PLUGIN_WS_METHODS.pluginsSetEnabled]: "plugins",
   ...KANBAN_RPC_SUBSYSTEMS,
+  ...POLICY_RPC_SUBSYSTEMS,
 } as const;

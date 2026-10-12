@@ -60,6 +60,11 @@ them half-evaluated. The host hands `toolkitRegistration` to `ServerPlugin.mcp` 
   `<T3 home>/wiki/<project-slug>/`; the folder is changeable per project from the board.
   Server: `apps/server/src/plugins/kanban/`. Contracts: `packages/contracts/src/plugins/kanban.ts`.
   Web: `apps/web/src/plugins/kanban/`. User guide: [Kanban board](./user/kanban.md).
+- **policy**: reviewed working rules per project (`*` is the whole environment), versioned in the
+  plugin's database and rendered as one marked block each, with `<state dir>/RULES.md` ahead of
+  the body, into the instruction file each agent reads from the user's home. Verify re-reads the
+  block. Server: `apps/server/src/plugins/policy/`. Contracts:
+  `packages/contracts/src/plugins/policy.ts`. No screen.
 
 `apps/web/src/routeTree.gen.ts` is generated and committed. A conflict there is resolved by running
 the web dev server or build once, which regenerates it.

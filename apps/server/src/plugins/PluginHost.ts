@@ -16,6 +16,7 @@ import type { ServerPlugin } from "./Plugin.ts";
 import { type PluginRequirements, registry } from "./registry.ts";
 import type { toolkitRegistration } from "../mcp/McpHttpServer.ts";
 import * as KanbanHandlers from "./kanban/handlers.ts";
+import * as PolicyHandlers from "./policy/handlers.ts";
 
 /** `plugins.json` under the state directory: plugin id to saved choice. Absent means enabled. */
 const EnabledState = Schema.Record(Schema.String, Schema.Boolean);
@@ -218,6 +219,7 @@ export const layerMcp = (register: typeof toolkitRegistration) =>
 /** Spread into the WebSocket handlers; the host service comes from the server's layer chain. */
 export const handlers = {
   ...KanbanHandlers.handlers,
+  ...PolicyHandlers.handlers,
   [PLUGIN_WS_METHODS.pluginsList]: () =>
     Effect.gen(function* () {
       return yield* (yield* PluginHost).statuses;
