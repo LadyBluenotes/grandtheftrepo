@@ -379,6 +379,9 @@ importers:
       '@t3tools/provider-acp-registry':
         specifier: workspace:*
         version: link:../../packages/provider-acp-registry
+      '@t3tools/provider-copilot':
+        specifier: workspace:*
+        version: link:../../packages/provider-copilot
       '@t3tools/provider-core':
         specifier: workspace:*
         version: link:../../packages/provider-core
@@ -641,6 +644,9 @@ importers:
       '@t3tools/provider-acp-registry':
         specifier: workspace:*
         version: link:../../packages/provider-acp-registry
+      '@t3tools/provider-copilot':
+        specifier: workspace:*
+        version: link:../../packages/provider-copilot
       '@t3tools/provider-core':
         specifier: workspace:*
         version: link:../../packages/provider-core
