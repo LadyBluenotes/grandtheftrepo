@@ -15,6 +15,7 @@ import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 import { resolveClaudeHomePath } from "../../provider/Drivers/ClaudeHome.ts";
 import { resolveCodexHomeLayout } from "../../provider/Drivers/CodexHomeLayout.ts";
+import * as ServerConfig from "../../config.ts";
 import * as ServerSettings from "../../serverSettings.ts";
 import { findBlock, type FoundBlock } from "./Render.ts";
 
@@ -68,6 +69,13 @@ export const targets = Effect.fn("InstructionFiles.targets")(function* () {
     codex: path.join(codexHome.sharedHomePath, "AGENTS.md"),
     copilot: path.join(copilotHome, "copilot-instructions.md"),
   } satisfies Record<PolicyAgent, string>;
+});
+
+/** The global rules every installed block starts with: `RULES.md` in the state directory. */
+export const rulesPath = Effect.fn("InstructionFiles.rulesPath")(function* () {
+  const path = yield* Path.Path;
+  const { stateDir } = yield* ServerConfig.ServerConfig;
+  return path.join(stateDir, "RULES.md");
 });
 
 /** The file's text, or undefined when there is no file. */

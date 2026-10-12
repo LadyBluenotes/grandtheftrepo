@@ -26,7 +26,6 @@ import * as Semaphore from "effect/Semaphore";
 import * as SqlClient from "effect/sql/SqlClient";
 import type * as SqlError from "effect/sql/SqlError";
 
-import * as ServerConfig from "../../config.ts";
 import * as ServerSettings from "../../serverSettings.ts";
 import * as Files from "./InstructionFiles.ts";
 import { blockId, findBlock, placeBlock, renderBlock, sha256 } from "./Render.ts";
@@ -80,9 +79,14 @@ export class PolicyService extends Context.Service<
     readonly create: (input: PolicyCreateInput) => Effect.Effect<PolicyVersionRef, PolicyError>;
     /** Accepts one version and supersedes every other accepted one, so accepting an older version restores it. */
     readonly accept: (input: PolicyAcceptInput) => Effect.Effect<PolicyVersionRef, PolicyError>;
-    /** Writes the accepted version's block into each agent's instruction file. */
+    /**
+     * Writes the accepted version's block into each agent's instruction file. `beforeWrite` runs
+     * under the install lock right before the first file is written, and failing it cancels the
+     * install with nothing written. The sweep uses it to look for a run again after the lock wait.
+     */
     readonly install: (
       input: PolicyAgentsInput,
+      beforeWrite?: Effect.Effect<void, PolicyError>,
     ) => Effect.Effect<ReadonlyArray<PolicyInstallResult>, PolicyError>;
     /** Re-reads each delivered file and compares its block with what was installed. */
     readonly verify: (
@@ -113,13 +117,12 @@ const make = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
-  const { stateDir } = yield* ServerConfig.ServerConfig;
   const services = yield* Effect.context<
     FileSystem.FileSystem | Path.Path | ServerSettings.ServerSettingsService
   >();
   const provided = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
     Effect.provideContext(effect, services);
-  const rulesPath = path.join(stateDir, "RULES.md");
+  const rulesPath = yield* Files.rulesPath();
   /** Installs read the files they rewrite, so two at once would drop one's block; verify shares it. */
   const installLock = yield* Semaphore.make(1);
   const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
@@ -225,7 +228,10 @@ const make = Effect.gen(function* () {
   );
 
   const install = Effect.fn("PolicyService.install")(
-    function* ({ projectId, key, agents = POLICY_AGENTS }: PolicyAgentsInput) {
+    function* (
+      { projectId, key, agents = POLICY_AGENTS }: PolicyAgentsInput,
+      beforeWrite?: Effect.Effect<void, PolicyError>,
+    ) {
       const policy = yield* policyOf(projectId, key);
       if (policy.state !== "accepted") {
         return yield* invalid(`Policy "${key}" version ${policy.version} is not accepted.`);
@@ -258,6 +264,7 @@ const make = Effect.gen(function* () {
         plans.push({ agent, path: filePath, next: placeBlock(text, found, block.text) });
       }
       const at = yield* nowIso;
+      if (beforeWrite !== undefined) yield* beforeWrite;
       const results: Array<PolicyInstallResult> = [];
       for (const plan of plans) {
         if (plan.next !== undefined) {
