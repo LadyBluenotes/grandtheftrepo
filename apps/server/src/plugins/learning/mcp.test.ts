@@ -64,6 +64,8 @@ it.effect(
           filename: ":memory:",
           migrations,
         });
+        // As `thread.created` leaves it: the plugin knows thread-1 belongs to project-1.
+        yield* sql`INSERT INTO threads (thread_id, project_id) VALUES ('thread-1', ${projectId})`;
         const layerServer = PluginHost.layerMcp(McpHttpServer.toolkitRegistration).pipe(
           Layer.provide(
             Layer.mock(PluginHost.PluginHost)({
@@ -148,6 +150,19 @@ it.effect(
         expect(added.failureKind).toBe("manual");
         expect(added.declaredMode).toBe("incomplete");
         expect(added.description).toBe("Shipped without the migration. TOKEN=[redacted]");
+
+        const mismatched = yield* rpc(6, "tools/call", {
+          name: "learning_correction_add",
+          arguments: {
+            projectId: "project-2",
+            threadId: "thread-1",
+            description: "Wrong project.",
+          },
+        });
+        expect(JSON.parse(resultText(mismatched))).toMatchObject({
+          code: "invalid_request",
+          message: 'Thread "thread-1" belongs to project "project-1".',
+        });
 
         const listed = decodeCorrections(
           resultText(

@@ -33,6 +33,7 @@ export const handlers: Handlers<SqlError.SqlError> = {
         description: "Thread reopened after it was settled.",
         sourceEventIds: [stored.event.id],
         sourceKey: `${thread.id}:${DateTime.formatIso(stored.event.occurredAt)}`,
+        occurredAt: stored.event.occurredAt,
       });
     }),
 };

@@ -15,6 +15,7 @@ import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/sql/SqlClient";
 import type * as SqlError from "effect/sql/SqlError";
+import { threadFacts } from "./producers/threads.ts";
 import { redact } from "./redact.ts";
 
 /** A correction to store. The description is redacted and bounded on the way in. */
@@ -27,6 +28,8 @@ export interface NewCorrection {
   readonly sourceEventIds: ReadonlyArray<EventId>;
   /** Unique with `failureKind`: the same pair again stores nothing. Null for a row nothing replays. */
   readonly sourceKey: string | null;
+  /** When the source event happened, which dates the row; without one the row is dated now. */
+  readonly occurredAt?: DateTime.Utc | undefined;
 }
 
 interface Row {
@@ -68,13 +71,13 @@ const toCorrection = (row: Row): LearningCorrection => ({
  */
 export const insert = Effect.fn("CorrectionStore.insert")(function* (input: NewCorrection) {
   const sql = yield* SqlClient.SqlClient;
-  const now = DateTime.formatIso(yield* DateTime.now);
+  const at = DateTime.formatIso(input.occurredAt ?? (yield* DateTime.now));
   const inserted = yield* sql<{ readonly id: number }>`INSERT INTO corrections
     (project_id, thread_id, failure_kind, cause_class, declared_mode, description,
      source_event_ids, source_key, created_at, updated_at)
     VALUES (${input.projectId}, ${input.threadId}, ${input.failureKind}, 'unclassified',
      ${input.declaredMode ?? null}, ${redact(input.description)},
-     ${encodeEventIds(input.sourceEventIds)}, ${input.sourceKey}, ${now}, ${now})
+     ${encodeEventIds(input.sourceEventIds)}, ${input.sourceKey}, ${at}, ${at})
     ON CONFLICT (failure_kind, source_key) DO NOTHING
     RETURNING id`;
   const id = inserted[0]?.id;
@@ -89,8 +92,13 @@ export const insert = Effect.fn("CorrectionStore.insert")(function* (input: NewC
 export class CorrectionStore extends Context.Service<
   CorrectionStore,
   {
-    /** Stores a correction; the same `(failureKind, sourceKey)` again answers with the existing row. */
-    readonly record: (input: NewCorrection) => Effect.Effect<LearningCorrection, LearningError>;
+    /**
+     * Stores a correction on a thread the plugin has seen; the same `(failureKind, sourceKey)`
+     * again answers with the existing row. The project defaults to the thread's and must match it.
+     */
+    readonly record: (
+      input: Omit<NewCorrection, "projectId"> & { readonly projectId?: ProjectId | undefined },
+    ) => Effect.Effect<LearningCorrection, LearningError>;
     /** A project's corrections created between `from` and `to`, inclusive, oldest first. */
     readonly list: (
       input: LearningCorrectionsInput,
@@ -113,8 +121,23 @@ const make = Effect.gen(function* () {
       ),
     );
 
-  const record: CorrectionStore["Service"]["record"] = (input) =>
-    insert(input).pipe(Effect.provideService(SqlClient.SqlClient, sql), Effect.catch(io));
+  const record: CorrectionStore["Service"]["record"] = ({ projectId, ...input }) =>
+    Effect.gen(function* () {
+      const thread = yield* threadFacts(input.threadId);
+      if (thread === undefined) {
+        return yield* new LearningError({
+          code: "not_found",
+          message: `Thread "${input.threadId}" is unknown to the learning plugin.`,
+        });
+      }
+      if (projectId !== undefined && projectId !== thread.project_id) {
+        return yield* new LearningError({
+          code: "not_found",
+          message: `Thread "${input.threadId}" belongs to project "${thread.project_id}".`,
+        });
+      }
+      return yield* insert({ ...input, projectId: thread.project_id });
+    }).pipe(Effect.provideService(SqlClient.SqlClient, sql), Effect.catchTags({ SqlError: io }));
 
   const list: CorrectionStore["Service"]["list"] = (input) =>
     sql<Row>`SELECT * FROM corrections

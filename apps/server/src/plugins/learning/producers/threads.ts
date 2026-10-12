@@ -4,13 +4,14 @@ import * as SqlClient from "effect/sql/SqlClient";
 
 /**
  * What the producers know about a thread, from the thread events the reactor
- * replays: its project, whether it is settled, and whether its pull request
- * asks for changes. Nothing here reads the core database.
+ * replays: its project, whether it is settled, and which of its pull requests
+ * ask for changes. Nothing here reads the core database.
  */
 export interface ThreadFacts {
   readonly project_id: ProjectId;
   readonly settled: number;
-  readonly changes_requested: number;
+  /** A JSON array of pull request keys. */
+  readonly changes_requested: string;
 }
 
 /** Every thread event carries the whole thread, so any of them can introduce it. */

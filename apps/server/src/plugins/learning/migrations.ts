@@ -21,11 +21,12 @@ const corrections: PluginMigration[2] = Effect.gen(function* () {
   yield* sql`CREATE UNIQUE INDEX corrections_source ON corrections (failure_kind, source_key)`;
   yield* sql`CREATE INDEX corrections_project_created ON corrections (project_id, created_at)`;
   // What the producers know about a thread, kept from thread events so nothing reads the core database.
+  // `changes_requested` is a JSON array of the keys of its pull requests whose review asks for changes.
   yield* sql`CREATE TABLE threads (
     thread_id TEXT PRIMARY KEY,
     project_id TEXT NOT NULL,
     settled INTEGER NOT NULL DEFAULT 0,
-    changes_requested INTEGER NOT NULL DEFAULT 0
+    changes_requested TEXT NOT NULL DEFAULT '[]'
   )`;
 });
 

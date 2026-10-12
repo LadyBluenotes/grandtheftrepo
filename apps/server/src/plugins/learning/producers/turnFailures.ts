@@ -34,6 +34,7 @@ export const handlers: Handlers<SqlError.SqlError> = {
         description: `Provider turn ${turn.ordinal} ${turn.status}.`,
         sourceEventIds: [stored.event.id],
         sourceKey: `${turn.id}:${turn.status}`,
+        occurredAt: stored.event.occurredAt,
       });
     }),
 };

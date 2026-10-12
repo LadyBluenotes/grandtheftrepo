@@ -151,11 +151,12 @@ const wakeEvent = (
 
 const pullRequest = (
   reviewDecision: ThreadPullRequestSnapshot["reviewDecision"],
+  number = 7,
 ): ThreadPullRequestLink => ({
   host: "github.com",
   repository: "o/r",
-  number: 7,
-  url: "https://github.com/o/r/pull/7",
+  number,
+  url: `https://github.com/o/r/pull/${number}`,
   source: "manual",
   linkedAt: "2026-10-02T12:00:00.000Z",
   snapshot: {
@@ -219,6 +220,11 @@ it.effect("a failed turn is one correction, replayed or updated again", () =>
           description: "Provider turn 1 failed.",
         },
       ]);
+      // The reactor replays history from the first event: the row takes the event's time, not the
+      // test clock's epoch.
+      assert.deepEqual(yield* sql`SELECT created_at, updated_at FROM corrections`, [
+        { created_at: "2026-10-02T12:00:00.000Z", updated_at: "2026-10-02T12:00:00.000Z" },
+      ]);
       yield* replay(sql);
       yield* react(sql, [turnEvent(1, "failed")]);
       assert.strictEqual((yield* rows(sql)).length, 1);
@@ -280,6 +286,20 @@ it.effect("a wake about new comments counts while changes are requested, redacte
           "#7: new comments",
           "Update on pull request #7:\n- 1 new comment",
         ),
+        // Two pull requests on one thread: only a wake for the one asking for changes counts.
+        threadEvent("thread.pull-request-synced", {
+          pullRequests: [pullRequest("approved"), pullRequest("changes-requested", 8)],
+        }),
+        wakeEvent(
+          "message:pr-watch:4",
+          "#7: new comments",
+          "Update on pull request #7:\n- 1 new comment",
+        ),
+        wakeEvent(
+          "message:pr-watch:5",
+          "#8: new comments",
+          "Update on pull request #8:\n- 1 new comment",
+        ),
       ]);
       assert.deepEqual(yield* rows(sql), [
         {
@@ -288,9 +308,14 @@ it.effect("a wake about new comments counts while changes are requested, redacte
           description:
             'Update on pull request #7:\n- 1 new comment:\n  - reviewer on src/index.ts: "Drop TOKEN=[redacted] from the diff."',
         },
+        {
+          failure_kind: "changes_requested",
+          source_key: "message:pr-watch:5",
+          description: "Update on pull request #8:\n- 1 new comment",
+        },
       ]);
       yield* replay(sql);
-      assert.strictEqual((yield* rows(sql)).length, 1);
+      assert.strictEqual((yield* rows(sql)).length, 2);
     }),
   ).pipe(Effect.provide(layerSink)),
 );
@@ -341,7 +366,8 @@ it.effect(
         // A second manual row never collides with the first: null source keys are distinct.
         yield* store.record({ ...manual, declaredMode: undefined, sourceEventIds: [] });
 
-        // `it.effect` runs on the test clock, so rows are dated at its epoch.
+        // `it.effect` runs on the test clock, so manual rows are dated at its epoch and the turn
+        // failure at its event.
         const range = {
           projectId,
           from: "1970-01-01T00:00:00.000Z",
@@ -350,13 +376,13 @@ it.effect(
         const all = yield* store.list(range);
         assert.deepEqual(
           all.map((correction) => correction.failureKind),
-          ["provider_turn_failed", "manual", "manual"],
+          ["manual", "manual", "provider_turn_failed"],
         );
         assert.deepEqual(
           (yield* store.list({ ...range, failureKind: "provider_turn_failed" })).map((c) => c.id),
-          [all[0]!.id],
+          [all[2]!.id],
         );
-        assert.deepEqual(yield* store.list({ ...range, from: "2000-01-01T00:00:00.000Z" }), []);
+        assert.deepEqual(yield* store.list({ ...range, from: "2026-10-03T00:00:00.000Z" }), []);
         assert.deepEqual(
           yield* store.list({ ...range, projectId: ProjectId.make("project:other") }),
           [],

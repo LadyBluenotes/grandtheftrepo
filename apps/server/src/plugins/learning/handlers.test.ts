@@ -9,6 +9,7 @@ import { handlers } from "./handlers.ts";
 import { migrations } from "./migrations.ts";
 
 const projectId = ProjectId.make("project:learning");
+const threadId = ThreadId.make("thread:learning");
 const range = { projectId, from: "1970-01-01T00:00:00.000Z", to: "2100-01-01T00:00:00.000Z" };
 
 it.effect("answers with the inactive error while the plugin is off", () =>
@@ -31,9 +32,11 @@ it.effect("lists and reads corrections through the store while the plugin runs",
         Layer.provide(Layer.succeed(SqlClient.SqlClient, sql)),
       );
       const store = yield* CorrectionStore.CorrectionStore.pipe(Effect.provide(layer));
+      // As `thread.created` leaves it: a manual row needs a thread the plugin has seen.
+      yield* sql`INSERT INTO threads (thread_id, project_id) VALUES (${threadId}, ${projectId})`;
       const recorded = yield* store.record({
         projectId,
-        threadId: ThreadId.make("thread:learning"),
+        threadId,
         failureKind: "manual",
         description: "Wrong file.",
         sourceEventIds: [],

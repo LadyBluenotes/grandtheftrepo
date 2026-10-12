@@ -17,14 +17,14 @@ export const LearningFailureKind = Schema.Literals([
 ]);
 export type LearningFailureKind = typeof LearningFailureKind.Type;
 
-/** The review failure modes a reviewer or person can declare. */
+/** The review failure modes a reviewer or person can declare, the six the review verdict uses. */
 export const LearningDeclaredMode = Schema.Literals([
-  "wrong_target",
+  "defect",
   "incomplete",
-  "regression",
-  "unverified",
-  "scope_creep",
-  "unsafe",
+  "scope_drift",
+  "missing_verification",
+  "convention",
+  "unclear_spec",
 ]);
 export type LearningDeclaredMode = typeof LearningDeclaredMode.Type;
 
