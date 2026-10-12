@@ -31,6 +31,7 @@ import { SidebarProviderUpdatePill } from "./SidebarProviderUpdatePill";
 import { SidebarUpdateArchitectureWarning, SidebarUpdatePill } from "./SidebarUpdatePill";
 import { PullRequestGlyph } from "~/components/pullRequest/pullRequestIcons";
 import { kanbanSupportedAtom } from "~/plugins/kanban/state";
+import { PluginSidebarEntries } from "~/plugins/PluginSidebarEntries";
 import { observeResize } from "~/lib/observeResize";
 
 export const SidebarChromeHeader = memo(function SidebarChromeHeader({
@@ -145,7 +146,7 @@ function SidebarBrandMark({ onBackdrop }: { onBackdrop: boolean }) {
   );
 }
 
-function SidebarUtilityItem({
+export function SidebarUtilityItem({
   icon,
   label,
   onClick,
@@ -247,6 +248,7 @@ export const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
             label="Usage"
             onClick={handleUsageClick}
           />
+          <PluginSidebarEntries />
         </>
       )}
       <SidebarUpdatePill />
