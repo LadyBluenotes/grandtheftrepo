@@ -26,6 +26,7 @@ import type { ServerPlugin } from "./Plugin.ts";
 import { type PluginRequirements, registry } from "./registry.ts";
 import type { toolkitRegistration } from "../mcp/McpHttpServer.ts";
 import * as KanbanHandlers from "./kanban/handlers.ts";
+import * as RoutingHandlers from "./routing/handlers.ts";
 import * as SupervisorToolkit from "./supervisorToolkit.ts";
 import * as TelemetryHandlers from "./telemetry/handlers.ts";
 
@@ -258,6 +259,7 @@ const table: PluginRpc.DispatchTable<PluginHost | PluginSupervisor.PluginSupervi
       ),
   }),
   ...KanbanHandlers.table,
+  ...RoutingHandlers.table,
   ...TelemetryHandlers.table,
 };
 

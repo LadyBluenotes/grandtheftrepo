@@ -1,8 +1,12 @@
-import type { AtomCommandResult } from "@t3tools/client-runtime/state/runtime";
+import { useAtomValue } from "@effect/atom-react";
 import {
+  createPluginRpcCommand,
+  createPluginRpcQueryAtomFamily,
+} from "@t3tools/client-runtime/plugins/rpc";
+import {
+  ROUTING_METHODS,
   RoutingError,
   type RoutingScope,
-  type RoutingTiers,
   type RoutingTiersSetInput,
   type ServerProvider,
   type ServerProviderModel,
@@ -11,45 +15,51 @@ import {
 import * as Cause from "effect/Cause";
 import { AsyncResult } from "effect/reactivity";
 
-import type { EnvironmentQueryView } from "~/state/query";
+import { connectionAtomRuntime } from "~/connection/runtime";
+import { usePrimaryEnvironmentId } from "~/state/environments";
+import { useEnvironmentQuery } from "~/state/query";
+import { useAtomCommand } from "~/state/use-atom-command";
 
-const UNAVAILABLE = "Routing settings arrive with the plugin gateway.";
+const routingTiers = createPluginRpcQueryAtomFamily(connectionAtomRuntime, {
+  label: "environment-data:plugins:routing",
+  method: ROUTING_METHODS.tiersGet,
+});
 
-/*
- * Placeholder data layer. The plugin RPC gateway (#57) carries `ROUTING_METHODS.tiersGet` and
- * `.tiersSet`; until it lands nothing here calls the server. Then `useRoutingTiers` becomes
- * `useEnvironmentQuery` over `createPluginRpcQueryAtomFamily(ROUTING_METHODS.tiersGet)` and
- * `useRoutingSetTier` wraps `createPluginRpcCommand(ROUTING_METHODS.tiersSet)` with its
- * `permissionAtom` as `canWrite`; the panel does not change.
- */
+const routingSetTier = createPluginRpcCommand(connectionAtomRuntime, {
+  label: "routing:set-tier",
+  method: ROUTING_METHODS.tiersSet,
+});
 
-/** The resolved tiers for the environment, or for the project when `scope` names one. */
-export function useRoutingTiers(_scope: RoutingScope): EnvironmentQueryView<RoutingTiers> {
-  return {
-    data: null,
-    dataUpdatedAt: 0,
-    error: UNAVAILABLE,
-    failure: null,
-    isPending: false,
-    isSuccess: false,
-    refresh: () => undefined,
-  };
+/** The primary environment's resolved tiers, or one project's when `scope` names it. */
+export function useRoutingTiers(scope: RoutingScope) {
+  const environmentId = usePrimaryEnvironmentId();
+  return useEnvironmentQuery(
+    environmentId === null
+      ? null
+      : routingTiers({
+          environmentId,
+          input: scope === "environment" ? {} : { projectId: scope },
+        }),
+  );
 }
 
-export function useRoutingSetTier(): {
-  readonly canWrite: boolean;
-  readonly set: (
-    input: RoutingTiersSetInput,
-  ) => Promise<AtomCommandResult<RoutingTiers, RoutingError>>;
-} {
+/** Saves one tier on the primary environment; `canWrite` follows the settings grant. */
+export function useRoutingSetTier() {
+  const environmentId = usePrimaryEnvironmentId();
+  const run = useAtomCommand(routingSetTier, { reportFailure: false });
+  const canWrite = useAtomValue(routingSetTier.permissionAtom(environmentId));
   return {
-    canWrite: false,
-    set: () =>
-      Promise.resolve(
-        AsyncResult.failure(
-          Cause.fail(new RoutingError({ code: "inactive", message: UNAVAILABLE })),
-        ),
-      ),
+    canWrite,
+    set: (input: RoutingTiersSetInput) =>
+      environmentId === null
+        ? Promise.resolve(
+            AsyncResult.failure(
+              Cause.fail(
+                new RoutingError({ code: "inactive", message: "No environment is connected." }),
+              ),
+            ),
+          )
+        : run({ environmentId, input }),
   };
 }
 

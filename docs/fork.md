@@ -87,9 +87,8 @@ them half-evaluated. The host hands `toolkitRegistration` to `ServerPlugin.mcp` 
 - **routing**: which model does which work. Three tiers, `cheap`, `standard` and `strong`, each map
   to a provider instance and a model, set for the environment and overridable per project, in the
   plugin's own database. A tier with nothing saved falls back to the built-in: one instance's model
-  list, first model `strong`, last `cheap`. Agents read it with the `routing_tiers` MCP tool. The
-  panel on the Plugins page is built but not connected: `routing.tiers.get` and `.set` are plain
-  methods in `handlers.ts` until the plugin RPC gateway (#57) carries them.
+  list, first model `strong`, last `cheap`. Agents read it with the `routing_tiers` MCP tool; the
+  panel on the Plugins page reads and saves it through `routing.tiers.get` and `routing.tiers.set`.
   Server: `apps/server/src/plugins/routing/`. Contracts: `packages/contracts/src/plugins/routing.ts`.
   Web: `apps/web/src/plugins/routing/`.
 
