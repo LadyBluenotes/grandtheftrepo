@@ -206,14 +206,15 @@ const seed = (sql: SqlClient.SqlClient) =>
       VALUES ('thread:1', ${measuresInput.projectId}, '2026-10-02T00:00:00.000Z',
         '2026-10-03T00:00:00.000Z', 0)`;
     yield* sql`INSERT INTO telemetry_runs
-        (run_id, thread_id, turn_id, ordinal, status, model, started_at, completed_at)
+        (run_id, thread_id, turn_id, ordinal, status, model, started_at, completed_at,
+         event_sequence)
       VALUES ('run:1', 'thread:1', 'message:1', 1, 'completed', 'test-model',
-        '2026-10-02T00:00:00.000Z', '2026-10-02T00:10:00.000Z')`;
+        '2026-10-02T00:00:00.000Z', '2026-10-02T00:10:00.000Z', 1)`;
     yield* sql`INSERT INTO telemetry_tool_calls
-        (item_id, run_id, thread_id, ordinal, item_type, tool_name, path, status)
+        (item_id, run_id, thread_id, ordinal, item_type, tool_name, path, status, event_sequence)
       VALUES
-        ('item:1', 'run:1', 'thread:1', 1, 'dynamic_tool', 'Read', 'src/a.ts', 'completed'),
-        ('item:2', 'run:1', 'thread:1', 2, 'dynamic_tool', 'Read', 'src/a.ts', 'completed')`;
+        ('item:1', 'run:1', 'thread:1', 1, 'dynamic_tool', 'Read', 'src/a.ts', 'completed', 1),
+        ('item:2', 'run:1', 'thread:1', 2, 'dynamic_tool', 'Read', 'src/a.ts', 'completed', 1)`;
   });
 
 it.effect(

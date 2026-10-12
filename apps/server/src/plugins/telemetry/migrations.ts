@@ -5,7 +5,8 @@ import type { PluginMigration } from "../Plugin.ts";
 /**
  * 1: one row per provider turn. A counter is NULL when the provider did not report it, never 0.
  * 2: the runs, tool calls and threads the measures read, and the run each provider turn
- * belongs to. The reactor fills every column through `fields.ts`.
+ * belongs to. The reactor fills every column through `fields.ts`. `event_sequence` is the
+ * sequence of the event a row was last written from, so a retried older event cannot overwrite it.
  */
 export const migrations: ReadonlyArray<PluginMigration> = [
   [
@@ -33,6 +34,8 @@ export const migrations: ReadonlyArray<PluginMigration> = [
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
       yield* sql`ALTER TABLE telemetry_turn_usage ADD COLUMN run_id TEXT`;
+      // Rows from migration 1 take 0; the replay below rewrites them from their events.
+      yield* sql`ALTER TABLE telemetry_turn_usage ADD COLUMN event_sequence INTEGER NOT NULL DEFAULT 0`;
       yield* sql`CREATE INDEX telemetry_turn_usage_thread ON telemetry_turn_usage (thread_id)`;
       yield* sql`
         CREATE TABLE telemetry_runs (
@@ -43,7 +46,8 @@ export const migrations: ReadonlyArray<PluginMigration> = [
           status TEXT NOT NULL,
           model TEXT NOT NULL,
           started_at TEXT,
-          completed_at TEXT
+          completed_at TEXT,
+          event_sequence INTEGER NOT NULL
         )
       `;
       yield* sql`CREATE INDEX telemetry_runs_thread ON telemetry_runs (thread_id)`;
@@ -56,7 +60,8 @@ export const migrations: ReadonlyArray<PluginMigration> = [
           item_type TEXT NOT NULL,
           tool_name TEXT,
           path TEXT,
-          status TEXT NOT NULL
+          status TEXT NOT NULL,
+          event_sequence INTEGER NOT NULL
         )
       `;
       yield* sql`CREATE INDEX telemetry_tool_calls_thread ON telemetry_tool_calls (thread_id)`;

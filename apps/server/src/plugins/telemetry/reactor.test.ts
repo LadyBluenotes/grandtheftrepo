@@ -57,8 +57,9 @@ const usageRows = (sql: SqlClient.SqlClient) =>
     readonly output_tokens: number | null;
     readonly reasoning_output_tokens: number | null;
     readonly usage_updated_at: string;
+    readonly event_sequence: number;
   }>`SELECT provider_turn_id, thread_id, run_id, input_tokens, cached_input_tokens, output_tokens,
-    reasoning_output_tokens, usage_updated_at FROM telemetry_turn_usage`;
+    reasoning_output_tokens, usage_updated_at, event_sequence FROM telemetry_turn_usage`;
 
 const startReactor = (
   sql: SqlClient.SqlClient,
@@ -96,6 +97,7 @@ it.effect("records every reported counter once per provider turn, latest report 
           output_tokens: 100,
           reasoning_output_tokens: 20,
           usage_updated_at: full.updatedAt,
+          event_sequence: 1,
         },
       ]);
 
@@ -176,11 +178,15 @@ it.effect("keeps one row per run with its latest state, and a replay adds nothin
         started_at: DateTime.formatIso(Fixtures.at),
         completed_at: DateTime.formatIso(Fixtures.at),
       };
-      assert.deepEqual(yield* sql`SELECT * FROM telemetry_runs`, [expected]);
+      assert.deepEqual(yield* sql`SELECT * FROM telemetry_runs`, [
+        { ...expected, event_sequence: 2 },
+      ]);
 
       yield* write([Fixtures.runEvent("run.updated")]);
       yield* drain;
-      assert.deepEqual(yield* sql`SELECT * FROM telemetry_runs`, [expected]);
+      assert.deepEqual(yield* sql`SELECT * FROM telemetry_runs`, [
+        { ...expected, event_sequence: 3 },
+      ]);
     }),
   ).pipe(Effect.provide(layerSink)),
 );
@@ -201,7 +207,7 @@ it.effect("keeps one row per tool call with its path, skipping other items and r
       ];
       yield* write(items);
       yield* drain;
-      const expected = [
+      const expected = (readSequence: number, editSequence: number) => [
         {
           item_id: "item:edit",
           run_id: Fixtures.runId,
@@ -211,6 +217,7 @@ it.effect("keeps one row per tool call with its path, skipping other items and r
           tool_name: null,
           path: "src/a.ts",
           status: "failed",
+          event_sequence: editSequence,
         },
         {
           item_id: "item:read",
@@ -221,15 +228,97 @@ it.effect("keeps one row per tool call with its path, skipping other items and r
           tool_name: "Read",
           path: "src/a.ts",
           status: "failed",
+          event_sequence: readSequence,
         },
       ];
       // The sink renumbers item ordinals into positions in the thread, keeping their order.
       const rows = sql`SELECT * FROM telemetry_tool_calls ORDER BY item_id`;
-      assert.deepEqual(yield* rows, expected);
+      assert.deepEqual(yield* rows, expected(1, 2));
 
       yield* write([Fixtures.itemEvent(Fixtures.readItem), Fixtures.itemEvent(Fixtures.editItem)]);
       yield* drain;
-      assert.deepEqual(yield* rows, expected);
+      assert.deepEqual(yield* rows, expected(5, 6));
+    }),
+  ).pipe(Effect.provide(layerSink)),
+);
+
+const lastSequence = Effect.gen(function* () {
+  const sink = yield* EventSink.EventSinkV2;
+  return yield* sink.latestSequence();
+});
+
+/**
+ * Handles `older`, then `newer`, then records `older` as a failed event and restarts the reactor,
+ * whose startup retry handles it again after `newer`. Returns what `rows` read before and after.
+ */
+const retryOlderAfterNewer = <Row>(
+  { sql, drain }: Effect.Success<typeof react>,
+  older: OrchestrationV2DomainEvent,
+  newer: OrchestrationV2DomainEvent,
+  rows: Effect.Effect<ReadonlyArray<Row>, SqlError.SqlError>,
+) =>
+  Effect.gen(function* () {
+    yield* write([older]);
+    const olderSequence = yield* lastSequence;
+    yield* write([newer]);
+    yield* drain;
+    const newest = yield* rows;
+    yield* sql`INSERT INTO host_reactor_failure (sequence, type, attempts, last_error, failed_at)
+      VALUES (${olderSequence}, ${older.type}, 1, 'boom', '2026-01-01T00:00:00.000Z')`;
+    yield* drain;
+    // The retry ran: the failure is gone, so the rows were left alone by the handler.
+    assert.deepEqual(yield* sql`SELECT sequence FROM host_reactor_failure`, []);
+    return { newest, retried: yield* rows };
+  });
+
+it.effect("a run event retried after a newer one leaves the newer state", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const db = yield* react;
+      const running = { ...Fixtures.run, status: "running" as const, completedAt: null };
+      const { newest, retried } = yield* retryOlderAfterNewer(
+        db,
+        Fixtures.runEvent("run.created", running),
+        Fixtures.runEvent("run.updated"),
+        db.sql`SELECT status, completed_at FROM telemetry_runs`,
+      );
+      assert.deepEqual(newest, [
+        { status: "failed", completed_at: DateTime.formatIso(Fixtures.at) },
+      ]);
+      assert.deepEqual(retried, newest);
+    }),
+  ).pipe(Effect.provide(layerSink)),
+);
+
+it.effect("a tool call event retried after a newer one leaves the newer state", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const db = yield* react;
+      const running = { ...Fixtures.readItem, status: "running" as const, completedAt: null };
+      const { newest, retried } = yield* retryOlderAfterNewer(
+        db,
+        Fixtures.itemEvent(running),
+        Fixtures.itemEvent(Fixtures.readItem),
+        db.sql`SELECT item_id, status FROM telemetry_tool_calls`,
+      );
+      assert.deepEqual(newest, [{ item_id: "item:read", status: "failed" }]);
+      assert.deepEqual(retried, newest);
+    }),
+  ).pipe(Effect.provide(layerSink)),
+);
+
+it.effect("a usage report retried after a newer one of the same time leaves the newer one", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const db = yield* react;
+      const { newest, retried } = yield* retryOlderAfterNewer(
+        db,
+        Fixtures.turnUpdated(full),
+        Fixtures.turnUpdated({ ...full, inputTokens: 5000 }),
+        db.sql`SELECT input_tokens, usage_updated_at FROM telemetry_turn_usage`,
+      );
+      assert.deepEqual(newest, [{ input_tokens: 5000, usage_updated_at: full.updatedAt }]);
+      assert.deepEqual(retried, newest);
     }),
   ).pipe(Effect.provide(layerSink)),
 );
