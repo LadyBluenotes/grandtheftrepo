@@ -1,0 +1,221 @@
+name: Fork nightly release
+
+# Builds this fork's desktop app and publishes it as a GitHub prerelease, so an
+# installed copy updates itself through the app's own updater (the feed repo is
+# baked in from GITHUB_REPOSITORY at build time, and a -nightly version selects
+# the nightly channel). Windows x64 is the target. Linux x64 is built as well
+# because the Windows build bundles the Linux CLI for WSL and upstream's
+# reusable build job waits for that archive in the same run.
+#
+# Upstream's release.yml is not used: it needs Blacksmith runners, npm, Vercel,
+# AUR and signing secrets. Disable it under Actions once workflows are enabled
+# on this fork. T3 Connect values are left empty, so these builds carry no
+# hosted relay; local network and Tailscale access are unaffected.
+#
+# A run only publishes when main has new commits since the last nightly and at
+# least six hours have passed, the same gate upstream uses. Runs after the
+# nightly upstream sync. Builds are unsigned: Windows shows a SmartScreen
+# prompt on first install, and updates after that need no prompt.
+
+on:
+  schedule:
+    - cron: "41 5 * * *"
+  workflow_dispatch:
+
+permissions:
+  actions: read
+  contents: write
+
+concurrency:
+  group: release-fork
+  cancel-in-progress: false
+
+jobs:
+  preflight:
+    if: github.repository_owner != 'pingdotgg'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    outputs:
+      proceed: ${{ steps.gate.outputs.result }}
+      version: ${{ steps.meta.outputs.version }}
+      tag: ${{ steps.meta.outputs.tag }}
+      name: ${{ steps.meta.outputs.name }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          sparse-checkout: |
+            /*
+            !/.repos/
+          sparse-checkout-cone-mode: false
+
+      - id: gate
+        name: Decide whether main needs a release
+        uses: actions/github-script@v8
+        with:
+          script: |
+            const { shouldReleaseNightly } = require('./.github/scripts/check-nightly-release.cjs');
+            return context.eventName === 'schedule'
+              ? await shouldReleaseNightly({ github, context, core })
+              : true;
+
+      - name: Setup Vite+
+        if: steps.gate.outputs.result == 'true'
+        uses: voidzero-dev/setup-vp@v1
+        with:
+          node-version-file: package.json
+          cache: true
+          run-install: true
+
+      - id: meta
+        name: Resolve nightly version
+        if: steps.gate.outputs.result == 'true'
+        run: |
+          node scripts/resolve-nightly-release.ts \
+            --date "$(date -u +%Y%m%d)" \
+            --run-number "${GITHUB_RUN_NUMBER}" \
+            --sha "${GITHUB_SHA}" \
+            --github-output
+
+  build_bundle:
+    name: Build JS bundle
+    needs: preflight
+    if: needs.preflight.outputs.proceed == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          sparse-checkout: |
+            /*
+            !/.repos/
+          sparse-checkout-cone-mode: false
+
+      - name: Setup Vite+
+        uses: voidzero-dev/setup-vp@v1
+        with:
+          node-version-file: package.json
+          cache: true
+          run-install: false
+
+      - name: Install bundle dependencies
+        run: vp install --filter=t3... --filter=@t3tools/web... --filter=@t3tools/desktop... --filter=@t3tools/scripts...
+
+      - name: Align package versions to release version
+        run: node scripts/update-release-package-versions.ts "${{ needs.preflight.outputs.version }}"
+
+      - uses: ./.github/actions/setup-apt-mirrors
+
+      - name: Install browser secret helper build libraries
+        run: sudo apt-get update && sudo apt-get install -y libsecret-1-dev pkg-config
+
+      - name: Build JS bundle
+        run: vp run build:desktop
+
+      - name: Upload JS bundle
+        uses: actions/upload-artifact@v7
+        with:
+          name: js-bundle
+          path: |
+            apps/server/dist
+            apps/desktop/dist-electron
+          if-no-files-found: error
+          retention-days: 1
+
+  desktop_linux_x64:
+    name: Desktop Linux x64
+    needs: [preflight, build_bundle]
+    if: needs.preflight.outputs.proceed == 'true'
+    uses: ./.github/workflows/release-desktop.yml
+    with:
+      version: ${{ needs.preflight.outputs.version }}
+      ref: ${{ github.sha }}
+      release_channel: nightly
+      relay_client_tracing: false
+      clerk_publishable_key: ""
+      clerk_jwt_template: ""
+      clerk_cli_oauth_client_id: ""
+      relay_url: ""
+      label: Linux x64
+      runner: ubuntu-24.04
+      platform: linux
+      target: AppImage
+      arch: x64
+      rust_target: x86_64-unknown-linux-gnu
+      resource_key: linux-x64
+      cli_archive: true
+
+  # Runs after Linux so the WSL archive it waits for already exists.
+  desktop_win_x64:
+    name: Desktop Windows x64
+    needs: [preflight, build_bundle, desktop_linux_x64]
+    if: needs.preflight.outputs.proceed == 'true'
+    uses: ./.github/workflows/release-desktop.yml
+    with:
+      version: ${{ needs.preflight.outputs.version }}
+      ref: ${{ github.sha }}
+      release_channel: nightly
+      relay_client_tracing: false
+      clerk_publishable_key: ""
+      clerk_jwt_template: ""
+      clerk_cli_oauth_client_id: ""
+      relay_url: ""
+      label: Windows x64
+      runner: windows-2025
+      platform: win
+      target: nsis
+      arch: x64
+      rust_target: x86_64-pc-windows-msvc
+      resource_key: win32-x64
+      cli_archive: true
+
+  release:
+    name: Publish prerelease
+    needs: [preflight, desktop_linux_x64, desktop_win_x64]
+    if: needs.preflight.outputs.proceed == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Download desktop artifacts
+        uses: actions/download-artifact@v8
+        with:
+          pattern: desktop-*
+          merge-multiple: true
+          path: release-assets
+
+      - name: Download CLI archives
+        uses: actions/download-artifact@v8
+        with:
+          pattern: cli-*
+          merge-multiple: true
+          path: release-assets
+
+      # The Windows build writes a per-arch updater manifest; with one arch the
+      # updater expects the plain channel name. Linux manifests need no rename.
+      - name: Finish release assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd release-assets
+          rm -f builder-debug.yml
+          shopt -s nullglob
+          for manifest in *-win-x64.yml; do
+            mv "$manifest" "${manifest%-win-x64.yml}.yml"
+          done
+          archives=(t3-*.tar.gz t3-*.zip)
+          if [[ ${#archives[@]} -gt 0 ]]; then
+            sha256sum "${archives[@]}" > SHA256SUMS
+          fi
+          ls -l
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: ${{ needs.preflight.outputs.tag }}
+          target_commitish: ${{ github.sha }}
+          name: ${{ needs.preflight.outputs.name }}
+          generate_release_notes: true
+          prerelease: true
+          make_latest: false
+          files: release-assets/*
+          fail_on_unmatched_files: true
+          token: ${{ github.token }}

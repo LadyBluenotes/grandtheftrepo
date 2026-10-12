@@ -1,0 +1,715 @@
+import {
+  KANBAN_STATUSES,
+  KanbanError,
+  KanbanSlug,
+  type KanbanActor,
+  type KanbanBoard,
+  type KanbanDecision,
+  type KanbanGetIssueInput,
+  type KanbanIssue,
+  type KanbanIssueSummary,
+  type KanbanListDecisionsInput,
+  type KanbanSetDirectoryInput,
+  type KanbanStatus,
+  type KanbanWrite,
+  type KanbanWriteResult,
+  type ProjectId,
+  type ThreadId,
+} from "@t3tools/contracts";
+import { writeFileStringAtomically } from "@t3tools/shared/atomicWrite";
+import { fromJsonStringPretty } from "@t3tools/shared/schemaJson";
+import * as Context from "effect/Context";
+import * as DateTime from "effect/DateTime";
+import * as Duration from "effect/Duration";
+import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
+import * as FileSystem from "effect/FileSystem";
+import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
+import * as Path from "effect/Path";
+import * as PubSub from "effect/PubSub";
+import * as Schema from "effect/Schema";
+import * as Scope from "effect/Scope";
+import * as Semaphore from "effect/Semaphore";
+import * as Stream from "effect/Stream";
+
+import * as ServerConfig from "../../config.ts";
+import * as ProjectService from "../../project/ProjectService.ts";
+import * as Files from "./KanbanFiles.ts";
+
+/** Done issues wait this long before the sweep archives them. */
+const ARCHIVE_AFTER = Duration.days(7);
+
+/** Statuses only the user may move a card out of into real work. */
+const HOLDING = new Set<KanbanStatus>(["triage", "inbox"]);
+const rank = (status: KanbanStatus) => KANBAN_STATUSES.indexOf(status);
+
+/** `kanban.json` under the state directory: per-project base folder overrides. */
+const Overrides = fromJsonStringPretty(
+  Schema.Struct({ directories: Schema.Record(Schema.String, Schema.String) }),
+);
+const decodeOverrides = Schema.decodeUnknownEffect(Overrides);
+const encodeOverrides = Schema.encodeEffect(Overrides);
+
+interface Loaded {
+  readonly directory: string;
+  /** The project slug every file in this folder should name. */
+  readonly slug: string;
+  readonly issues: Map<string, KanbanIssue>;
+  readonly decisions: Map<string, Array<KanbanDecision>>;
+  readonly lock: Semaphore.Semaphore;
+  /** Owns the folder watchers; closed when the folder changes. */
+  readonly scope: Scope.Closeable;
+}
+
+export class KanbanStore extends Context.Service<
+  KanbanStore,
+  {
+    /** The board now, then again after every change on disk or through this service. */
+    readonly subscribeBoard: (projectId: ProjectId) => Stream.Stream<KanbanBoard, KanbanError>;
+    readonly getIssue: (input: KanbanGetIssueInput) => Effect.Effect<KanbanIssue, KanbanError>;
+    readonly listDecisions: (
+      input: KanbanListDecisionsInput,
+    ) => Effect.Effect<ReadonlyArray<KanbanDecision>, KanbanError>;
+    /** `actor` is `user` for clients and `thread:<id>` for agents; the gate reads it. */
+    readonly write: (
+      projectId: ProjectId,
+      actor: KanbanActor,
+      write: KanbanWrite,
+    ) => Effect.Effect<KanbanWriteResult, KanbanError>;
+    readonly setDirectory: (input: KanbanSetDirectoryInput) => Effect.Effect<void, KanbanError>;
+    /** Moves every issue linking `threadId` forward to `status`. Never leaves Triage or Inbox. */
+    readonly advance: (
+      projectId: ProjectId,
+      threadId: ThreadId,
+      status: KanbanStatus,
+    ) => Effect.Effect<void, KanbanError>;
+    /** Archives Done issues older than `ARCHIVE_AFTER` in every loaded project. */
+    readonly sweepArchive: Effect.Effect<void>;
+    readonly board: (projectId: ProjectId) => Effect.Effect<KanbanBoard, KanbanError>;
+    /** The loaded project holding an issue that links `threadId`, if any. No disk or database read. */
+    readonly linkedProject: (threadId: ThreadId) => Effect.Effect<ProjectId | undefined>;
+  }
+>()("t3/plugins/kanban/KanbanStore") {}
+
+const invalid = (message: string) => new KanbanError({ code: "invalid", message });
+const notFound = (message: string) => new KanbanError({ code: "not_found", message });
+
+const make = Effect.gen(function* () {
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const config = yield* ServerConfig.ServerConfig;
+  const projects = yield* ProjectService.ProjectService;
+  const overridesPath = path.join(config.stateDir, "kanban.json");
+  const loaded = new Map<ProjectId, Loaded>();
+  // Outlives a reload so subscribers keep hearing about the project after its folder moves.
+  const changes = new Map<ProjectId, PubSub.PubSub<void>>();
+  const loadLock = yield* Semaphore.make(1);
+  const isSlug = Schema.is(KanbanSlug);
+
+  const io = (message: string) => (cause: unknown) =>
+    Effect.logWarning(message, { cause }).pipe(
+      Effect.andThen(Effect.fail(new KanbanError({ code: "io", message }))),
+    );
+  const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
+  const changesOf = (projectId: ProjectId) =>
+    Effect.gen(function* () {
+      const existing = changes.get(projectId);
+      if (existing !== undefined) return existing;
+      const created = yield* PubSub.sliding<void>(1);
+      changes.set(projectId, created);
+      return created;
+    });
+  const publish = (projectId: ProjectId) =>
+    Effect.flatMap(changesOf(projectId), (pubsub) => PubSub.publish(pubsub, undefined)).pipe(
+      Effect.asVoid,
+    );
+
+  const readOverrides = fs.exists(overridesPath).pipe(
+    Effect.flatMap((exists) =>
+      exists
+        ? Effect.flatMap(fs.readFileString(overridesPath), decodeOverrides)
+        : Effect.succeed<typeof Overrides.Type>({ directories: {} }),
+    ),
+    Effect.catch(io(`Could not read ${overridesPath}.`)),
+  );
+
+  const issuePath = (state: Loaded, id: string) =>
+    path.join(state.directory, "issues", `${id}${Files.ISSUE_EXTENSION}`);
+  const decisionPath = (state: Loaded, category: string) =>
+    path.join(state.directory, "decisions", `${category}${Files.DECISION_EXTENSION}`);
+
+  /** Re-reads one file into the index; a missing file drops its entry. */
+  const refresh = Effect.fn("KanbanStore.refresh")(function* (state: Loaded, file: string) {
+    const kind = path.dirname(file) === path.join(state.directory, "issues") ? "issue" : "decision";
+    const extension = kind === "issue" ? Files.ISSUE_EXTENSION : Files.DECISION_EXTENSION;
+    if (path.extname(file) !== extension) return;
+    const id = path.basename(file, extension);
+    if (!isSlug(id)) return;
+    if (!(yield* fs.exists(file))) {
+      if (kind === "issue") state.issues.delete(id);
+      else state.decisions.delete(id);
+      return;
+    }
+    const text = yield* fs.readFileString(file);
+    if (kind === "issue") {
+      const parsed = Files.parseIssue(id, text);
+      if (parsed === null)
+        return yield* Effect.logWarning("kanban: unreadable issue file", { file });
+      if (parsed.project !== null && parsed.project !== state.slug)
+        yield* Effect.logWarning("kanban: issue names another project", {
+          file,
+          project: parsed.project,
+        });
+      state.issues.set(id, parsed.issue);
+    } else {
+      const parsed = Files.parseDecisions(id, text);
+      if (parsed === null)
+        return yield* Effect.logWarning("kanban: unreadable decision file", { file });
+      state.decisions.set(id, [...parsed]);
+    }
+  });
+
+  const watch = (projectId: ProjectId, state: Loaded, dir: string) =>
+    Stream.runForEach(fs.watch(dir), (event) => {
+      const file = path.resolve(dir, event.path);
+      if (path.dirname(file) !== dir) return Effect.void;
+      return refresh(state, file).pipe(
+        Effect.andThen(publish(projectId)),
+        Effect.catch((cause) => Effect.logWarning("kanban: refresh failed", { file, cause })),
+      );
+    }).pipe(
+      Effect.catchCause((cause) => Effect.logWarning("kanban: watcher stopped", { dir, cause })),
+      Effect.forkIn(state.scope),
+    );
+
+  /** The override from `kanban.json`, else `<T3 home>/wiki/<project-slug>`. */
+  const resolveDirectory = Effect.fn("KanbanStore.resolveDirectory")(function* (
+    projectId: ProjectId,
+  ) {
+    const project = yield* projects.getById(projectId).pipe(
+      Effect.catch(io("Could not read the project.")),
+      Effect.flatMap(
+        Option.match({
+          onNone: () => notFound("The project was not found."),
+          onSome: Effect.succeed,
+        }),
+      ),
+    );
+    const slug = Files.slugOf(project.title);
+    const overrides = yield* readOverrides;
+    return {
+      slug,
+      directory: overrides.directories[projectId] ?? path.join(config.baseDir, "wiki", slug),
+    };
+  });
+
+  const load = Effect.fn("KanbanStore.load")(function* (projectId: ProjectId) {
+    const existing = loaded.get(projectId);
+    if (existing !== undefined) return existing;
+    return yield* loadLock.withPermits(1)(
+      Effect.gen(function* () {
+        const again = loaded.get(projectId);
+        if (again !== undefined) return again;
+        const { slug, directory } = yield* resolveDirectory(projectId);
+        const dirs = [path.join(directory, "issues"), path.join(directory, "decisions")];
+        const state: Loaded = {
+          directory,
+          slug,
+          issues: new Map(),
+          decisions: new Map(),
+          lock: yield* Semaphore.make(1),
+          scope: yield* Scope.make(),
+        };
+        for (const dir of dirs) {
+          yield* fs
+            .makeDirectory(dir, { recursive: true })
+            .pipe(Effect.catch(io(`Could not create ${dir}.`)));
+          const names = yield* fs
+            .readDirectory(dir)
+            .pipe(Effect.catch(io(`Could not read ${dir}.`)));
+          for (const name of names)
+            yield* refresh(state, path.join(dir, name)).pipe(
+              Effect.catch(io(`Could not read ${path.join(dir, name)}.`)),
+            );
+          yield* watch(projectId, state, dir);
+        }
+        loaded.set(projectId, state);
+        yield* sweepProject(projectId, state);
+        return state;
+      }),
+    );
+  });
+
+  const summary = ({
+    description: _description,
+    log: _log,
+    criteria,
+    ...rest
+  }: KanbanIssue): KanbanIssueSummary => ({
+    ...rest,
+    criteriaOpen: criteria.filter((c) => !c.checked).length,
+    criteriaTotal: criteria.length,
+  });
+  const board = (state: Loaded): KanbanBoard => ({
+    directory: state.directory,
+    issues: Array.from(state.issues.values(), summary),
+    decisionCategories: Array.from(state.decisions, ([category, list]) => ({
+      category,
+      count: list.length,
+    })),
+  });
+
+  const saveIssue = (state: Loaded, issue: KanbanIssue) =>
+    writeFileStringAtomically({
+      filePath: issuePath(state, issue.id),
+      contents: Files.serializeIssue(issue, state.slug),
+    }).pipe(
+      Effect.provideService(FileSystem.FileSystem, fs),
+      Effect.provideService(Path.Path, path),
+      Effect.catch(io(`Could not write ${issuePath(state, issue.id)}.`)),
+      Effect.tap(() => Effect.sync(() => state.issues.set(issue.id, issue))),
+    );
+
+  const saveDecisions = (state: Loaded, category: string) => {
+    const file = decisionPath(state, category);
+    const list = state.decisions.get(category) ?? [];
+    if (list.length === 0) {
+      state.decisions.delete(category);
+      return fs.remove(file).pipe(Effect.catch(io(`Could not remove ${file}.`)));
+    }
+    return writeFileStringAtomically({
+      filePath: file,
+      contents: Files.serializeDecisions(category, state.slug, list),
+    }).pipe(
+      Effect.provideService(FileSystem.FileSystem, fs),
+      Effect.provideService(Path.Path, path),
+      Effect.catch(io(`Could not write ${file}.`)),
+    );
+  };
+
+  const moved = (
+    issue: KanbanIssue,
+    status: KanbanStatus,
+    by: KanbanActor,
+    at: string,
+  ): KanbanIssue =>
+    issue.status === status
+      ? issue
+      : {
+          ...issue,
+          status,
+          doneAt: status === "done" ? at : null,
+          updatedAt: at,
+          log: [...issue.log, { at, by, kind: "status", text: status }],
+        };
+
+  /** Agents may file and triage; only the user moves a card from the holding columns into work. */
+  const gated = (actor: KanbanActor, from: KanbanStatus | null, to: KanbanStatus) =>
+    actor !== "user" && (from === null || HOLDING.has(from)) && !HOLDING.has(to);
+
+  const applyWrite = Effect.fn("KanbanStore.applyWrite")(function* (
+    state: Loaded,
+    actor: KanbanActor,
+    w: KanbanWrite,
+  ) {
+    const at = yield* nowIso;
+    const need = <T>(value: T | undefined, name: string): Effect.Effect<T, KanbanError> =>
+      value === undefined
+        ? Effect.fail(invalid(`${name} is required for ${w.action}.`))
+        : Effect.succeed(value);
+    const issue = (): Effect.Effect<KanbanIssue, KanbanError> =>
+      need(w.id, "id").pipe(
+        Effect.flatMap((id) => {
+          const found = state.issues.get(id);
+          return found === undefined
+            ? Effect.fail(notFound(`No issue "${id}".`))
+            : Effect.succeed(found);
+        }),
+      );
+    const decision = (): Effect.Effect<
+      { category: string; list: Array<KanbanDecision>; index: number },
+      KanbanError
+    > =>
+      Effect.all([need(w.category, "category"), need(w.id, "id")]).pipe(
+        Effect.flatMap(([category, id]) => {
+          const list = state.decisions.get(category) ?? [];
+          const index = list.findIndex((d) => d.id === id);
+          return index === -1
+            ? Effect.fail(notFound(`No decision "${id}" in ${category}.`))
+            : Effect.succeed({ category, list, index });
+        }),
+      );
+    const touch = (current: KanbanIssue, patch: Partial<KanbanIssue>): KanbanIssue => ({
+      ...current,
+      ...patch,
+      updatedAt: at,
+    });
+    const logged = (current: KanbanIssue, kind: KanbanIssue["log"][number]["kind"], text: string) =>
+      touch(current, { log: [...current.log, { at, by: actor, kind, text }] });
+
+    switch (w.action) {
+      case "issue.create": {
+        const title = yield* need(w.title, "title");
+        const status = w.status ?? (actor === "user" ? "todo" : "triage");
+        if (gated(actor, null, status))
+          return yield* new KanbanError({
+            code: "gated",
+            message: "Agents file issues into Triage or Inbox; the user decides what starts.",
+          });
+        const id = Files.uniqueSlug(Files.slugOf(title), (slug) => state.issues.has(slug));
+        const created: KanbanIssue = {
+          id,
+          title,
+          status,
+          priority: w.priority ?? "p3",
+          labels: w.labels ?? [],
+          verification: w.verification ?? "unverified",
+          tier: w.tier ?? null,
+          criteria: [],
+          blocked: null,
+          reopened: null,
+          threads: [],
+          createdAt: at,
+          createdBy: actor,
+          updatedAt: at,
+          doneAt: status === "done" ? at : null,
+          archivedAt: null,
+          description: w.description ?? "",
+          log: [{ at, by: actor, kind: "status", text: status }],
+        };
+        yield* saveIssue(state, created);
+        return { id };
+      }
+      case "issue.update": {
+        const current = yield* issue();
+        yield* saveIssue(
+          state,
+          touch(current, {
+            ...(w.title === undefined ? {} : { title: w.title }),
+            ...(w.description === undefined ? {} : { description: w.description }),
+            ...(w.priority === undefined ? {} : { priority: w.priority }),
+            ...(w.labels === undefined ? {} : { labels: w.labels }),
+            ...(w.verification === undefined ? {} : { verification: w.verification }),
+            ...(w.tier === undefined ? {} : { tier: w.tier }),
+          }),
+        );
+        return { id: current.id };
+      }
+      case "issue.move": {
+        const current = yield* issue();
+        const status = yield* need(w.status, "status");
+        if (gated(actor, current.status, status))
+          return yield* new KanbanError({
+            code: "gated",
+            message: `Only the user moves a card out of ${current.status}.`,
+          });
+        const open = current.criteria.filter((c) => !c.checked).length;
+        if (status === "done" && current.status !== "done" && open > 0)
+          return yield* invalid(`${open} acceptance criteria are still open.`);
+        let next = moved(current, status, actor, at);
+        if (current.status === "done" && status !== "done") {
+          if (w.reopenReason === undefined)
+            return yield* invalid(
+              "A completed issue needs a reopen reason: defect or scope_change.",
+            );
+          next = {
+            ...next,
+            reopened: { reason: w.reopenReason, at, by: actor },
+            log: [...next.log, { at, by: actor, kind: "reopened", text: w.reopenReason }],
+          };
+        }
+        yield* saveIssue(state, next);
+        return { id: current.id };
+      }
+      case "criterion.add": {
+        const current = yield* issue();
+        const text = yield* need(w.text, "text");
+        const next =
+          1 + current.criteria.reduce((max, c) => Math.max(max, Number(c.id.slice(1)) || 0), 0);
+        yield* saveIssue(
+          state,
+          touch(logged(current, "criterion", `added: ${text}`), {
+            criteria: [...current.criteria, { id: `c${next}`, text, checked: false }],
+          }),
+        );
+        return { id: current.id };
+      }
+      case "criterion.update": {
+        const current = yield* issue();
+        const criterionId = yield* need(w.criterionId, "criterionId");
+        const index = current.criteria.findIndex((c) => c.id === criterionId);
+        if (index === -1) return yield* notFound(`No criterion "${criterionId}" on ${current.id}.`);
+        const before = current.criteria[index]!;
+        const after = {
+          ...before,
+          ...(w.text === undefined ? {} : { text: w.text }),
+          ...(w.checked === undefined ? {} : { checked: w.checked }),
+        };
+        const change =
+          after.checked !== before.checked
+            ? `${after.checked ? "checked" : "unchecked"}: ${after.text}`
+            : `edited: ${before.text} → ${after.text}`;
+        const criteria = [...current.criteria];
+        criteria[index] = after;
+        yield* saveIssue(state, touch(logged(current, "criterion", change), { criteria }));
+        return { id: current.id };
+      }
+      case "criterion.remove": {
+        const current = yield* issue();
+        const criterionId = yield* need(w.criterionId, "criterionId");
+        const removed = current.criteria.find((c) => c.id === criterionId);
+        if (removed === undefined)
+          return yield* notFound(`No criterion "${criterionId}" on ${current.id}.`);
+        yield* saveIssue(
+          state,
+          touch(logged(current, "criterion", `removed: ${removed.text}`), {
+            criteria: current.criteria.filter((c) => c.id !== criterionId),
+          }),
+        );
+        return { id: current.id };
+      }
+      case "issue.note": {
+        const current = yield* issue();
+        yield* saveIssue(state, logged(current, "note", yield* need(w.text, "text")));
+        return { id: current.id };
+      }
+      case "issue.block": {
+        const current = yield* issue();
+        const reason = yield* need(w.reason, "reason");
+        yield* saveIssue(
+          state,
+          touch(logged(current, "blocked", reason), { blocked: { reason, at, by: actor } }),
+        );
+        return { id: current.id };
+      }
+      case "issue.unblock": {
+        const current = yield* issue();
+        yield* saveIssue(state, touch(logged(current, "unblocked", ""), { blocked: null }));
+        return { id: current.id };
+      }
+      case "issue.link": {
+        const current = yield* issue();
+        const threadId = yield* need(w.threadId, "threadId");
+        if (gated(actor, current.status, "in_progress"))
+          return yield* new KanbanError({
+            code: "gated",
+            message: `This issue is in ${current.status}; the user has not released it for work.`,
+          });
+        if (!current.threads.some((link) => link.id === threadId))
+          yield* saveIssue(
+            state,
+            touch(current, { threads: [...current.threads, { id: threadId, linkedAt: at }] }),
+          );
+        return { id: current.id };
+      }
+      case "issue.unlink": {
+        const current = yield* issue();
+        const threadId = yield* need(w.threadId, "threadId");
+        yield* saveIssue(
+          state,
+          touch(current, { threads: current.threads.filter((link) => link.id !== threadId) }),
+        );
+        return { id: current.id };
+      }
+      case "issue.archive":
+      case "issue.unarchive": {
+        const current = yield* issue();
+        yield* saveIssue(
+          state,
+          touch(current, { archivedAt: w.action === "issue.archive" ? at : null }),
+        );
+        return { id: current.id };
+      }
+      case "issue.delete": {
+        const current = yield* issue();
+        if (current.archivedAt === null)
+          return yield* invalid("Archive an issue before deleting it.");
+        const file = issuePath(state, current.id);
+        yield* fs.remove(file).pipe(Effect.catch(io(`Could not remove ${file}.`)));
+        state.issues.delete(current.id);
+        return { id: current.id };
+      }
+      case "decision.create": {
+        const category = w.category ?? "general";
+        const title = yield* need(w.title, "title");
+        const stance = yield* need(w.stance, "stance");
+        const list = state.decisions.get(category) ?? [];
+        const id = Files.uniqueSlug(Files.slugOf(title), (slug) => list.some((d) => d.id === slug));
+        list.push({
+          category,
+          id,
+          stance,
+          title,
+          why: w.why ?? "",
+          issues: w.issues ?? [],
+          by: actor,
+          at,
+        });
+        state.decisions.set(category, list);
+        yield* saveDecisions(state, category);
+        return { id };
+      }
+      case "decision.update": {
+        const { category, list, index } = yield* decision();
+        const current = list[index]!;
+        list[index] = {
+          ...current,
+          ...(w.title === undefined ? {} : { title: w.title }),
+          ...(w.stance === undefined ? {} : { stance: w.stance }),
+          ...(w.why === undefined ? {} : { why: w.why }),
+          ...(w.issues === undefined ? {} : { issues: w.issues }),
+        };
+        yield* saveDecisions(state, category);
+        return { id: current.id };
+      }
+      case "decision.delete": {
+        const { category, list, index } = yield* decision();
+        const [removed] = list.splice(index, 1);
+        yield* saveDecisions(state, category);
+        return { id: removed!.id };
+      }
+    }
+  });
+
+  const sweepProject = Effect.fn("KanbanStore.sweepProject")(function* (
+    projectId: ProjectId,
+    state: Loaded,
+  ) {
+    const now = yield* DateTime.now;
+    const cutoff = DateTime.formatIso(DateTime.subtractDuration(now, ARCHIVE_AFTER));
+    const at = DateTime.formatIso(now);
+    const stale = Array.from(state.issues.values()).filter(
+      (issue) =>
+        issue.status === "done" &&
+        issue.archivedAt === null &&
+        issue.doneAt !== null &&
+        issue.doneAt <= cutoff,
+    );
+    if (stale.length === 0) return;
+    yield* state.lock.withPermits(1)(
+      Effect.forEach(stale, (issue) => saveIssue(state, { ...issue, archivedAt: at }), {
+        discard: true,
+      }),
+    );
+    yield* publish(projectId);
+  });
+
+  const subscribeBoard: KanbanStore["Service"]["subscribeBoard"] = (projectId) =>
+    Stream.unwrap(
+      Effect.gen(function* () {
+        // Subscribe before the first snapshot so a change between the two is buffered, not lost.
+        const subscription = yield* PubSub.subscribe(yield* changesOf(projectId));
+        const first = yield* load(projectId);
+        return Stream.concat(
+          Stream.succeed(board(first)),
+          Stream.fromSubscription(subscription).pipe(
+            Stream.mapEffect(() => Effect.map(load(projectId), board)),
+          ),
+        );
+      }),
+    );
+
+  const write: KanbanStore["Service"]["write"] = Effect.fn("KanbanStore.write")(
+    function* (projectId, actor, w) {
+      const state = yield* load(projectId);
+      const result = yield* state.lock.withPermits(1)(applyWrite(state, actor, w));
+      yield* publish(projectId);
+      return result;
+    },
+  );
+
+  const advance: KanbanStore["Service"]["advance"] = Effect.fn("KanbanStore.advance")(
+    function* (projectId, threadId, status) {
+      // Thread events arrive for every project; only one with a board folder is worth loading.
+      if (!loaded.has(projectId)) {
+        const { directory } = yield* resolveDirectory(projectId);
+        if (!(yield* fs.exists(directory).pipe(Effect.orElseSucceed(() => false)))) return;
+      }
+      const state = yield* load(projectId);
+      const linked = Array.from(state.issues.values()).filter(
+        (issue) =>
+          issue.threads.some((link) => link.id === threadId) &&
+          !HOLDING.has(issue.status) &&
+          rank(status) > rank(issue.status) &&
+          // Done keeps its definition: open criteria hold the card in review.
+          !(status === "done" && issue.criteria.some((c) => !c.checked)),
+      );
+      if (linked.length === 0) return;
+      const at = yield* nowIso;
+      yield* state.lock.withPermits(1)(
+        Effect.forEach(linked, (issue) => saveIssue(state, moved(issue, status, "system", at)), {
+          discard: true,
+        }),
+      );
+      yield* publish(projectId);
+    },
+  );
+
+  const setDirectory: KanbanStore["Service"]["setDirectory"] = Effect.fn(
+    "KanbanStore.setDirectory",
+  )(function* ({ projectId, directory }) {
+    if (directory !== null && !path.isAbsolute(directory))
+      return yield* invalid("The issues folder must be an absolute path.");
+    const directories: Record<string, string> = { ...(yield* readOverrides).directories };
+    if (directory === null) delete directories[projectId];
+    else directories[projectId] = directory;
+    const contents = yield* encodeOverrides({ directories }).pipe(
+      Effect.catch(io("Could not encode kanban.json.")),
+    );
+    yield* writeFileStringAtomically({ filePath: overridesPath, contents: `${contents}\n` }).pipe(
+      Effect.provideService(FileSystem.FileSystem, fs),
+      Effect.provideService(Path.Path, path),
+      Effect.catch(io(`Could not write ${overridesPath}.`)),
+    );
+    const previous = loaded.get(projectId);
+    if (previous !== undefined) {
+      loaded.delete(projectId);
+      yield* Scope.close(previous.scope, Exit.void);
+    }
+    yield* publish(projectId);
+  });
+
+  yield* Effect.addFinalizer(() =>
+    Effect.forEach(loaded.values(), (state) => Scope.close(state.scope, Exit.void), {
+      discard: true,
+    }),
+  );
+
+  return KanbanStore.of({
+    subscribeBoard,
+    getIssue: ({ projectId, id }) =>
+      Effect.flatMap(load(projectId), (state) => {
+        const issue = state.issues.get(id);
+        return issue === undefined
+          ? Effect.fail(notFound(`No issue "${id}".`))
+          : Effect.succeed(issue);
+      }),
+    listDecisions: ({ projectId, category, issue }) =>
+      Effect.map(load(projectId), (state) =>
+        Array.from(state.decisions.values())
+          .flat()
+          .filter(
+            (d) =>
+              (category === undefined || d.category === category) &&
+              (issue === undefined || d.issues.includes(issue)),
+          ),
+      ),
+    write,
+    setDirectory,
+    advance,
+    sweepArchive: Effect.forEach(loaded, ([projectId, state]) => sweepProject(projectId, state), {
+      discard: true,
+    }).pipe(Effect.catch((cause) => Effect.logWarning("kanban: archive sweep failed", { cause }))),
+    board: (projectId) => Effect.map(load(projectId), board),
+    linkedProject: (threadId) =>
+      Effect.sync(() => {
+        for (const [projectId, state] of loaded)
+          for (const issue of state.issues.values())
+            if (issue.threads.some((link) => link.id === threadId)) return projectId;
+        return undefined;
+      }),
+  });
+});
+
+export const layer = Layer.effect(KanbanStore, make);

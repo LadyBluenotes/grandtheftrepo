@@ -551,6 +551,11 @@ export interface ProviderSettingsFormAnnotation {
   readonly placeholder?: string | undefined;
   readonly hidden?: boolean | undefined;
   readonly clearWhenEmpty?: "omit" | "persist" | undefined;
+  /**
+   * The value is a credential: the server keeps it in its secret store and clients only learn
+   * whether one is saved. Source control host settings honor it; provider settings do not yet.
+   */
+  readonly secret?: boolean | undefined;
   /** Choices for a `select` control. The first entry is the default. */
   readonly options?: ReadonlyArray<ProviderSettingsFormOption> | undefined;
 }
@@ -1373,13 +1378,13 @@ const DEFAULT_DISABLED_PROVIDER_DRIVERS: ReadonlySet<ProviderDriverKind> = new S
 
 /** Built-in drivers whose default instance runs before the user configures it. */
 const DEFAULT_ENABLED_DEFAULT_INSTANCES: ReadonlySet<ProviderInstanceId> = new Set(
-  ["codex", "claudeAgent"].map((instanceId) => ProviderInstanceId.make(instanceId)),
+  ["codex", "claudeAgent", "copilot"].map((instanceId) => ProviderInstanceId.make(instanceId)),
 );
 
 /**
  * Whether the built-in default instance at `instanceId` is enabled while
- * settings have no `providerInstances` entry for it. Only Codex and Claude
- * start on; any other id without an entry has no running instance.
+ * settings have no `providerInstances` entry for it. Only Codex, Claude, and
+ * Copilot start on; any other id without an entry has no running instance.
  */
 export const isUnconfiguredDefaultInstanceEnabled = (instanceId: ProviderInstanceId): boolean =>
   DEFAULT_ENABLED_DEFAULT_INSTANCES.has(instanceId);
