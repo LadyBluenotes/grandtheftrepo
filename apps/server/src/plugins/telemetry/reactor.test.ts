@@ -301,6 +301,9 @@ it.effect("upgrading to migration 2 replays the log into the new tables", () =>
           (reactor) => reactor.drain,
         ).pipe(Effect.provideService(SqlClient.SqlClient, sql)),
       );
+      // A failure the old reactor gave up on must not outlive the replay.
+      yield* sql`INSERT INTO host_reactor_failure (sequence, type, attempts, last_error, failed_at)
+        VALUES (1, 'run.created', 5, 'boom', '2026-01-01T00:00:00.000Z')`;
       const [, , upgrade] = migrations[1]!;
       yield* upgrade.pipe(Effect.provideService(SqlClient.SqlClient, sql));
       yield* startReactor(sql, Reactor.handlers);
@@ -310,6 +313,7 @@ it.effect("upgrading to migration 2 replays the log into the new tables", () =>
         ),
         [RunId.make("run:telemetry")],
       );
+      assert.deepEqual(yield* sql`SELECT sequence FROM host_reactor_failure`, []);
     }),
   ).pipe(Effect.provide(layerSink)),
 );

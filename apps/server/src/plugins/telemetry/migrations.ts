@@ -77,7 +77,10 @@ export const migrations: ReadonlyArray<PluginMigration> = [
       yield* sql`CREATE INDEX telemetry_threads_project ON telemetry_threads (project_id)`;
       // The reactor has passed every event these tables need. Without its cursor it starts over
       // from the first event; every handler is an upsert, so the replay only fills the new rows.
+      // Old failures go with it: the replay records again any that still fail, and a given-up
+      // row left behind would keep the measures unavailable for good.
       yield* sql`DROP TABLE IF EXISTS host_reactor_cursor`;
+      yield* sql`DROP TABLE IF EXISTS host_reactor_failure`;
     }),
   ],
 ];
