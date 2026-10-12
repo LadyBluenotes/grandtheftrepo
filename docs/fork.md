@@ -96,6 +96,12 @@ them half-evaluated. The host hands `toolkitRegistration` to `ServerPlugin.mcp` 
   while changes are requested, and threads reopened after settlement. Agents read and add
   them over MCP. Server: `apps/server/src/plugins/learning/`. Contracts:
   `packages/contracts/src/plugins/learning.ts`. No screen yet.
+- **policy**: reviewed working rules per project (`*` is the whole environment), versioned in the
+  plugin's database and rendered as one marked block each, with `<state dir>/RULES.md` ahead of
+  the body, into the instruction file each agent reads from the user's home. Verify re-reads the
+  block. `policy.create`, `.accept`, `.install` and `.verify` are gateway methods, and the
+  `policy_list` MCP tool reads. Server: `apps/server/src/plugins/policy/`. Contracts:
+  `packages/contracts/src/plugins/policy.ts`. No screen.
 - **review**: a reviewing agent's typed verdict on one checkpoint of another thread: `approve`, or
   `changes_requested` with one of six failure modes (`defect`, `incomplete`, `scope_drift`,
   `missing_verification`, `convention`, `unclear_spec`), so nothing reads reviewer prose to learn
