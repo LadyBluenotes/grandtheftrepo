@@ -58,9 +58,14 @@ const upsertThread = (thread: OrchestrationV2AppThread) =>
         settled_by_sweep = CASE
           WHEN excluded.settled_at > telemetry_threads.settled_at
           THEN NULL ELSE telemetry_threads.settled_by_sweep END,
-        unsettled_at = COALESCE(excluded.unsettled_at, telemetry_threads.unsettled_at),
-        pull_request_merged_at =
-          COALESCE(excluded.pull_request_merged_at, telemetry_threads.pull_request_merged_at)
+        unsettled_at = CASE
+          WHEN telemetry_threads.unsettled_at IS NULL
+            OR excluded.unsettled_at > telemetry_threads.unsettled_at
+          THEN excluded.unsettled_at ELSE telemetry_threads.unsettled_at END,
+        pull_request_merged_at = CASE
+          WHEN telemetry_threads.pull_request_merged_at IS NULL
+            OR excluded.pull_request_merged_at > telemetry_threads.pull_request_merged_at
+          THEN excluded.pull_request_merged_at ELSE telemetry_threads.pull_request_merged_at END
     `;
   });
 
@@ -175,7 +180,9 @@ export const handlers: PluginReactor.Handlers<SqlError.SqlError> = {
         SET unsettled_at = ${pinnedFields(event)["thread.pinned.occurredAt"]}
         WHERE thread_id = ${event.payload.id}
           AND settled_at IS NOT NULL
-          AND (unsettled_at IS NULL OR unsettled_at < settled_at)`;
+          AND (unsettled_at IS NULL OR unsettled_at < settled_at)
+          AND (unsettled_at IS NULL
+            OR unsettled_at < ${pinnedFields(event)["thread.pinned.occurredAt"]})`;
     }),
   "thread.settled": (stored) =>
     Effect.gen(function* () {

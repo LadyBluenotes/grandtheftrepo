@@ -380,6 +380,44 @@ it.effect("a thread settled, pinned, settled and pinned again is accepted only w
   ).pipe(Effect.provide(layerSink)),
 );
 
+it.effect("an older event retried after a newer reopen keeps the newer reopen", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const { sql, drain } = yield* react;
+      const rows = sql<ThreadRow>`SELECT * FROM telemetry_threads`;
+      const settled = settledBy("2026-10-02T12:00:00.000Z");
+      const reopened = (unsettledAt: string) => ({
+        ...settled,
+        settledAt: null,
+        unsettledAt: DateTime.makeUnsafe(unsettledAt),
+      });
+      yield* write([
+        Fixtures.threadEvent("thread.created", active),
+        Fixtures.threadEvent("thread.settled", settled),
+        Fixtures.threadEvent("thread.unsettled", reopened("2026-10-02T13:00:00.000Z")),
+        Fixtures.threadEvent("thread.settled", {
+          ...settled,
+          settledAt: DateTime.makeUnsafe("2026-10-02T14:00:00.000Z"),
+        }),
+        Fixtures.threadEvent("thread.unsettled", reopened("2026-10-02T15:00:00.000Z")),
+      ]);
+      yield* drain;
+      // The reactor's retry of a failed older event lands after the newer ones were handled.
+      yield* write([Fixtures.threadEvent("thread.visited", reopened("2026-10-02T13:00:00.000Z"))]);
+      yield* drain;
+      const [row] = yield* rows;
+      assert.deepEqual(
+        [row?.settled_at, row?.unsettled_at],
+        ["2026-10-02T14:00:00.000Z", "2026-10-02T15:00:00.000Z"],
+      );
+      assert.deepEqual(
+        acceptedOutcomes(input({ threads: yield* rows })).map((thread) => thread.thread_id),
+        [],
+      );
+    }),
+  ).pipe(Effect.provide(layerSink)),
+);
+
 it.effect(
   "a compacted log that kept only a later visit still yields the settlement, by someone unknown",
   () =>
