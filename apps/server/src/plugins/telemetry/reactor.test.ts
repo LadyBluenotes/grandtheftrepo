@@ -469,6 +469,26 @@ it.effect("a thread settled, pinned, settled and pinned again is accepted only w
   ).pipe(Effect.provide(layerSink)),
 );
 
+it.effect("an older settle retried after a newer one keeps the newer settlement's origin", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const { sql, drain } = yield* react;
+      const rows = sql<ThreadRow>`SELECT * FROM telemetry_threads`;
+      const bySweep = settledBy("2026-10-02T12:00:00.000Z");
+      const byHand = settledBy("2026-10-02T14:00:00.000Z");
+      yield* write([Fixtures.threadEvent("thread.created", active)]);
+      yield* write([Fixtures.threadEvent("thread.settled", bySweep)], Fixtures.sweepCommandId);
+      yield* write([Fixtures.threadEvent("thread.settled", byHand)]);
+      yield* drain;
+      // The reactor's retry of the sweep's settle lands after the hand settle was handled.
+      yield* write([Fixtures.threadEvent("thread.settled", bySweep)], Fixtures.sweepCommandId);
+      yield* drain;
+      const [row] = yield* rows;
+      assert.deepEqual([row?.settled_at, row?.settled_by_sweep], ["2026-10-02T14:00:00.000Z", 0]);
+    }),
+  ).pipe(Effect.provide(layerSink)),
+);
+
 it.effect("an older event retried after a newer reopen keeps the newer reopen", () =>
   Effect.scoped(
     Effect.gen(function* () {

@@ -199,7 +199,10 @@ export const handlers: PluginReactor.Handlers<SqlError.SqlError> = {
       const sql = yield* SqlClient.SqlClient;
       const commandId = settledFields(stored)["thread.settled.commandId"];
       const bySweep = commandId?.startsWith(AUTO_SETTLE_PREFIX) === true ? 1 : 0;
+      // The origin belongs to the settlement the row holds; an older settle retried after a newer
+      // one must not relabel the newer.
       yield* sql`UPDATE telemetry_threads SET settled_by_sweep = ${bySweep}
-        WHERE thread_id = ${stored.event.payload.id}`;
+        WHERE thread_id = ${stored.event.payload.id}
+          AND settled_at = ${threadFields(stored.event.payload)["thread.settledAt"]}`;
     }),
 };
