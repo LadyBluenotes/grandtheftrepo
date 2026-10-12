@@ -18,6 +18,7 @@ import * as SqlitePersistence from "../../persistence/Sqlite.ts";
 import * as ProjectService from "../../project/ProjectService.ts";
 import * as PluginHost from "../PluginHost.ts";
 import * as PluginSupervisor from "../PluginSupervisor.ts";
+import { registry } from "../registry.ts";
 
 const measuresInput = {
   projectId: ProjectId.make("project:telemetry"),
@@ -49,6 +50,13 @@ function mcpResult(body: string): {
         ?.slice("data:".length) ?? "{}");
   return (JSON.parse(json) as { result?: ReturnType<typeof mcpResult> }).result ?? {};
 }
+
+/** `plugins.json` that switches off every registered plugin except `keep`, whatever the registry holds. */
+const onlyPlugins = (keep: ReadonlyArray<string>) =>
+  `{ ${registry
+    .filter((plugin) => !keep.includes(plugin.id))
+    .map((plugin) => `"${plugin.id}": false`)
+    .join(", ")} }`;
 
 /**
  * The real host and supervisor over a fresh state directory, with the core
@@ -159,7 +167,7 @@ it.effect(
   () =>
     Effect.scoped(
       Effect.gen(function* () {
-        yield* writeStateFile("plugins.json", '{ "kanban": false }');
+        yield* writeStateFile("plugins.json", onlyPlugins(["telemetry"]));
         yield* Effect.gen(function* () {
           const host = yield* PluginHost.PluginHost;
           assert.deepEqual([...host.activeIds], ["telemetry"]);
@@ -205,7 +213,7 @@ it.effect(
 it.effect("a dry run runs the heartbeat the same way", () =>
   Effect.scoped(
     Effect.gen(function* () {
-      yield* writeStateFile("plugins.json", '{ "kanban": false }');
+      yield* writeStateFile("plugins.json", onlyPlugins(["telemetry"]));
       yield* writeStateFile("supervisor.json", '{ "dryRun": true }');
       yield* Effect.gen(function* () {
         const tick = yield* (yield* PluginSupervisor.PluginSupervisor).tick;
@@ -222,7 +230,7 @@ it.effect("a dry run runs the heartbeat the same way", () =>
 it.effect("disabled: no file, no sweep, no tool, and the RPC says it is not running", () =>
   Effect.scoped(
     Effect.gen(function* () {
-      yield* writeStateFile("plugins.json", '{ "kanban": false, "telemetry": false }');
+      yield* writeStateFile("plugins.json", onlyPlugins([]));
       yield* Effect.gen(function* () {
         const host = yield* PluginHost.PluginHost;
         assert.deepEqual([...host.activeIds], []);
