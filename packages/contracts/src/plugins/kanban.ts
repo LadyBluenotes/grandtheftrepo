@@ -229,6 +229,21 @@ export const KanbanSetDirectoryInput = Schema.Struct({
 });
 export type KanbanSetDirectoryInput = typeof KanbanSetDirectoryInput.Type;
 
+/**
+ * The emergency stop while it is set: nothing the supervisor starts may launch a ticket. It
+ * does not stop running agents, and a person starting work by hand is never blocked.
+ */
+export const KanbanStop = Schema.Struct({
+  setAt: IsoDateTime,
+  /** `user`, or `thread:<threadId>` for an agent. */
+  setBy: KanbanActor,
+  reason: Schema.NullOr(Schema.String),
+});
+export type KanbanStop = typeof KanbanStop.Type;
+
+export const KanbanStopSetInput = Schema.Struct({ reason: Schema.optional(Schema.String) });
+export type KanbanStopSetInput = typeof KanbanStopSetInput.Type;
+
 export const KANBAN_METHODS = definePluginMethods({
   getIssue: {
     method: "kanban.getIssue",
@@ -256,6 +271,29 @@ export const KANBAN_METHODS = definePluginMethods({
     gateway: "settingsWrite",
     input: KanbanSetDirectoryInput,
     output: Schema.Struct({}),
+    error: KanbanError,
+  },
+  /** Sets the stop; when it is already set, answers with the stop that was there first. */
+  stopSet: {
+    method: "kanban.stop.set",
+    gateway: "operate",
+    input: KanbanStopSetInput,
+    output: KanbanStop,
+    error: KanbanError,
+  },
+  /** Clears the stop; succeeds when it was not set. */
+  stopClear: {
+    method: "kanban.stop.clear",
+    gateway: "operate",
+    input: Schema.Struct({}),
+    output: Schema.Struct({}),
+    error: KanbanError,
+  },
+  stopGet: {
+    method: "kanban.stop.get",
+    gateway: "read",
+    input: Schema.Struct({}),
+    output: Schema.NullOr(KanbanStop),
     error: KanbanError,
   },
 });

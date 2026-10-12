@@ -78,8 +78,11 @@ them half-evaluated. The host hands `toolkitRegistration` to `ServerPlugin.mcp` 
 
 - **kanban**: a board per project. Issues and decisions are files under
   `<T3 home>/wiki/<project-slug>/`; the folder is changeable per project from the board.
-  Server: `apps/server/src/plugins/kanban/`. Contracts: `packages/contracts/src/plugins/kanban.ts`.
-  Web: `apps/web/src/plugins/kanban/`. User guide: [Kanban board](./user/kanban.md).
+  Its own database, `plugins/kanban.sqlite`, holds the emergency stop (`StopGate`, which a sweep
+  that starts a thread must ask first; no launcher calls it yet) and the `attention` flags, one of
+  which the `writers` sweep raises when two agents write one project. Server:
+  `apps/server/src/plugins/kanban/`. Contracts: `packages/contracts/src/plugins/kanban.ts`. Web:
+  `apps/web/src/plugins/kanban/`. User guide: [Kanban board](./user/kanban.md).
 - **telemetry**: token usage per provider turn, from `provider-turn.updated`. The template plugin:
   it uses every host seam once (database, reactor, sweep, gateway method, MCP tool, settings
   panel) and is the one to copy. Server: `apps/server/src/plugins/telemetry/`. Contracts:
