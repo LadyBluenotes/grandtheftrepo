@@ -240,13 +240,17 @@ it.effect(
           const supervisor = yield* PluginSupervisor.PluginSupervisor;
           const tick = yield* supervisor.tick;
           assert.isFalse(tick.dryRun);
+          // The learning plugin registers sweeps of its own; only telemetry's are checked here.
           assert.deepEqual(
-            tick.sweeps.map((s) => [s.plugin, s.name, s.status, s.examined, s.acted, s.flags]),
+            tick.sweeps
+              .filter((s) => s.plugin === "telemetry")
+              .map((s) => [s.plugin, s.name, s.status, s.examined, s.acted, s.flags]),
             [["telemetry", "heartbeat", "ok", 0, 0, 0]],
           );
-          assert.deepEqual((yield* supervisor.status).sweeps, [
-            { plugin: "telemetry", name: "heartbeat" },
-          ]);
+          assert.deepEqual(
+            (yield* supervisor.status).sweeps.filter((s) => s.plugin === "telemetry"),
+            [{ plugin: "telemetry", name: "heartbeat" }],
+          );
 
           yield* seed(host.databases.get("telemetry")!);
           const fromHandler = yield* measures().pipe(Effect.flatMap(decodeMeasures));
