@@ -89,9 +89,10 @@ const listening = (origin: string) => {
   if (!URL.canParse(origin)) return Effect.succeed(null);
   const url = new URL(origin);
   const host = url.hostname.replace(/^\[|\]$/g, "");
-  if (host !== "localhost" && host !== "::1" && !host.startsWith("127.")) {
-    return Effect.succeed(null);
-  }
+  // `127.example.com` is a DNS name, so only an IPv4 literal counts as 127.0.0.0/8.
+  const loopback =
+    host === "localhost" || host === "::1" || (NodeNet.isIPv4(host) && host.startsWith("127."));
+  if (!loopback) return Effect.succeed(null);
   return connects(host, Number(url.port) || (url.protocol === "https:" ? 443 : 80));
 };
 
@@ -169,7 +170,15 @@ const make = Effect.gen(function* () {
           unsupported("managed sign-in sets its own model provider");
           continue;
         }
-        const { sharedHomePath } = yield* resolveCodexHomeLayout(config.value);
+        // As codex starts: with no home of its own, an instance's CODEX_HOME names the home.
+        const environmentHome = processEnv.CODEX_HOME?.trim();
+        const codexConfig =
+          config.value.homePath.trim() === "" &&
+          config.value.shadowHomePath.trim() === "" &&
+          environmentHome
+            ? { ...config.value, homePath: environmentHome }
+            : config.value;
+        const { sharedHomePath } = yield* resolveCodexHomeLayout(codexConfig);
         const configPath = path.join(sharedHomePath, "config.toml");
         resolved.push({
           row: {
@@ -179,7 +188,7 @@ const make = Effect.gen(function* () {
             configPath,
           },
           environment:
-            config.value.homePath === ""
+            codexConfig.homePath === ""
               ? processEnv
               : { ...processEnv, CODEX_HOME: sharedHomePath },
         });

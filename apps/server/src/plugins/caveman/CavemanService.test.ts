@@ -47,6 +47,7 @@ const providers = [
   provider("claude_work", "claudeAgent"),
   provider("codex", "codex"),
   provider("codex_work", "codex"),
+  provider("codex_env", "codex"),
   provider("codex_managed", "codex"),
   provider("cursor", "cursor"),
   provider("grok", "grok"),
@@ -107,6 +108,7 @@ const start = Effect.fn("test.start")(function* (
     home,
     claudeWork: path.join(root, "claude-work"),
     codexWork: path.join(root, "codex-work"),
+    codexEnv: path.join(root, "codex-env"),
   };
   const services = yield* Layer.build(
     CavemanService.layer.pipe(
@@ -123,6 +125,12 @@ const start = Effect.fn("test.start")(function* (
             [ProviderInstanceId.make("codex_work")]: {
               driver: ProviderDriverKind.make("codex"),
               config: { homePath: dirs.codexWork },
+            },
+            // No `homePath`: the home comes from the instance's own CODEX_HOME.
+            [ProviderInstanceId.make("codex_env")]: {
+              driver: ProviderDriverKind.make("codex"),
+              environment: [{ name: "CODEX_HOME", value: dirs.codexEnv, sensitive: false }],
+              config: {},
             },
             [ProviderInstanceId.make("codex_managed")]: {
               driver: ProviderDriverKind.make("codex"),
@@ -255,6 +263,7 @@ describe.skipIf(windowsHost)("CavemanService", () => {
           ),
           row("codex", "codex", "direct", null, `${h.dirs.home}/.codex/config.toml`),
           row("codex_work", "codex", "routed", null, `${h.dirs.codexWork}/config.toml`),
+          row("codex_env", "codex", "direct", null, `${h.dirs.codexEnv}/config.toml`),
           unsupported("codex_managed", "codex", "managed sign-in sets its own model provider"),
           unsupported("cursor", "cursor", notRouted),
           unsupported("grok", "grok", notRouted),
@@ -313,6 +322,27 @@ describe.skipIf(windowsHost)("CavemanService", () => {
         assert.strictEqual(agent(status, "codex_work")?.route, "routed");
         assert.deepStrictEqual(withoutVersionProbes(yield* h.recorded), [
           `enable codex|unset|${h.dirs.codexWork}`,
+        ]);
+      }),
+    ),
+  );
+
+  it.effect("reads and enables Codex in the CODEX_HOME of the instance's environment", () =>
+    run(
+      Effect.gen(function* () {
+        const h = yield* start({ stub: recordingStub });
+        yield* h.write(`${h.dirs.codexEnv}/config.toml`, routedConfig);
+        const status = yield* h.status;
+        assert.deepStrictEqual(
+          agent(status, "codex_env"),
+          row("codex_env", "codex", "routed", null, `${h.dirs.codexEnv}/config.toml`),
+        );
+        // The default home holds no route, so reading it instead would say `direct`.
+        assert.strictEqual(agent(status, "codex")?.route, "direct");
+
+        yield* h.setRoute("codex_env", true);
+        assert.deepStrictEqual(withoutVersionProbes(yield* h.recorded), [
+          `enable codex|unset|${h.dirs.codexEnv}`,
         ]);
       }),
     ),
@@ -386,6 +416,24 @@ describe.skipIf(windowsHost)("CavemanService", () => {
           server.close(() => resume(Effect.void));
         });
         assert.isFalse((yield* h.status).proxy.listening);
+      }),
+    ),
+  );
+
+  it.effect("does not probe a DNS name that only starts with 127.", () =>
+    run(
+      Effect.gen(function* () {
+        const server = NodeNet.createServer();
+        yield* Effect.callback<void>((resume) => {
+          server.listen(0, "127.0.0.1", () => resume(Effect.void));
+        });
+        const { port } = server.address() as NodeNet.AddressInfo;
+        const origin = `http://127.example.com:${port}`;
+        const h = yield* start({ gateway: origin });
+        assert.deepStrictEqual((yield* h.status).proxy, { origin, listening: null });
+        yield* Effect.callback<void>((resume) => {
+          server.close(() => resume(Effect.void));
+        });
       }),
     ),
   );
