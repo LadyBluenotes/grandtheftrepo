@@ -3,6 +3,7 @@ import type * as Layer from "effect/Layer";
 import type * as SqlClient from "effect/sql/SqlClient";
 import type * as SqlError from "effect/sql/SqlError";
 import type { toolkitRegistration } from "../mcp/McpHttpServer.ts";
+import type * as EventSink from "../orchestration-v2/EventSink.ts";
 
 /**
  * One numbered change to a plugin's schema, in the shape of the core `migrationEntries`.
@@ -30,9 +31,10 @@ export interface ServerPlugin<R = never> {
   readonly migrations?: ReadonlyArray<PluginMigration>;
   /**
    * Services, reactors and sweeps. Built only when the plugin is active, with
-   * `SqlClient.SqlClient` bound to the plugin's own database, never the core one.
+   * `SqlClient.SqlClient` bound to the plugin's own database, never the core one, and
+   * `EventSinkV2` the orchestrator's committed events, for `PluginReactor.start`.
    */
-  readonly layer: Layer.Layer<never, never, R | SqlClient.SqlClient>;
+  readonly layer: Layer.Layer<never, never, R | SqlClient.SqlClient | EventSink.EventSinkV2>;
   /**
    * MCP tools. `register` is `McpHttpServer.toolkitRegistration`, handed in because that module
    * imports the host: importing it from a plugin would make a cycle.

@@ -17,6 +17,7 @@ import { definePluginMethods } from "./method.ts";
 export * from "./kanban.ts";
 export * from "./method.ts";
 export * from "./supervisor.ts";
+export * from "./telemetry.ts";
 
 /**
  * One RPC per scope; plugin methods are dispatched behind them by name. The WebSocket group sits at

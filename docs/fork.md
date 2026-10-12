@@ -8,7 +8,7 @@ directories and never edit an upstream file. Upstream is merged nightly by
 
 - `apps/server/src/plugins/` holds the host (`PluginHost.ts`, `Plugin.ts`, `registry.ts`) and one
   directory per plugin.
-- `packages/contracts/src/plugins/` holds each plugin's schemas and RPC definitions.
+- `packages/contracts/src/plugins/` holds each plugin's schemas and method definitions.
 - `apps/web/src/plugins/` holds each plugin's screens.
   A plugin with a screen is registered in `apps/web/src/plugins/registry.ts` and reached at
   `/plugins/<id>`; every plugin is listed, with an on/off switch, at `/plugins`.
@@ -80,6 +80,10 @@ them half-evaluated. The host hands `toolkitRegistration` to `ServerPlugin.mcp` 
   `<T3 home>/wiki/<project-slug>/`; the folder is changeable per project from the board.
   Server: `apps/server/src/plugins/kanban/`. Contracts: `packages/contracts/src/plugins/kanban.ts`.
   Web: `apps/web/src/plugins/kanban/`. User guide: [Kanban board](./user/kanban.md).
+- **telemetry**: token usage per provider turn, from `provider-turn.updated`. The template plugin:
+  it uses every host seam once (database, reactor, sweep, gateway method, MCP tool, settings
+  panel) and is the one to copy. Server: `apps/server/src/plugins/telemetry/`. Contracts:
+  `packages/contracts/src/plugins/telemetry.ts`. Web: `apps/web/src/plugins/telemetry/`.
 
 `apps/web/src/routeTree.gen.ts` is generated and committed. A conflict there is resolved by running
 the web dev server or build once, which regenerates it.
