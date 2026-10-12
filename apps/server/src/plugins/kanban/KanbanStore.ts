@@ -4,6 +4,7 @@ import {
   KanbanSlug,
   type KanbanActor,
   type KanbanBoard,
+  type KanbanCriterion,
   type KanbanDecision,
   type KanbanGetIssueInput,
   type KanbanIssue,
@@ -78,6 +79,18 @@ export class KanbanStore extends Context.Service<
       write: KanbanWrite,
     ) => Effect.Effect<KanbanWriteResult, KanbanError>;
     readonly setDirectory: (input: KanbanSetDirectoryInput) => Effect.Effect<void, KanbanError>;
+    /**
+     * Admits an issue from Triage or Inbox to Todo as `by`, in one write, with `criteria` as its
+     * acceptance criteria in that order: one already there with the same text keeps its id and
+     * state, and every other change is logged. An issue already out of those columns is left as
+     * it is. The description is never touched.
+     */
+    readonly admit: (
+      projectId: ProjectId,
+      id: string,
+      by: KanbanActor,
+      criteria: ReadonlyArray<string>,
+    ) => Effect.Effect<void, KanbanError>;
     /** Moves every issue linking `threadId` forward to `status`. Never leaves Triage or Inbox. */
     readonly advance: (
       projectId: ProjectId,
@@ -93,6 +106,9 @@ export class KanbanStore extends Context.Service<
 >()("t3/plugins/kanban/KanbanStore") {}
 
 const invalid = (message: string) => new KanbanError({ code: "invalid", message });
+/** The number the next server-made criterion id (`c<n>`) takes. */
+const nextCriterionNumber = (criteria: ReadonlyArray<KanbanCriterion>) =>
+  1 + criteria.reduce((max, c) => Math.max(max, Number(c.id.slice(1)) || 0), 0);
 const notFound = (message: string) => new KanbanError({ code: "not_found", message });
 
 const make = Effect.gen(function* () {
@@ -425,8 +441,7 @@ const make = Effect.gen(function* () {
       case "criterion.add": {
         const current = yield* issue();
         const text = yield* need(w.text, "text");
-        const next =
-          1 + current.criteria.reduce((max, c) => Math.max(max, Number(c.id.slice(1)) || 0), 0);
+        const next = nextCriterionNumber(current.criteria);
         yield* saveIssue(
           state,
           touch(logged(current, "criterion", `added: ${text}`), {
@@ -646,6 +661,52 @@ const make = Effect.gen(function* () {
     },
   );
 
+  const admit: KanbanStore["Service"]["admit"] = Effect.fn("KanbanStore.admit")(
+    function* (projectId, id, by, texts) {
+      const state = yield* load(projectId);
+      const admitted = yield* state.lock.withPermits(1)(
+        Effect.gen(function* () {
+          const current = state.issues.get(id);
+          if (current === undefined) return yield* notFound(`No issue "${id}".`);
+          if (!HOLDING.has(current.status)) return false;
+          const at = yield* nowIso;
+          // In the given order; an existing criterion with the same text keeps its id and state.
+          const unused = [...current.criteria];
+          let next = nextCriterionNumber(current.criteria);
+          const criteria = texts.map((text) => {
+            const index = unused.findIndex((c) => c.text === text);
+            return index === -1
+              ? { id: `c${next++}`, text, checked: false }
+              : unused.splice(index, 1)[0]!;
+          });
+          const added = criteria.filter((c) => !current.criteria.includes(c));
+          const amended: KanbanIssue = {
+            ...current,
+            criteria,
+            log: [
+              ...current.log,
+              ...unused.map((c) => ({
+                at,
+                by,
+                kind: "criterion" as const,
+                text: `removed: ${c.text}`,
+              })),
+              ...added.map((c) => ({
+                at,
+                by,
+                kind: "criterion" as const,
+                text: `added: ${c.text}`,
+              })),
+            ],
+          };
+          yield* saveIssue(state, moved(amended, "todo", by, at));
+          return true;
+        }),
+      );
+      if (admitted) yield* publish(projectId);
+    },
+  );
+
   const setDirectory: KanbanStore["Service"]["setDirectory"] = Effect.fn(
     "KanbanStore.setDirectory",
   )(function* ({ projectId, directory }) {
@@ -697,6 +758,7 @@ const make = Effect.gen(function* () {
       ),
     write,
     setDirectory,
+    admit,
     advance,
     sweepArchive: Effect.forEach(loaded, ([projectId, state]) => sweepProject(projectId, state), {
       discard: true,

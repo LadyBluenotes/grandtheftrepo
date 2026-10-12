@@ -12,8 +12,9 @@ and **Done**. Drag a card to another column, or change its status in the card pa
 
 - **Triage** holds what was just found. Each card shows how far it was verified: unverified,
   partial or verified.
-- **Inbox** holds reproduced work that waits for you. Agents can move a card here, but only you can
-  move it on to **Todo**. Until you do, it cannot be started and agents cannot attach a thread to it.
+- **Inbox** holds reproduced work that waits for you. Agents can move a card here, but only you, or
+  a valid spec (see [Agents](#agents)), can move it on to **Todo**. Until then, it cannot be started
+  and agents cannot attach a thread to it.
 - **Todo** is released work. **Start thread** on a card opens a new thread draft in the project with
   the ticket filled in; choose a model and mode, then send as usual.
 - A card follows its threads from there: starting a thread moves it to **In progress**, a finished
@@ -61,15 +62,23 @@ An agent can set the emergency stop to hold back everything the supervisor would
 board. While it is set, a banner at the top of the board says so, with a **Clear** button. The stop
 does not interrupt running agents, and starting work yourself, including dragging a card to
 **In progress**, is never blocked. It is stored, so it survives a restart. Setting it twice, or
-clearing it when it is not set, changes nothing. Nothing on the board starts threads by itself
-yet, so the stop only matters once something does.
+clearing it when it is not set, changes nothing. While it is set, drafting a spec with a model is
+refused; checking a spec you wrote still works.
 
 ## Agents
 
-Agents reach the board through three MCP tools. `kanban_list` lists issues or decisions, or one of
+Agents reach the board through five MCP tools. `kanban_list` lists issues or decisions, or one of
 them in full. `kanban_write` files an issue, moves it, adds a note, blocks it when it needs you,
 links the calling thread, or records a decision. Agent-filed issues land in Triage. `kanban_stop`
 sets or clears the emergency stop.
+
+`kanban_ticket_specify` turns a rough card in Triage or Inbox into a spec. By default it starts a
+drafting thread in plan mode on the routing plugin's cheap model; with `useExisting` it checks a
+spec you wrote in the description instead, with no model. A spec has `## Goal`, `## Approach` (a
+list of two to five steps) and `## Acceptance` (a `- [ ]` checklist), in that order, optionally
+followed by `## Out of scope`, and no other headings. A valid spec becomes the card's acceptance
+criteria and moves it to **Todo**; a malformed one leaves the card where it is and says why. The
+description is never changed. `kanban_spec_get` shows the latest attempt.
 
 ## Files
 

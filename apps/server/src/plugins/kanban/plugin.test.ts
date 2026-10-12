@@ -86,6 +86,7 @@ const layerTest = Layer.mergeAll(
 );
 
 const decodeError = Schema.decodeUnknownEffect(KanbanError);
+const specInput = { projectId: "project-1", id: "some-issue" };
 
 const operate = (method: string, input: unknown) =>
   PluginHost.handlers[PLUGIN_GATEWAY_WS_METHODS.operate]({ method, input });
@@ -107,6 +108,7 @@ it.effect(
             SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name`;
           const names = tables.map((table) => table.name);
           assert.include(names, "stop");
+          assert.include(names, "spec_attempt");
           // Flags live in the host's database, not the plugin's.
           assert.notInclude(names, "attention");
 
@@ -135,6 +137,7 @@ it.effect(
           );
           yield* operate(KANBAN_METHODS.stopClear.method, {});
           assert.isNull(yield* read(KANBAN_METHODS.stopGet.method, {}));
+          assert.isNull(yield* read(KANBAN_METHODS.specGet.method, specInput));
         }).pipe(Effect.provide(layerHost));
       }),
     ).pipe(Effect.provide(layerTest)),
@@ -162,7 +165,7 @@ it.effect("a dry run records the sweep and writes no flag", () =>
   ).pipe(Effect.provide(layerTest)),
 );
 
-it.effect("disabled: no file, no sweep, and the stop methods say the plugin is not active", () =>
+it.effect("disabled: no file, no sweep, and its methods say the plugin is not active", () =>
   Effect.scoped(
     Effect.gen(function* () {
       yield* writeStateFile("plugins.json", allOff);
@@ -172,13 +175,19 @@ it.effect("disabled: no file, no sweep, and the stop methods say the plugin is n
         assert.isFalse(yield* kanbanFileExists);
         assert.deepEqual((yield* (yield* PluginSupervisor.PluginSupervisor).status).sweeps, []);
 
-        const refused = yield* operate(KANBAN_METHODS.stopSet.method, {}).pipe(
-          Effect.andThen(Effect.die("expected a failure")),
-          Effect.flip,
-        );
-        if (refused._tag !== "PluginMethodError") return assert.fail(refused.message);
-        const error = yield* decodeError(refused.error);
-        assert.strictEqual(error.code, "inactive");
+        for (const call of [
+          operate(KANBAN_METHODS.stopSet.method, {}),
+          operate(KANBAN_METHODS.ticketSpecify.method, specInput),
+          read(KANBAN_METHODS.specGet.method, specInput),
+        ]) {
+          const refused = yield* call.pipe(
+            Effect.andThen(Effect.die("expected a failure")),
+            Effect.flip,
+          );
+          if (refused._tag !== "PluginMethodError") return assert.fail(refused.message);
+          const error = yield* decodeError(refused.error);
+          assert.strictEqual(error.code, "inactive");
+        }
       }).pipe(Effect.provide(layerHost));
     }),
   ).pipe(Effect.provide(layerTest)),

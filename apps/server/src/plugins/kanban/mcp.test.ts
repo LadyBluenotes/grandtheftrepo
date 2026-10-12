@@ -23,6 +23,7 @@ import * as PluginHost from "../PluginHost.ts";
 import * as PluginSupervisor from "../PluginSupervisor.ts";
 import * as KanbanStore from "./KanbanStore.ts";
 import { migrations } from "./migrations.ts";
+import * as SpecService from "./spec/SpecService.ts";
 import * as StopGate from "./StopGate.ts";
 
 const environmentId = EnvironmentId.make("env-1");
@@ -98,6 +99,9 @@ it.effect("registers kanban tools through the plugin host and files an issue ove
         ),
         Layer.provide(Layer.mock(PluginSupervisor.PluginSupervisor)({})),
         Layer.provide(ServerSettings.layerTest()),
+        Layer.provide(
+          SpecService.layer.pipe(Layer.provide(Layer.succeed(SqlClient.SqlClient, sql))),
+        ),
         Layer.provide(KanbanStore.layer),
         Layer.provide(StopGate.layer.pipe(Layer.provide(Layer.succeed(SqlClient.SqlClient, sql)))),
         Layer.provide(Layer.mock(ThreadManagementService.ThreadManagementService)({})),
@@ -161,6 +165,10 @@ it.effect("registers kanban tools through the plugin host and files an issue ove
       expect(tools).toContain('"kanban_list"');
       expect(tools).toContain('"kanban_write"');
       expect(tools).toContain('"kanban_stop"');
+      expect(tools).toContain('"kanban_ticket_specify"');
+      expect(
+        listedTools(tools).find((tool) => tool.name === "kanban_spec_get")?.annotations,
+      ).toEqual(expect.objectContaining({ readOnlyHint: true }));
       // Setting the stop changes the environment, so MCP clients approved read-only are refused.
       expect(listedTools(tools).find((tool) => tool.name === "kanban_stop")?.annotations).toEqual(
         expect.objectContaining({ readOnlyHint: false }),
@@ -199,6 +207,33 @@ it.effect("registers kanban tools through the plugin host and files an issue ove
         }),
       );
       expect(listed).toContain("found-a-bug · triage · p3 · Found a bug · partial");
+
+      // A spec written by hand admits the issue over MCP, with no drafting thread.
+      yield* rpc(5, "tools/call", {
+        name: "kanban_write",
+        arguments: {
+          projectId,
+          action: "issue.create",
+          title: "Spec me",
+          description:
+            "## Goal\nIt works.\n\n## Approach\n- One.\n- Two.\n\n## Acceptance\n- [ ] It works.",
+        },
+      });
+      const specify = (id: number) =>
+        rpc(id, "tools/call", {
+          name: "kanban_ticket_specify",
+          arguments: { projectId, id: "spec-me", useExisting: true },
+        }).pipe(Effect.map(resultText));
+      expect(yield* specify(6)).toContain("from the description: valid.");
+      expect(
+        resultText(
+          yield* rpc(7, "tools/call", {
+            name: "kanban_spec_get",
+            arguments: { projectId, id: "spec-me" },
+          }),
+        ),
+      ).toContain("from the description: valid.");
+      expect(yield* specify(8)).toContain("This ticket is already admitted.");
 
       const fs = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;

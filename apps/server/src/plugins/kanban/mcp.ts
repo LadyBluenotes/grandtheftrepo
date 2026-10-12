@@ -9,6 +9,7 @@ import {
   type KanbanError,
   type KanbanIssue,
   type KanbanIssueSummary,
+  type KanbanSpecAttempt,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
@@ -21,6 +22,7 @@ import { readCaller, resolveProjectId } from "../../mcp/threadAccess.ts";
 import * as ThreadManagementService from "../../orchestration-v2/ThreadManagementService.ts";
 import { formatLogEntry } from "./KanbanFiles.ts";
 import * as KanbanStore from "./KanbanStore.ts";
+import * as SpecService from "./spec/SpecService.ts";
 import * as StopGate from "./StopGate.ts";
 
 const shared = {
@@ -73,7 +75,38 @@ const KanbanStopTool = Tool.make("kanban_stop", {
   .annotate(Tool.Idempotent, true)
   .annotate(Tool.OpenWorld, false);
 
-export const KanbanToolkit = Toolkit.make(KanbanListTool, KanbanWriteTool, KanbanStopTool);
+const KanbanTicketSpecifyTool = Tool.make("kanban_ticket_specify", {
+  ...shared,
+  description:
+    "Turn a Triage or Inbox issue into a checkable spec: ## Goal (not empty), ## Approach (a list of two to five items), ## Acceptance (a checklist of - [ ] items, at least one), and optionally ## Out of scope last; no other headings. By default starts one drafting thread in plan mode on the routing plugin's cheap tier and returns the attempt as running; kanban_spec_get shows the result once that thread's run ends. useExisting:true checks the issue's description as written instead, with no thread and no model. A valid spec makes its Acceptance items the issue's criteria and admits it to Todo; a malformed one leaves the issue untouched and gives the reason. The description is never edited. One attempt per call, never retried; an admitted issue is refused, and the emergency stop holds back the drafting thread.",
+  parameters: Schema.Struct({
+    projectId: Schema.optional(ProjectId),
+    id: KanbanSlug,
+    useExisting: Schema.optional(Schema.Boolean),
+  }),
+})
+  .annotate(Tool.Title, "Draft or check an issue's spec")
+  .annotate(Tool.Readonly, false)
+  .annotate(Tool.Destructive, false)
+  .annotate(Tool.Idempotent, false)
+  .annotate(Tool.OpenWorld, false);
+
+const KanbanSpecGetTool = Tool.make("kanban_spec_get", {
+  ...shared,
+  description:
+    "The latest spec attempt for a kanban issue: running, valid or malformed, with the reason a malformed one was refused and the text that was checked.",
+  parameters: Schema.Struct({ projectId: Schema.optional(ProjectId), id: KanbanSlug }),
+})
+  .annotate(Tool.Readonly, true)
+  .annotate(Tool.Destructive, false);
+
+export const KanbanToolkit = Toolkit.make(
+  KanbanListTool,
+  KanbanWriteTool,
+  KanbanStopTool,
+  KanbanTicketSpecifyTool,
+  KanbanSpecGetTool,
+);
 
 const failure = (error: KanbanError) =>
   new OrchestratorMcpFailure({
@@ -128,6 +161,21 @@ const issueText = (issue: KanbanIssue, decisions: ReadonlyArray<KanbanDecision>)
       : []),
   ].join("\n");
 
+const attemptText = (attempt: KanbanSpecAttempt) => {
+  const from =
+    attempt.childThreadId === null ? "the description" : `drafting thread ${attempt.childThreadId}`;
+  const head = `Spec attempt ${attempt.id} for ${attempt.issueId}, from ${from}: ${attempt.status}.`;
+  const text = attempt.text === null ? "" : `\n\n${attempt.text}`;
+  switch (attempt.status) {
+    case "running":
+      return `${head} kanban_spec_get shows the result once the thread's run ends.`;
+    case "valid":
+      return `${head} The issue is admitted with the Acceptance items as its criteria.${text}`;
+    case "malformed":
+      return `${head} ${attempt.reason ?? ""} The issue is unchanged.${text}`;
+  }
+};
+
 const byBoardOrder = (a: KanbanIssueSummary, b: KanbanIssueSummary) =>
   KANBAN_STATUSES.indexOf(a.status) - KANBAN_STATUSES.indexOf(b.status) ||
   a.priority.localeCompare(b.priority) ||
@@ -136,6 +184,7 @@ const byBoardOrder = (a: KanbanIssueSummary, b: KanbanIssueSummary) =>
 const pluginServices = Effect.all([
   Effect.serviceOption(KanbanStore.KanbanStore),
   Effect.serviceOption(StopGate.StopGate),
+  Effect.serviceOption(SpecService.SpecService),
 ]);
 
 /**
@@ -145,7 +194,7 @@ const pluginServices = Effect.all([
  */
 export const handlers = McpToolAccess.toLayer(
   KanbanToolkit,
-  Effect.map(pluginServices, ([storeOption, gateOption]) => {
+  Effect.map(pluginServices, ([storeOption, gateOption, specOption]) => {
     const inactive = () =>
       Effect.fail(
         new OrchestratorMcpFailure({
@@ -155,6 +204,7 @@ export const handlers = McpToolAccess.toLayer(
       );
     const store = Option.match(storeOption, { onNone: inactive, onSome: Effect.succeed });
     const gate = Option.match(gateOption, { onNone: inactive, onSome: Effect.succeed });
+    const spec = Option.match(specOption, { onNone: inactive, onSome: Effect.succeed });
     return {
       kanban_list: McpToolAccess.reads((input) =>
         Effect.gen(function* () {
@@ -231,6 +281,24 @@ export const handlers = McpToolAccess.toLayer(
           return `Emergency stop is set (since ${set.setAt} by ${set.setBy}${
             set.reason === null ? "" : `: ${set.reason}`
           }).`;
+        }).pipe(Effect.catchTags({ KanbanError: (error) => Effect.fail(failure(error)) })),
+      ),
+      kanban_ticket_specify: McpToolAccess.writes(({ projectId: given, id, useExisting }) =>
+        Effect.gen(function* () {
+          const projectId = yield* resolveProjectId(yield* readCaller(), given);
+          const attempt = yield* (yield* spec).specify({
+            projectId,
+            id,
+            ...(useExisting === undefined ? {} : { useExisting }),
+          });
+          return attemptText(attempt);
+        }).pipe(Effect.catchTags({ KanbanError: (error) => Effect.fail(failure(error)) })),
+      ),
+      kanban_spec_get: McpToolAccess.reads(({ projectId: given, id }) =>
+        Effect.gen(function* () {
+          const projectId = yield* resolveProjectId(yield* readCaller(), given);
+          const attempt = yield* (yield* spec).latest({ projectId, id });
+          return attempt === null ? `No spec attempt for ${id}.` : attemptText(attempt);
         }).pipe(Effect.catchTags({ KanbanError: (error) => Effect.fail(failure(error)) })),
       ),
     };

@@ -1,0 +1,534 @@
+import * as NodeServices from "@effect/platform-node/NodeServices";
+import { assert, describe, it } from "@effect/vitest";
+import {
+  EventId,
+  KanbanError,
+  MessageId,
+  PlanId,
+  ProjectId,
+  ProviderInstanceId,
+  RunId,
+  ThreadId,
+  TurnItemId,
+  type KanbanSpecifyInput,
+  type ModelSelection,
+  type OrchestrationV2DomainEvent,
+  type OrchestrationV2Run,
+  type Project,
+  type RoutingEntry,
+} from "@t3tools/contracts";
+import * as Context from "effect/Context";
+import * as DateTime from "effect/DateTime";
+import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
+import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
+import * as Path from "effect/Path";
+import * as SqlClient from "effect/sql/SqlClient";
+
+import * as ServerConfig from "../../../config.ts";
+import * as EventSink from "../../../orchestration-v2/EventSink.ts";
+import * as EventStore from "../../../orchestration-v2/EventStore.ts";
+import * as ProjectionStore from "../../../orchestration-v2/ProjectionStore.ts";
+import * as ThreadLaunchService from "../../../orchestration-v2/ThreadLaunchService.ts";
+import * as ThreadManagementService from "../../../orchestration-v2/ThreadManagementService.ts";
+import * as SqlitePersistence from "../../../persistence/Sqlite.ts";
+import * as ProjectService from "../../../project/ProjectService.ts";
+import * as PluginDatabase from "../../PluginDatabase.ts";
+import * as PluginReactor from "../../PluginReactor.ts";
+import * as TierSelectionService from "../../routing/TierSelectionService.ts";
+import * as KanbanStore from "../KanbanStore.ts";
+import { migrations } from "../migrations.ts";
+import * as StopGate from "../StopGate.ts";
+import * as SpecReactor from "./SpecReactor.ts";
+import * as SpecService from "./SpecService.ts";
+
+const projectId = ProjectId.make("project-1");
+const project: Project = {
+  id: projectId,
+  title: "Grand Theft Repo",
+  workspaceRoot: "/unused",
+  defaultModelSelection: null,
+  scripts: [],
+  createdAt: "2026-10-01T00:00:00.000Z",
+  updatedAt: "2026-10-01T00:00:00.000Z",
+  deletedAt: null,
+};
+const codex = ProviderInstanceId.make("codex");
+const cheap: RoutingEntry = { providerInstanceId: codex, model: "gpt-5.4-mini" };
+const at = DateTime.makeUnsafe("2026-10-12T12:00:00.000Z");
+const NO_CHEAP_TIER =
+  "The cheap tier is not configured. Use useExisting or enable the routing plugin.";
+
+const rough = "Login loops when the session cookie has expired.";
+const validSpec = [
+  "## Goal",
+  "An expired session sends the user to sign in once, then back.",
+  "",
+  "## Approach",
+  "- Detect the expired cookie in the auth middleware.",
+  "- Redirect to sign-in with the original path.",
+  "",
+  "## Acceptance",
+  "- [ ] An expired cookie lands on sign-in exactly once.",
+  "- [ ] Signing in returns to the original path.",
+].join("\n");
+const sixSteps = [
+  "## Goal",
+  "No loop.",
+  "## Approach",
+  ...Array.from({ length: 6 }, (_, i) => `- Step ${i + 1}.`),
+  "## Acceptance",
+  "- [ ] No loop.",
+].join("\n");
+
+// A real event sink and projection on an in-memory core database, as the reactor tests use.
+const layerCore = SqlitePersistence.layerMemory;
+const layerStores = Layer.mergeAll(EventStore.layer, ProjectionStore.layer).pipe(
+  Layer.provideMerge(layerCore),
+);
+const layerSink = Layer.merge(EventSink.layer, ProjectionStore.layer).pipe(
+  Layer.provide(layerStores),
+);
+
+const layerTest = Layer.mergeAll(
+  layerSink,
+  Layer.fresh(ServerConfig.layerTest(process.cwd(), { prefix: "t3code-kanban-spec-" })).pipe(
+    Layer.provide(NodeServices.layer),
+  ),
+  NodeServices.layer,
+);
+
+let eventCount = 0;
+const eventBase = () => ({
+  id: EventId.make(`event:spec-${++eventCount}`),
+  providerInstanceId: codex,
+  occurredAt: at,
+});
+
+const modelSelection = { instanceId: codex, model: cheap.model } satisfies ModelSelection;
+
+/** The drafting thread as the orchestrator records it, so its turn items can be read back. */
+const threadCreated = (threadId: ThreadId): OrchestrationV2DomainEvent => ({
+  ...eventBase(),
+  type: "thread.created",
+  threadId,
+  payload: {
+    createdBy: "system",
+    creationSource: "server",
+    id: threadId,
+    projectId,
+    title: "Spec",
+    providerInstanceId: codex,
+    modelSelection,
+    runtimeMode: "approval-required",
+    interactionMode: "plan",
+    branch: null,
+    worktreePath: null,
+    activeProviderThreadId: null,
+    lineage: { parentThreadId: null, relationshipToParent: null, rootThreadId: threadId },
+    forkedFrom: null,
+    createdAt: at,
+    updatedAt: at,
+    archivedAt: null,
+    settledOverride: null,
+    settledAt: null,
+    lastVisitedAt: null,
+    deletedAt: null,
+  },
+});
+
+const itemBase = (threadId: ThreadId, runId: RunId, ordinal: number) => ({
+  id: TurnItemId.make(`item:${threadId}:${ordinal}`),
+  threadId,
+  runId,
+  nodeId: null,
+  providerThreadId: null,
+  providerTurnId: null,
+  nativeItemRef: null,
+  parentItemId: null,
+  ordinal,
+  status: "completed" as const,
+  title: null,
+  startedAt: at,
+  completedAt: at,
+  updatedAt: at,
+});
+
+const said = (
+  threadId: ThreadId,
+  runId: RunId,
+  ordinal: number,
+  text: string,
+): OrchestrationV2DomainEvent => ({
+  ...eventBase(),
+  type: "turn-item.updated",
+  threadId,
+  runId,
+  payload: {
+    ...itemBase(threadId, runId, ordinal),
+    type: "assistant_message",
+    messageId: MessageId.make(`message:${threadId}:${ordinal}`),
+    text,
+    streaming: false,
+  },
+});
+
+const planned = (
+  threadId: ThreadId,
+  runId: RunId,
+  ordinal: number,
+  markdown: string,
+): OrchestrationV2DomainEvent => ({
+  ...eventBase(),
+  type: "turn-item.updated",
+  threadId,
+  runId,
+  payload: {
+    ...itemBase(threadId, runId, ordinal),
+    type: "proposed_plan",
+    planId: PlanId.make(`plan:${threadId}:${ordinal}`),
+    markdown,
+    streaming: false,
+  },
+});
+
+const run = (
+  threadId: ThreadId,
+  runId: RunId,
+  status: OrchestrationV2Run["status"],
+): OrchestrationV2Run => ({
+  id: runId,
+  threadId,
+  ordinal: 1,
+  providerInstanceId: codex,
+  modelSelection,
+  providerThreadId: null,
+  userMessageId: MessageId.make(`message:${threadId}:0`),
+  rootNodeId: null,
+  activeAttemptId: null,
+  status,
+  requestedAt: at,
+  startedAt: at,
+  completedAt: status === "running" ? null : at,
+  checkpointId: null,
+  contextHandoffId: null,
+});
+
+const runUpdated = (
+  threadId: ThreadId,
+  runId: RunId,
+  status: OrchestrationV2Run["status"],
+): OrchestrationV2DomainEvent => ({
+  ...eventBase(),
+  type: "run.updated",
+  threadId,
+  runId,
+  payload: run(threadId, runId, status),
+});
+
+/**
+ * The plugin's services over a fresh board folder and an in-memory kanban database. Launches go
+ * to a stub that records them; `routing` is the tier service the calling fiber holds, if any.
+ */
+const start = Effect.gen(function* () {
+  const { sql } = yield* PluginDatabase.open({ id: "kanban", filename: ":memory:", migrations });
+  const projections = yield* ProjectionStore.ProjectionStoreV2;
+  const services = yield* Layer.build(
+    SpecService.layer.pipe(
+      Layer.provideMerge(Layer.merge(KanbanStore.layer, StopGate.layer)),
+      Layer.provide(
+        Layer.mergeAll(
+          Layer.succeed(SqlClient.SqlClient, sql),
+          Layer.mock(ThreadManagementService.ThreadManagementService)({
+            getThreadRecords: (threadId, fields, filter) =>
+              projections.getThreadRecords(threadId, fields, filter).pipe(Effect.orDie),
+          }),
+          Layer.mock(ProjectService.ProjectService)({
+            getById: (id) =>
+              Effect.succeed(id === projectId ? Option.some(project) : Option.none()),
+          }),
+        ),
+      ),
+    ),
+  );
+  const spec = Context.get(services, SpecService.SpecService);
+  const store = Context.get(services, KanbanStore.KanbanStore);
+  const gate = Context.get(services, StopGate.StopGate);
+
+  const launched: Array<ThreadLaunchService.ThreadLaunchInput> = [];
+  const routed: Array<TierSelectionService.Work> = [];
+  const launcher = ThreadLaunchService.ThreadLaunchService.of({
+    launch: (input) =>
+      Effect.sync(() => {
+        launched.push(input);
+        // Only the thread id is read.
+        return {
+          threadId: input.threadId ?? ThreadId.make("unused"),
+          resumed: false,
+          projection: {} as never,
+        };
+      }),
+    checkWorktreeBase: () => Effect.void,
+    retryPreparation: () => Effect.die("unused"),
+  });
+  const tiers = (entry: RoutingEntry | null) =>
+    TierSelectionService.TierSelectionService.of({
+      recommend: (work) =>
+        Effect.sync(() => {
+          routed.push(work);
+          return { taskClass: work.taskClass, tier: "cheap", reason: "rule", failedRuns: 0, entry };
+        }),
+      record: () => Effect.void,
+    });
+
+  /** `specify` from a request fiber holding the launcher and, unless null, the tier service. */
+  const specify = (input: KanbanSpecifyInput, routing: RoutingEntry | null | "off" = cheap) =>
+    spec
+      .specify(input)
+      .pipe(
+        Effect.provideService(ThreadLaunchService.ThreadLaunchService, launcher),
+        routing === "off"
+          ? (effect) => effect
+          : Effect.provideService(TierSelectionService.TierSelectionService, tiers(routing)),
+      );
+
+  /** Commits events, then runs the reactor until it has handled every one. */
+  const react = (events: ReadonlyArray<OrchestrationV2DomainEvent>) =>
+    Effect.gen(function* () {
+      yield* (yield* EventSink.EventSinkV2).write({ events });
+      yield* Effect.scoped(
+        Effect.flatMap(
+          PluginReactor.start({
+            plugin: "kanban",
+            from: "start",
+            handlers: SpecReactor.handlers(spec),
+          }),
+          (reactor) => reactor.drain,
+        ),
+      ).pipe(Effect.provideService(SqlClient.SqlClient, sql));
+    });
+
+  /** Files a rough issue as an agent would: in Triage. */
+  const file = (title: string, description: string) =>
+    store.write(projectId, "thread:agent", { action: "issue.create", title, description });
+
+  const fileText = (id: string) =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const { directory } = yield* store.board(projectId);
+      return yield* fs.readFileString(path.join(directory, "issues", `${id}.md`));
+    });
+
+  return { spec, store, gate, launched, routed, specify, react, file, fileText };
+});
+
+const refusal = <A>(effect: Effect.Effect<A, KanbanError>) =>
+  effect.pipe(
+    Effect.flatMap(() => Effect.die("expected a refusal")),
+    Effect.catchTags({ KanbanError: (error) => Effect.succeed(error) }),
+  );
+
+describe("SpecService", () => {
+  it.effect("a valid draft fills the criteria, clears triage and admits", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { spec, store, launched, routed, specify, react, file } = yield* start;
+        const { id } = yield* file("Login loops", rough);
+        // One criterion the draft keeps and one it drops.
+        yield* store.write(projectId, "thread:agent", {
+          action: "criterion.add",
+          id,
+          text: "Signing in returns to the original path.",
+        });
+        yield* store.write(projectId, "thread:agent", {
+          action: "criterion.add",
+          id,
+          text: "Stale guess.",
+        });
+
+        const attempt = yield* specify({ projectId, id });
+        assert.strictEqual(attempt.status, "running");
+        assert.strictEqual(attempt.source, "child");
+        assert.deepEqual(routed, [{ projectId, taskClass: "mechanical", earlierThreadIds: [] }]);
+        assert.lengthOf(launched, 1);
+        const child = launched[0]!;
+        assert.strictEqual(child.threadId, attempt.childThreadId);
+        assert.strictEqual(child.interactionMode, "plan");
+        assert.deepEqual(child.modelSelection, modelSelection);
+        assert.include(child.initialMessage?.text, rough);
+        assert.include(child.initialMessage?.text, "## Acceptance");
+        assert.deepEqual(yield* spec.latest({ projectId, id }), attempt);
+
+        // Plan mode answers with a proposed plan; the chatter after it is not the spec.
+        const threadId = child.threadId!;
+        const runId = RunId.make("run:spec-1");
+        yield* react([
+          threadCreated(threadId),
+          runUpdated(threadId, runId, "running"),
+          planned(threadId, runId, 1, validSpec),
+          said(threadId, runId, 2, "I proposed the spec above."),
+          runUpdated(threadId, runId, "completed"),
+        ]);
+
+        const issue = yield* store.getIssue({ projectId, id });
+        assert.strictEqual(issue.status, "todo");
+        assert.deepEqual(
+          issue.criteria.map((c) => [c.id, c.text, c.checked]),
+          [
+            ["c3", "An expired cookie lands on sign-in exactly once.", false],
+            ["c1", "Signing in returns to the original path.", false],
+          ],
+        );
+        assert.deepEqual(
+          issue.log.filter((entry) => entry.by === "spec").map((entry) => entry.text),
+          [
+            "removed: Stale guess.",
+            "added: An expired cookie lands on sign-in exactly once.",
+            "todo",
+          ],
+        );
+        assert.strictEqual(issue.description, rough);
+        const decided = yield* spec.latest({ projectId, id });
+        assert.strictEqual(decided?.status, "valid");
+        assert.strictEqual(decided?.text, validSpec);
+        assert.isNull(decided?.reason);
+        assert.isNotNull(decided?.completedAt);
+      }),
+    ).pipe(Effect.provide(layerTest)),
+  );
+
+  it.effect("six Approach items: malformed with the reason, the ticket untouched", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { spec, store, launched, specify, react, file, fileText } = yield* start;
+        const { id } = yield* file("Login loops", rough);
+        const before = yield* fileText(id);
+
+        yield* specify({ projectId, id });
+        const threadId = launched[0]!.threadId!;
+        const runId = RunId.make("run:spec-6");
+        yield* react([
+          threadCreated(threadId),
+          said(threadId, runId, 1, sixSteps),
+          runUpdated(threadId, runId, "completed"),
+        ]);
+
+        const attempt = yield* spec.latest({ projectId, id });
+        assert.strictEqual(attempt?.status, "malformed");
+        assert.strictEqual(attempt?.reason, "Approach has 6 items; the limit is 5.");
+        assert.strictEqual(attempt?.text, sixSteps);
+        assert.strictEqual(yield* fileText(id), before);
+        assert.strictEqual((yield* store.getIssue({ projectId, id })).status, "triage");
+      }),
+    ).pipe(Effect.provide(layerTest)),
+  );
+
+  it.effect("a drafting run that ends without completing leaves a malformed attempt", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { spec, launched, specify, react, file, fileText } = yield* start;
+        const { id } = yield* file("Login loops", rough);
+        const before = yield* fileText(id);
+
+        yield* specify({ projectId, id });
+        const threadId = launched[0]!.threadId!;
+        yield* react([
+          threadCreated(threadId),
+          runUpdated(threadId, RunId.make("run:spec-failed"), "failed"),
+        ]);
+
+        const attempt = yield* spec.latest({ projectId, id });
+        assert.strictEqual(attempt?.status, "malformed");
+        assert.strictEqual(attempt?.reason, "The drafting run ended failed before it sent a spec.");
+        assert.strictEqual(yield* fileText(id), before);
+      }),
+    ).pipe(Effect.provide(layerTest)),
+  );
+
+  it.effect("useExisting validates the description and never starts a thread", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { store, launched, routed, specify, file, fileText } = yield* start;
+
+        const written = yield* file("Login loops", validSpec);
+        // No tier service at all: the description path needs no model.
+        const valid = yield* specify({ projectId, id: written.id, useExisting: true }, "off");
+        assert.strictEqual(valid.status, "valid");
+        assert.strictEqual(valid.source, "existing");
+        assert.isNull(valid.childThreadId);
+        const admitted = yield* store.getIssue({ projectId, id: written.id });
+        assert.strictEqual(admitted.status, "todo");
+        assert.deepEqual(
+          admitted.criteria.map((c) => c.text),
+          [
+            "An expired cookie lands on sign-in exactly once.",
+            "Signing in returns to the original path.",
+          ],
+        );
+        assert.strictEqual(admitted.description, validSpec);
+
+        const roughIssue = yield* file("Something else", rough);
+        const before = yield* fileText(roughIssue.id);
+        const malformed = yield* specify({ projectId, id: roughIssue.id, useExisting: true });
+        assert.strictEqual(malformed.status, "malformed");
+        assert.strictEqual(malformed.reason, "Missing section: Goal.");
+        assert.strictEqual(yield* fileText(roughIssue.id), before);
+
+        assert.lengthOf(launched, 0);
+        assert.lengthOf(routed, 0);
+      }),
+    ).pipe(Effect.provide(layerTest)),
+  );
+
+  it.effect("no model for the cheap tier: refused, nothing launched or stored", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { spec, launched, specify, file } = yield* start;
+        const { id } = yield* file("Login loops", rough);
+
+        for (const routing of ["off", null] as const) {
+          const error = yield* refusal(specify({ projectId, id }, routing));
+          assert.strictEqual(error.code, "invalid");
+          assert.strictEqual(error.message, NO_CHEAP_TIER);
+        }
+        assert.lengthOf(launched, 0);
+        assert.isNull(yield* spec.latest({ projectId, id }));
+      }),
+    ).pipe(Effect.provide(layerTest)),
+  );
+
+  it.effect("an admitted ticket is refused on both paths", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { store, launched, specify } = yield* start;
+        const { id } = yield* store.write(projectId, "user", {
+          action: "issue.create",
+          title: "Released work",
+          description: validSpec,
+        });
+        for (const useExisting of [false, true]) {
+          const error = yield* refusal(specify({ projectId, id, useExisting }));
+          assert.strictEqual(error.message, "This ticket is already admitted.");
+        }
+        assert.lengthOf(launched, 0);
+      }),
+    ).pipe(Effect.provide(layerTest)),
+  );
+
+  it.effect("the emergency stop holds back the drafting thread, not useExisting", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { gate, launched, specify, file } = yield* start;
+        const { id } = yield* file("Login loops", validSpec);
+        yield* gate.set({ setBy: "user" });
+
+        const error = yield* refusal(specify({ projectId, id }));
+        assert.strictEqual(error.code, "gated");
+        assert.lengthOf(launched, 0);
+        assert.strictEqual((yield* specify({ projectId, id, useExisting: true })).status, "valid");
+      }),
+    ).pipe(Effect.provide(layerTest)),
+  );
+});

@@ -8,6 +8,8 @@ import * as Stream from "effect/Stream";
 import * as ThreadManagementService from "../../orchestration-v2/ThreadManagementService.ts";
 import { forkParked } from "../../serverActivation.ts";
 import * as KanbanStore from "./KanbanStore.ts";
+import * as SpecReactor from "./spec/SpecReactor.ts";
+import * as SpecService from "./spec/SpecService.ts";
 import * as StopGate from "./StopGate.ts";
 import * as WriterSweep from "./WriterSweep.ts";
 
@@ -68,7 +70,8 @@ const start = Effect.gen(function* () {
   );
 });
 
-/** The store and the stop gate plus the automation, for the plugin's layer. */
-export const layer = Layer.effectDiscard(start).pipe(
+/** The store, the stop gate and spec drafting plus the automation, for the plugin's layer. */
+export const layer = Layer.merge(Layer.effectDiscard(start), SpecReactor.layer).pipe(
+  Layer.provideMerge(SpecService.layer),
   Layer.provideMerge(Layer.merge(KanbanStore.layer, StopGate.layer)),
 );

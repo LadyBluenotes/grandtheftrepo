@@ -1,7 +1,13 @@
 import * as Rpc from "effect/rpc/Rpc";
 import * as Schema from "effect/Schema";
 import { AuthOrchestrationReadScope, EnvironmentAuthorizationError } from "../auth.ts";
-import { IsoDateTime, ProjectId, ThreadId, TrimmedNonEmptyString } from "../baseSchemas.ts";
+import {
+  IsoDateTime,
+  PositiveInt,
+  ProjectId,
+  ThreadId,
+  TrimmedNonEmptyString,
+} from "../baseSchemas.ts";
 import { definePluginMethods } from "./method.ts";
 
 /** Stream RPCs keep their own tag; every other kanban method is in `KANBAN_METHODS`. */
@@ -31,7 +37,7 @@ export const KANBAN_VERIFICATIONS = KanbanVerification.literals;
 export const KanbanStance = Schema.Literals(["for", "against"]);
 export type KanbanStance = typeof KanbanStance.Type;
 
-/** `user`, `system` (automation), or `thread:<threadId>`. */
+/** `user`, `system` (automation), `spec` (a validated spec admitting a card), or `thread:<threadId>`. */
 export const KanbanActor = TrimmedNonEmptyString;
 export type KanbanActor = typeof KanbanActor.Type;
 
@@ -244,6 +250,43 @@ export type KanbanStop = typeof KanbanStop.Type;
 export const KanbanStopSetInput = Schema.Struct({ reason: Schema.optional(Schema.String) });
 export type KanbanStopSetInput = typeof KanbanStopSetInput.Type;
 
+/** Where a spec attempt's text came from: a drafting thread, or the issue's own description. */
+export const KanbanSpecSource = Schema.Literals(["child", "existing"]);
+export type KanbanSpecSource = typeof KanbanSpecSource.Type;
+
+export const KanbanSpecStatus = Schema.Literals(["running", "valid", "malformed"]);
+export type KanbanSpecStatus = typeof KanbanSpecStatus.Type;
+
+/**
+ * One try at turning an issue into a checkable spec: `## Goal`, `## Approach`, `## Acceptance`
+ * and an optional `## Out of scope`. A valid one admitted the issue with its Acceptance items as
+ * criteria; a malformed one left the issue as it was. The description is never edited.
+ */
+export const KanbanSpecAttempt = Schema.Struct({
+  id: PositiveInt,
+  projectId: ProjectId,
+  issueId: KanbanSlug,
+  source: KanbanSpecSource,
+  /** The drafting thread, for `child`. */
+  childThreadId: Schema.NullOr(ThreadId),
+  status: KanbanSpecStatus,
+  /** The text the validator checked; null while the child is drafting. */
+  text: Schema.NullOr(Schema.String),
+  /** Why the text was refused, when `malformed`. */
+  reason: Schema.NullOr(Schema.String),
+  createdAt: IsoDateTime,
+  completedAt: Schema.NullOr(IsoDateTime),
+});
+export type KanbanSpecAttempt = typeof KanbanSpecAttempt.Type;
+
+export const KanbanSpecifyInput = Schema.Struct({
+  projectId: ProjectId,
+  id: KanbanSlug,
+  /** Validate the description as written: no drafting thread, no model. */
+  useExisting: Schema.optional(Schema.Boolean),
+});
+export type KanbanSpecifyInput = typeof KanbanSpecifyInput.Type;
+
 export const KANBAN_METHODS = definePluginMethods({
   getIssue: {
     method: "kanban.getIssue",
@@ -294,6 +337,25 @@ export const KANBAN_METHODS = definePluginMethods({
     gateway: "read",
     input: Schema.Struct({}),
     output: Schema.NullOr(KanbanStop),
+    error: KanbanError,
+  },
+  /**
+   * Starts one attempt at a spec for a Triage or Inbox issue and returns it: `running` while a
+   * drafting thread works, or already decided with `useExisting`.
+   */
+  ticketSpecify: {
+    method: "kanban.ticket.specify",
+    gateway: "operate",
+    input: KanbanSpecifyInput,
+    output: KanbanSpecAttempt,
+    error: KanbanError,
+  },
+  /** The issue's latest spec attempt, or null. */
+  specGet: {
+    method: "kanban.spec.get",
+    gateway: "read",
+    input: KanbanGetIssueInput,
+    output: Schema.NullOr(KanbanSpecAttempt),
     error: KanbanError,
   },
 });
