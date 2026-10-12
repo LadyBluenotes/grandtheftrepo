@@ -47,6 +47,22 @@ export const kanbanSetDirectory = createPluginRpcCommand(connectionAtomRuntime, 
   method: KANBAN_METHODS.setDirectory,
 });
 
+/**
+ * The emergency stop: null while it is clear. Nothing pushes a change, so a stop set while the
+ * board is already open shows on the next visit (mount re-reads once the answer is 5 seconds
+ * old) and a clear re-reads at once.
+ */
+export const kanbanStop = createPluginRpcQueryAtomFamily(connectionAtomRuntime, {
+  label: "environment-data:kanban:stop",
+  method: KANBAN_METHODS.stopGet,
+  staleTimeMs: 5_000,
+});
+
+export const kanbanStopClear = createPluginRpcCommand(connectionAtomRuntime, {
+  label: "kanban:stop-clear",
+  method: KANBAN_METHODS.stopClear,
+});
+
 const pluginStatuses = createPluginRpcQueryAtomFamily(connectionAtomRuntime, {
   label: "environment-data:plugins",
   method: HOST_METHODS.list,
