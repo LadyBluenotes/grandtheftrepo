@@ -38,3 +38,19 @@ it("credits a recovery to the run just before it, not to an earlier failure", ()
   );
   assert.deepEqual([result.value, result.sampleSize], [1 / 2, 2]);
 });
+
+it("finds each failed run's successor within its own thread, whatever order the rows come in", () => {
+  const result = recoveryEfficiency(
+    input({
+      runs: [
+        run({ run_id: "b:2", thread_id: "thread:b", ordinal: 2, status: "failed" }),
+        run({ run_id: "a:2", thread_id: "thread:a", ordinal: 2 }),
+        run({ run_id: "b:3", thread_id: "thread:b", ordinal: 3 }),
+        run({ run_id: "a:1", thread_id: "thread:a", ordinal: 1, status: "failed" }),
+        // Thread b's last run failed; thread a's later completed run is no retry of it.
+        run({ run_id: "b:4", thread_id: "thread:b", ordinal: 4, status: "failed" }),
+      ],
+    }),
+  );
+  assert.deepEqual([result.value, result.sampleSize], [2 / 3, 3]);
+});

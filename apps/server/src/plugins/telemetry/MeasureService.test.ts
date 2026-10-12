@@ -103,3 +103,42 @@ it.effect("measures wait for the reactor, and answer unavailable while it is sti
     }),
   ).pipe(Effect.provide(layerTest)),
 );
+
+it.effect("any failed replay makes every measure unavailable, until the failure is cleared", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const { sql } = yield* PluginDatabase.open({
+        id: "telemetry",
+        filename: ":memory:",
+        migrations,
+      });
+      const reactor = yield* PluginReactor.start({
+        plugin: "telemetry",
+        from: "start",
+        handlers: Reactor.handlers,
+      }).pipe(Effect.provideService(SqlClient.SqlClient, sql));
+      const measures = yield* MeasureService.make(reactor.drain).pipe(
+        Effect.provideService(SqlClient.SqlClient, sql),
+      );
+      yield* (yield* EventSink.EventSinkV2).write({ events });
+
+      // The reactor's own shape, as it keeps a failure it has given up on. The reactor retries
+      // only rows under five attempts, so its retry at start cannot clear this one mid-test.
+      yield* sql`INSERT INTO host_reactor_failure (sequence, type, attempts, last_error, failed_at)
+        VALUES (1, 'thread.created', 5, 'database is locked', '2026-10-02T12:00:00.000Z')`;
+      const failed = yield* measures(window);
+      assert.strictEqual(failed.length, 14);
+      assert.deepEqual(
+        [...new Set(failed.map((measure) => `${measure.state}: ${measure.missingReason}`))],
+        [
+          "unavailable: 1 event(s) failed to replay into telemetry; retry them before reading measures.",
+        ],
+      );
+
+      yield* sql`DELETE FROM host_reactor_failure`;
+      const cleared = yield* measures(window);
+      const time = cleared.find((measure) => measure.measure === "time_to_accepted_outcome");
+      assert.deepEqual([time?.state, time?.value, time?.sampleSize], ["ok", 7200, 1]);
+    }),
+  ).pipe(Effect.provide(layerTest)),
+);

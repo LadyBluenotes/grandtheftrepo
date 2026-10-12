@@ -1,4 +1,4 @@
-import { type Measure, ok, type Spec, unavailable, windowRuns } from "./input.ts";
+import { type Measure, ok, type RunRow, type Spec, unavailable, windowRuns } from "./input.ts";
 
 const spec = {
   measure: "recovery_efficiency",
@@ -6,6 +6,25 @@ const spec = {
   direction: "higher_is_better",
   provenance: ["run.id", "run.threadId", "run.ordinal", "run.status", "run.startedAt"],
 } as const satisfies Spec;
+
+/** Each run's successor in its thread, by run id; a thread's last run has none. */
+const successors = (runs: ReadonlyArray<RunRow>) => {
+  const byThread = new Map<string, RunRow[]>();
+  for (const run of runs) {
+    const group = byThread.get(run.thread_id);
+    if (group === undefined) byThread.set(run.thread_id, [run]);
+    else group.push(run);
+  }
+  const next = new Map<string, RunRow>();
+  for (const group of byThread.values()) {
+    group.sort((a, b) => a.ordinal - b.ordinal);
+    for (const [index, run] of group.entries()) {
+      const following = group[index + 1];
+      if (following !== undefined) next.set(run.run_id, following);
+    }
+  }
+  return next;
+};
 
 /**
  * Failed runs that started in the window whose thread's next run completed, over those failed
@@ -18,11 +37,7 @@ const spec = {
 export const recoveryEfficiency: Measure = (input) => {
   const failed = windowRuns(input).filter((run) => run.status === "failed");
   if (failed.length === 0) return unavailable(spec, "No run in the window failed.");
-  const recovered = failed.filter((run) => {
-    const [next] = input.runs
-      .filter((later) => later.thread_id === run.thread_id && later.ordinal > run.ordinal)
-      .toSorted((a, b) => a.ordinal - b.ordinal);
-    return next?.status === "completed";
-  }).length;
+  const next = successors(input.runs);
+  const recovered = failed.filter((run) => next.get(run.run_id)?.status === "completed").length;
   return ok(spec, recovered / failed.length, failed.length);
 };

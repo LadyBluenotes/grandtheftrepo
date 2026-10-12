@@ -11,5 +11,5 @@ const spec = {
 export const scopeStability: Measure = () =>
   unavailable(
     spec,
-    "Admission and acceptance criteria come from the tickets plugin (#22), which is not built yet.",
+    "The kanban plugin (#22) does not record admission or acceptance-criteria amendments yet; #28 adds that record.",
   );

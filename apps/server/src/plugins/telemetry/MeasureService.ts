@@ -44,7 +44,10 @@ const failWith =
  * `caughtUp` is the reactor's `drain`. The tables trail the event log, by all of it while the
  * reactor replays from the first event (as after migration 2), and a value read from half-filled
  * tables is wrong rather than missing; so a request waits for the reactor first, and when it is
- * not caught up within `CATCH_UP_WAIT` every measure answers `unavailable`.
+ * not caught up within `CATCH_UP_WAIT` every measure answers `unavailable`. The reactor also
+ * advances past an event whose handler failed, leaving a row in `host_reactor_failure`; a table
+ * missing that event reads as complete, so any such row makes every measure `unavailable` too,
+ * until a retry (`retryFailed`, which the reactor runs at start) clears it.
  */
 export const make = Effect.fn("MeasureService.make")(function* (
   caughtUp: Effect.Effect<void, EventSink.EventSinkV2Error>,
@@ -79,6 +82,15 @@ export const make = Effect.fn("MeasureService.make")(function* (
       );
       if (Option.isNone(inTime)) {
         return unavailableMeasures("Telemetry is still replaying the event log.");
+      }
+      const failures = yield* sql<{
+        readonly failed: number;
+      }>`SELECT COUNT(*) AS failed FROM host_reactor_failure`;
+      const failed = failures[0]?.failed ?? 0;
+      if (failed > 0) {
+        return unavailableMeasures(
+          `${failed} event(s) failed to replay into telemetry; retry them before reading measures.`,
+        );
       }
       const { projectId } = input;
       const threads = yield* sql<ThreadRow>`
