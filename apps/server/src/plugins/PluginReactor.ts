@@ -160,10 +160,16 @@ export const start = Effect.fn("PluginReactor.start")(function* <E = never>(opti
         yield* sql`DELETE FROM host_reactor_failure WHERE sequence = ${row.sequence}`;
         continue;
       }
-      const outcome = yield* sql.withTransaction(handler(stored)).pipe(Effect.exit);
-      if (Exit.isSuccess(outcome)) {
-        yield* sql`DELETE FROM host_reactor_failure WHERE sequence = ${row.sequence}`;
-        continue;
+      const outcome = yield* sql
+        .withTransaction(
+          handler(stored).pipe(
+            Effect.andThen(
+              sql`DELETE FROM host_reactor_failure WHERE sequence = ${row.sequence}`,
+            ),
+          ),
+        )
+        .pipe(Effect.exit);
+      if (Exit.isSuccess(outcome)) continue;
       }
       if (Cause.hasInterruptsOnly(outcome.cause)) return yield* Effect.failCause(outcome.cause);
       const attempts = row.attempts + 1;
