@@ -143,8 +143,5 @@ describe("parseCopilotLine", () => {
     expect(
       parseCopilotLine(checkpoint("2026-10-10T10:00:00.000Z", [{ modelId: "gpt-5.4" }]), state),
     ).toEqual([]);
-    expect(copilotUsageFormat.mightCarryUsage('{"type":"session.usage_checkpoint"}')).toBe(true);
-    expect(copilotUsageFormat.mightCarryUsage(sessionStart)).toBe(true);
-    expect(copilotUsageFormat.mightCarryUsage('{"type":"assistant.usage"}')).toBe(false);
   });
 });

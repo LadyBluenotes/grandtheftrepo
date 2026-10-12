@@ -138,8 +138,7 @@ export const copilotUsageFormat: TranscriptUsageFormat<CopilotScanState> = {
     timestamp: true,
     data: { sessionId: true, providerModelMetrics: true },
   },
-  mightCarryUsage: (line) =>
-    line.includes('"session.usage_checkpoint"') || line.includes('"session.start"'),
+  usageMarkers: ['"session.usage_checkpoint"', '"session.start"'],
   parseLine: parseCopilotLine,
   parseProjected: parseCopilotRecord,
   state: { initial: initialCopilotScanState, schema: CopilotScanState },
