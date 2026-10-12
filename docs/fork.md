@@ -118,6 +118,16 @@ them half-evaluated. The host hands `toolkitRegistration` to `ServerPlugin.mcp` 
   agent lacks or holds under older rules, but only while no run is active on the project (any
   run, for `*`). Server: `apps/server/src/plugins/policy/`. Contracts:
   `packages/contracts/src/plugins/policy.ts`. No screen.
+- **review**: a reviewing agent's typed verdict on one checkpoint of another thread: `approve`, or
+  `changes_requested` with one of six failure modes (`defect`, `incomplete`, `scope_drift`,
+  `missing_verification`, `convention`, `unclear_spec`), so nothing reads reviewer prose to learn
+  what went wrong. A `changes_requested` verdict records a `review_verdict` correction in the
+  learning plugin, which is why the plugin depends on it. The two live in separate databases, so the
+  correction is recorded first and the verdict row second; the verdict id is derived from the
+  reviewer thread and checkpoint, so a retry finds the same correction. Agents give a verdict with
+  the `review_verdict` MCP tool, from a thread only, and read them with `review_verdicts`;
+  `review.verdicts` reads them over the gateway. Server: `apps/server/src/plugins/review/`.
+  Contracts: `packages/contracts/src/plugins/review.ts`. No screen yet.
 - **caveman**: whether each provider instance's model traffic goes through caveman's loopback
   proxy, `routed`, `direct`, `other` or `unsupported`, read from the Claude `settings.json` and
   Codex `config.toml` the instance starts with, and a switch that runs caveman's own `enable` and

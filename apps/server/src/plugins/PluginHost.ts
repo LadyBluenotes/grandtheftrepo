@@ -31,6 +31,7 @@ import * as CavemanHandlers from "./caveman/handlers.ts";
 import * as KanbanHandlers from "./kanban/handlers.ts";
 import * as LearningHandlers from "./learning/handlers.ts";
 import * as PolicyHandlers from "./policy/handlers.ts";
+import * as ReviewHandlers from "./review/handlers.ts";
 import * as RoutingHandlers from "./routing/handlers.ts";
 import * as SupervisorToolkit from "./supervisorToolkit.ts";
 import * as TelemetryHandlers from "./telemetry/handlers.ts";
@@ -274,6 +275,7 @@ const table: PluginRpc.DispatchTable<PluginHost | PluginSupervisor.PluginSupervi
   ...KanbanHandlers.table,
   ...LearningHandlers.table,
   ...PolicyHandlers.table,
+  ...ReviewHandlers.table,
   ...RoutingHandlers.table,
   ...TelemetryHandlers.table,
 };
