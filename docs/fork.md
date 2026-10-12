@@ -47,6 +47,7 @@ them is resolved by keeping the line.
 | `apps/server/src/auth/RpcAuthorization.ts`                   | `...PLUGIN_RPC_SCOPES,` inside `RPC_REQUIRED_SCOPES`, plus its import                                                                                                  |
 | `apps/server/src/mcp/toolkits/worktree/registration.test.ts` | the `PluginHost` and `PluginSupervisor` mocks in the service list, plus their imports                                                                                  |
 | `packages/client-runtime/src/rpc/client.ts`                  | `\| PluginSubscriptionRpcTag` in `EnvironmentSubscriptionRpcTag`, plus its import                                                                                      |
+| `packages/client-runtime/package.json`                       | the `./plugins/rpc` entry at the end of `exports`                                                                                                                      |
 | `apps/web/src/routes/_chat.board.tsx`                        | the kanban board's own route; a new plugin screen uses `/plugins/<id>` through the registry instead                                                                    |
 | `apps/web/src/components/sidebar/mainAppLocation.ts`         | `/board` and the `/plugins` paths in `isSidebarUtilityPage`                                                                                                            |
 | `apps/web/src/components/sidebar/SidebarChrome.tsx`          | the board's `SidebarUtilityItem`, gated on `kanbanSupportedAtom`, and `<PluginSidebarEntries />` after the Usage entry, plus imports; `SidebarUtilityItem` is exported |
@@ -56,11 +57,19 @@ them is resolved by keeping the line.
 
 A plugin's layer is merged into the server only when the plugin is active, so the server's layer
 chain never types its services as present. Anything outside the plugin's own layer that needs one,
-such as a WebSocket handler (the RPC group requires every handler whether or not the plugin runs)
-or an MCP handler layer, reads it with `Effect.serviceOption` and fails with the plugin's own
-"inactive" error when it is absent. Declaring it as a `Tool` dependency or yielding the tag
-directly makes the whole server require it and fails to typecheck. See
+such as a plugin method's handler (the host dispatches to it whether or not the plugin runs) or an
+MCP handler layer, reads it with `Effect.serviceOption` and fails with the plugin's own "inactive"
+error when it is absent. Declaring it as a `Tool` dependency or yielding the tag directly makes the
+whole server require it and fails to typecheck. See
 [`plugins/kanban/handlers.ts`](../apps/server/src/plugins/kanban/handlers.ts).
+
+Plugin methods go through three gateway RPCs, `plugins.read`, `plugins.operate` and
+`plugins.settingsWrite`, one per scope, because the WebSocket RPC group sits at TypeScript's
+instantiation limit: a couple more tags and `ServerWsRpcGroup.toLayer` fails with TS2589. A plugin
+adds a method only in its own contract file (`definePluginMethods`) and its dispatch table
+(`PluginRpc.defineHandlers`); clients call it with `createPluginRpcCommand` or
+`createPluginRpcQueryAtomFamily` from `@t3tools/client-runtime/plugins/rpc`. Only stream RPCs keep
+a tag of their own.
 
 A plugin never imports `McpHttpServer`: that module imports the host, and the cycle leaves one of
 them half-evaluated. The host hands `toolkitRegistration` to `ServerPlugin.mcp` instead.

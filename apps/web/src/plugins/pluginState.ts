@@ -1,21 +1,21 @@
 import {
-  createEnvironmentRpcCommand,
-  createEnvironmentRpcQueryAtomFamily,
-} from "@t3tools/client-runtime/state/runtime";
-import { PLUGIN_WS_METHODS } from "@t3tools/contracts";
+  createPluginRpcCommand,
+  createPluginRpcQueryAtomFamily,
+} from "@t3tools/client-runtime/plugins/rpc";
+import { HOST_METHODS } from "@t3tools/contracts";
 
 import { connectionAtomRuntime } from "~/connection/runtime";
 import { usePrimaryEnvironmentId } from "~/state/environments";
 import { useEnvironmentQuery } from "~/state/query";
 
-const pluginStatuses = createEnvironmentRpcQueryAtomFamily(connectionAtomRuntime, {
+const pluginStatuses = createPluginRpcQueryAtomFamily(connectionAtomRuntime, {
   label: "environment-data:plugins:host",
-  tag: PLUGIN_WS_METHODS.pluginsList,
+  method: HOST_METHODS.list,
 });
 
-export const pluginSetEnabled = createEnvironmentRpcCommand(connectionAtomRuntime, {
+export const pluginSetEnabled = createPluginRpcCommand(connectionAtomRuntime, {
   label: "plugins:set-enabled",
-  tag: PLUGIN_WS_METHODS.pluginsSetEnabled,
+  method: HOST_METHODS.setEnabled,
 });
 
 /**
