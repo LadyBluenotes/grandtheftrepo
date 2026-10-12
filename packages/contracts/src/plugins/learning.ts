@@ -1,7 +1,7 @@
 import * as Schema from "effect/Schema";
 import { EventId, IsoDateTime, ProjectId, ThreadId } from "../baseSchemas.ts";
 
-export const LEARNING_WS_METHODS = {
+const LEARNING_WS_METHODS = {
   corrections: "learning.corrections",
   correction: "learning.correction",
 } as const;
