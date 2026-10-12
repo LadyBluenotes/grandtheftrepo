@@ -75,7 +75,6 @@ export type KanbanCriterion = typeof KanbanCriterion.Type;
 /** Why a Done card came back: the work was wrong, or the ask changed. */
 export const KanbanReopenReason = Schema.Literals(["defect", "scope_change"]);
 export type KanbanReopenReason = typeof KanbanReopenReason.Type;
-export const KANBAN_REOPEN_REASONS = KanbanReopenReason.literals;
 
 export const KanbanReopen = Schema.Struct({
   reason: KanbanReopenReason,
