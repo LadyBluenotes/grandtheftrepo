@@ -16,7 +16,7 @@ import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as ServerConfig from "../config.ts";
-import { layerEventSink } from "../orchestration-v2/runtimeLayer.ts";
+import * as RuntimeLayer from "../orchestration-v2/runtimeLayer.ts";
 import * as PluginDatabase from "./PluginDatabase.ts";
 import * as PluginSupervisor from "./PluginSupervisor.ts";
 import type { ServerPlugin } from "./Plugin.ts";
@@ -24,6 +24,7 @@ import { type PluginMcpRequirements, type PluginRequirements, registry } from ".
 import type { toolkitRegistration } from "../mcp/McpHttpServer.ts";
 import * as KanbanHandlers from "./kanban/handlers.ts";
 import * as SupervisorToolkit from "./supervisorToolkit.ts";
+import * as TelemetryHandlers from "./telemetry/handlers.ts";
 
 /** `plugins.json` under the state directory: plugin id to saved choice. Absent means enabled. */
 const EnabledState = Schema.Record(Schema.String, Schema.Boolean);
@@ -212,7 +213,7 @@ const mergeActive = <R>(
           ),
         ];
       })
-      .reduce<Layer.Layer<never, never, R>>(
+      .reduce<Layer.Layer<never, never, Exclude<R, SqlClient.SqlClient>>>(
         (merged, next) => Layer.merge(merged, next),
         Layer.empty,
       );
@@ -225,8 +226,8 @@ const mergeActive = <R>(
  * provided here, and layer memoization makes it the one instance.
  */
 export const layerAll = Layer.unwrap(mergeActive((plugin) => plugin.layer)).pipe(
-  Layer.provide(layerEventSink),
   Layer.provideMerge(PluginSupervisor.layer(registry.map((plugin) => plugin.id))),
+  Layer.provide(RuntimeLayer.layerEventSink),
   Layer.provideMerge(layer),
 );
 
@@ -240,6 +241,7 @@ export const layerMcp = (register: typeof toolkitRegistration) =>
 /** Spread into the WebSocket handlers; the host services come from the server's layer chain. */
 export const handlers = {
   ...KanbanHandlers.handlers,
+  ...TelemetryHandlers.handlers,
   // The host's own file answered at boot, so a read failing afterwards is a defect, not a reply.
   [SUPERVISOR_WS_METHODS.status]: () =>
     Effect.flatMap(PluginSupervisor.PluginSupervisor, (supervisor) => supervisor.status).pipe(

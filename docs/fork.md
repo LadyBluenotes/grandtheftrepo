@@ -71,6 +71,10 @@ them half-evaluated. The host hands `toolkitRegistration` to `ServerPlugin.mcp` 
   `<T3 home>/wiki/<project-slug>/`; the folder is changeable per project from the board.
   Server: `apps/server/src/plugins/kanban/`. Contracts: `packages/contracts/src/plugins/kanban.ts`.
   Web: `apps/web/src/plugins/kanban/`. User guide: [Kanban board](./user/kanban.md).
+- **telemetry**: token usage per provider turn, from `provider-turn.updated`. The template plugin:
+  it uses every host seam once (database, reactor, sweep, RPC, MCP tool, settings panel) and is
+  the one to copy. Server: `apps/server/src/plugins/telemetry/`. Contracts:
+  `packages/contracts/src/plugins/telemetry.ts`. Web: `apps/web/src/plugins/telemetry/`.
 - **learning**: a record of corrections, visible instances of work going wrong, taken from
   events the server already emits: failed or interrupted provider turns, pull request wakes
   while changes are requested, and threads reopened after settlement. Agents read and add

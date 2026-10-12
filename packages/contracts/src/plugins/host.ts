@@ -13,10 +13,12 @@ import {
   type KANBAN_WS_METHODS,
 } from "./kanban.ts";
 import { SUPERVISOR_RPC_SCOPES, SUPERVISOR_RPC_SUBSYSTEMS, SUPERVISOR_RPCS } from "./supervisor.ts";
+import { TELEMETRY_RPC_SCOPES, TELEMETRY_RPC_SUBSYSTEMS, TELEMETRY_RPCS } from "./telemetry.ts";
 
 export * from "./kanban.ts";
 export * from "./learning.ts";
 export * from "./supervisor.ts";
+export * from "./telemetry.ts";
 
 export const PLUGIN_WS_METHODS = {
   pluginsList: "plugins.list",
@@ -58,6 +60,7 @@ export const PLUGIN_RPCS = [
   PluginsSetEnabledRpc,
   ...SUPERVISOR_RPCS,
   ...KANBAN_RPCS,
+  ...TELEMETRY_RPCS,
 ] as const;
 
 /** Writes the client must hold a grant for; spread into `CLIENT_GUARDED_RPC_SCOPES`. */
@@ -71,6 +74,7 @@ export const PLUGIN_RPC_SCOPES = {
   [PLUGIN_WS_METHODS.pluginsList]: AuthOrchestrationReadScope,
   ...SUPERVISOR_RPC_SCOPES,
   ...KANBAN_RPC_SCOPES,
+  ...TELEMETRY_RPC_SCOPES,
 } as const;
 
 /** Stream RPCs plugins add; the client's subscription tag union includes it. */
@@ -82,4 +86,5 @@ export const PLUGIN_RPC_SUBSYSTEMS = {
   [PLUGIN_WS_METHODS.pluginsSetEnabled]: "plugins",
   ...SUPERVISOR_RPC_SUBSYSTEMS,
   ...KANBAN_RPC_SUBSYSTEMS,
+  ...TELEMETRY_RPC_SUBSYSTEMS,
 } as const;
