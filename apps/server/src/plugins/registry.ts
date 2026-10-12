@@ -1,8 +1,9 @@
 import type { ServerPlugin } from "./Plugin.ts";
 import * as Kanban from "./kanban/index.ts";
+import * as Routing from "./routing/index.ts";
 import * as Telemetry from "./telemetry/index.ts";
 
-const plugins = [Kanban.plugin, Telemetry.plugin] as const satisfies ReadonlyArray<
+const plugins = [Kanban.plugin, Telemetry.plugin, Routing.plugin] as const satisfies ReadonlyArray<
   ServerPlugin<unknown>
 >;
 
