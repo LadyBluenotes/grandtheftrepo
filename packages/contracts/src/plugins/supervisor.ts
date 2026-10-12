@@ -1,11 +1,6 @@
-import * as Rpc from "effect/rpc/Rpc";
 import * as Schema from "effect/Schema";
-import { AuthOrchestrationReadScope, EnvironmentAuthorizationError } from "../auth.ts";
 import { IsoDateTime } from "../baseSchemas.ts";
-
-export const SUPERVISOR_WS_METHODS = {
-  status: "supervisor.status",
-} as const;
+import { definePluginMethods } from "./method.ts";
 
 /** One sweep's outcome within a tick. A failure or timeout keeps the counts at zero. */
 export const SupervisorSweepSummary = Schema.Struct({
@@ -39,19 +34,11 @@ export const SupervisorStatus = Schema.Struct({
 });
 export type SupervisorStatus = typeof SupervisorStatus.Type;
 
-export const SUPERVISOR_RPCS = [
-  Rpc.make(SUPERVISOR_WS_METHODS.status, {
-    payload: Schema.Struct({}),
-    success: SupervisorStatus,
-    error: EnvironmentAuthorizationError,
-  }),
-] as const;
-
-/** Reads: server-side authorization only. */
-export const SUPERVISOR_RPC_SCOPES = {
-  [SUPERVISOR_WS_METHODS.status]: AuthOrchestrationReadScope,
-} as const;
-
-export const SUPERVISOR_RPC_SUBSYSTEMS = {
-  [SUPERVISOR_WS_METHODS.status]: "plugins",
-} as const;
+export const SUPERVISOR_METHODS = definePluginMethods({
+  status: {
+    method: "supervisor.status",
+    gateway: "read",
+    input: Schema.Struct({}),
+    output: SupervisorStatus,
+  },
+});

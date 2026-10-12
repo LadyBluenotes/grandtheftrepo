@@ -3,6 +3,7 @@ import type * as Layer from "effect/Layer";
 import type * as SqlClient from "effect/sql/SqlClient";
 import type * as SqlError from "effect/sql/SqlError";
 import type { toolkitRegistration } from "../mcp/McpHttpServer.ts";
+import type * as EventSink from "../orchestration-v2/EventSink.ts";
 
 /**
  * One numbered change to a plugin's schema, in the shape of the core `migrationEntries`.
@@ -17,9 +18,11 @@ export type PluginMigration = readonly [
 
 /**
  * What a plugin contributes to the server. The host decides whether it runs
- * and wires it in; a plugin never edits an upstream file.
+ * and wires it in; a plugin never edits an upstream file. `layer` builds in
+ * the server's runtime chain and `mcp` in the `/mcp` server's layer, which has
+ * fewer services, so each names its own requirements.
  */
-export interface ServerPlugin<R = never> {
+export interface ServerPlugin<R = never, RMcp = R> {
   readonly id: string;
   /** Ids of plugins that must run for this one to run. */
   readonly dependsOn: ReadonlyArray<string>;
@@ -30,14 +33,15 @@ export interface ServerPlugin<R = never> {
   readonly migrations?: ReadonlyArray<PluginMigration>;
   /**
    * Services, reactors and sweeps. Built only when the plugin is active, with
-   * `SqlClient.SqlClient` bound to the plugin's own database, never the core one.
+   * `SqlClient.SqlClient` bound to the plugin's own database, never the core one, and
+   * `EventSinkV2` the orchestrator's committed events, for `PluginReactor.start`.
    */
-  readonly layer: Layer.Layer<never, never, R | SqlClient.SqlClient>;
+  readonly layer: Layer.Layer<never, never, R | SqlClient.SqlClient | EventSink.EventSinkV2>;
   /**
    * MCP tools. `register` is `McpHttpServer.toolkitRegistration`, handed in because that module
    * imports the host: importing it from a plugin would make a cycle.
    */
   readonly mcp?: (
     register: typeof toolkitRegistration,
-  ) => Layer.Layer<never, never, R | SqlClient.SqlClient>;
+  ) => Layer.Layer<never, never, RMcp | SqlClient.SqlClient>;
 }

@@ -12,6 +12,7 @@ import {
   AuthSourceControlWriteScope,
   ThreadId,
   EnvironmentId,
+  PLUGIN_GATEWAY_WS_METHODS,
   ScheduledTaskId,
   WS_METHODS,
   type AuthSessionState,
@@ -102,6 +103,36 @@ describe("command permissions", () => {
         );
         expect(registry.get(check.permissionAtom(env))).toBe(true);
         yield* check.authorize(registry, env);
+      }),
+    ),
+  );
+
+  it.effect("guards the plugin operate and settings gateways, and leaves reads to the server", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const registry = yield* setup;
+        const operate = createCommandPermissions(runtime, PLUGIN_GATEWAY_WS_METHODS.operate);
+        const settings = createCommandPermissions(runtime, PLUGIN_GATEWAY_WS_METHODS.settingsWrite);
+        const read = createCommandPermissions(runtime, PLUGIN_GATEWAY_WS_METHODS.read);
+        registry.set(sessions(env), AsyncResult.success(grant(true)));
+        expect(registry.get(operate.permissionAtom(env))).toBe(true);
+        yield* operate.authorize(registry, env);
+        expect(registry.get(settings.permissionAtom(env))).toBe(false);
+        expect(
+          (yield* settings.authorize(registry, env).pipe(Effect.flip)).requiredPermission,
+        ).toBe(AuthSettingsWriteScope);
+        registry.set(
+          sessions(env),
+          AsyncResult.success({
+            ...grant(false),
+            scopes: [AuthSettingsWriteScope],
+            permissions: [AuthSettingsWriteScope],
+          }),
+        );
+        expect(registry.get(settings.permissionAtom(env))).toBe(true);
+        expect(registry.get(operate.permissionAtom(env))).toBe(false);
+        expect(read.requiredScopes()).toEqual([]);
+        expect(registry.get(read.permissionAtom(env))).toBe(true);
       }),
     ),
   );
