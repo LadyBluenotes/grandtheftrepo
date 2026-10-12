@@ -60,6 +60,12 @@ const verdictIdOf = (reviewerThreadId: ThreadId, checkpointId: CheckpointId) =>
 
 const invalid = (message: string) => new ReviewVerdictError({ code: "invalid", message });
 
+const alreadyReviewed = () =>
+  new ReviewVerdictError({
+    code: "conflict",
+    message: "This thread already reviewed this checkpoint",
+  });
+
 export class VerdictStore extends Context.Service<
   VerdictStore,
   {
@@ -68,7 +74,8 @@ export class VerdictStore extends Context.Service<
      * verdict first records its correction (source key `verdict:<id>`, so a repeat finds the same
      * one), then the row that points at it; the correction lives in the learning plugin's database,
      * so the two cannot share a transaction. The same payload again answers with the stored result
-     * and adds nothing; a different one is refused.
+     * and adds nothing; a different one is refused. So is a call that finds a correction left by an
+     * earlier call that stopped before its row, unless it declares that correction's mode.
      */
     readonly record: (
       reviewerThreadId: ThreadId,
@@ -154,32 +161,38 @@ const make = Effect.gen(function* () {
         row.failure_mode === failureMode &&
         row.summary === input.summary
           ? Effect.succeed({ verdictId: row.id, correctionId: row.correction_id })
-          : Effect.fail(
-              new ReviewVerdictError({
-                code: "conflict",
-                message: "This thread already reviewed this checkpoint",
-              }),
-            );
+          : Effect.fail(alreadyReviewed());
 
       const existing = yield* find(id);
       if (existing !== undefined) return yield* settle(existing);
 
       const projectId = yield* readCheckpoint(input.threadId, input.checkpointId);
+      const corrections = yield* CorrectionStore.CorrectionStore;
+      const sourceKey = `verdict:${id}`;
+      // A correction with no row is an earlier call's that stopped between the two writes. Only the
+      // same verdict may finish it; `record` below then answers with that stored correction.
+      const leftover = yield* corrections
+        .findBySourceKey("review_verdict", sourceKey)
+        .pipe(Effect.mapError(fromLearning));
+      if (
+        leftover !== undefined &&
+        (failureMode === null || leftover.declaredMode !== failureMode)
+      ) {
+        return yield* alreadyReviewed();
+      }
       const correction =
         failureMode === null
           ? null
-          : yield* (yield* CorrectionStore.CorrectionStore)
+          : yield* corrections
               .record({
                 threadId: input.threadId,
                 failureKind: "review_verdict",
                 declaredMode: failureMode,
                 description: input.summary,
                 sourceEventIds: [],
-                sourceKey: `verdict:${id}`,
+                sourceKey,
               })
-              .pipe(
-                Effect.catchTags({ LearningError: (error) => Effect.fail(fromLearning(error)) }),
-              );
+              .pipe(Effect.mapError(fromLearning));
       const at = DateTime.formatIso(yield* DateTime.now);
       // A concurrent identical call may have inserted first; its row is the one settled below.
       yield* sql`INSERT INTO review_verdicts

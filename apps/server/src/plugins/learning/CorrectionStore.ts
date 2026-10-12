@@ -104,6 +104,11 @@ export class CorrectionStore extends Context.Service<
       input: LearningCorrectionsInput,
     ) => Effect.Effect<ReadonlyArray<LearningCorrection>, LearningError>;
     readonly get: (id: number) => Effect.Effect<LearningCorrection, LearningError>;
+    /** The correction stored under `(failureKind, sourceKey)`, or undefined when there is none. */
+    readonly findBySourceKey: (
+      failureKind: LearningFailureKind,
+      sourceKey: string,
+    ) => Effect.Effect<LearningCorrection | undefined, LearningError>;
   }
 >()("t3/plugins/learning/CorrectionStore") {}
 
@@ -160,7 +165,14 @@ const make = Effect.gen(function* () {
       }),
     );
 
-  return CorrectionStore.of({ record, list, get });
+  const findBySourceKey: CorrectionStore["Service"]["findBySourceKey"] = (failureKind, sourceKey) =>
+    sql<Row>`SELECT * FROM corrections
+      WHERE failure_kind = ${failureKind} AND source_key = ${sourceKey}`.pipe(
+      Effect.map((rows) => (rows[0] === undefined ? undefined : toCorrection(rows[0]))),
+      Effect.catch(io),
+    );
+
+  return CorrectionStore.of({ record, list, get, findBySourceKey });
 });
 
 export const layer = Layer.effect(CorrectionStore, make);

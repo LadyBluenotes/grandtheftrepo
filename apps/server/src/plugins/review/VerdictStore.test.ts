@@ -82,13 +82,27 @@ it.effect("answers a repeated identical call with the stored verdict and adds no
   ),
 );
 
-it.effect("finds the same correction when a retry follows a verdict row that never landed", () =>
+it.effect("finishes a write that stopped after its correction only for the same verdict", () =>
   Effect.scoped(
     Effect.gen(function* () {
-      const { record, review, verdictCount, correctionCount } = yield* harness;
+      const { record, review, corrections, verdictCount, correctionCount } = yield* harness;
       const first = yield* record(reviewer, sendBack);
       // The process stopped after the correction and before the row.
       yield* review`DELETE FROM review_verdicts`;
+      for (const changed of [{ ...sendBack, failureMode: "defect" as const }, approve]) {
+        const refused = yield* refusal(record(reviewer, changed));
+        assert.strictEqual(refused.code, "conflict");
+        assert.strictEqual(refused.message, "This thread already reviewed this checkpoint");
+      }
+      assert.strictEqual(yield* verdictCount, 0);
+      assert.strictEqual(yield* correctionCount, 1);
+      const stored = yield* corrections.findBySourceKey(
+        "review_verdict",
+        `verdict:${first.verdictId}`,
+      );
+      assert.strictEqual(stored?.id, first.correctionId);
+      assert.strictEqual(stored?.declaredMode, "missing_verification");
+
       const retried = yield* record(reviewer, sendBack);
       assert.deepEqual(retried, first);
       assert.strictEqual(yield* verdictCount, 1);
