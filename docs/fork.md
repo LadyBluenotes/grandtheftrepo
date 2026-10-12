@@ -34,3 +34,38 @@ Web seams are added when the first plugin screen lands.
 
 `apps/web/src/routeTree.gen.ts` is generated and committed. A conflict there is resolved by running
 the web dev server or build once, which regenerates it.
+
+## Keeping up with upstream
+
+`.github/workflows/sync-upstream.yml` merges `pingdotgg/t3code` main at 04:23 UTC and can be run by
+hand from the Actions tab. A clean merge is pushed straight to `main`. A conflict pushes upstream's
+head to `sync/upstream`, opens a pull request into `main`, and posts one `@copilot` comment on it
+asking the Copilot cloud agent to resolve the conflicts on that branch. The branch is never
+force-pushed, so a resolution someone pushes there survives the next night. Merging the pull
+request, or landing upstream on `main` any other way, makes the next run close it.
+
+The handoff needs two things: a repository secret `SYNC_TOKEN` holding a fine-grained token with
+Contents and Pull requests set to read and write, and the Copilot cloud agent enabled for the
+account that owns the token (profile menu, Copilot settings, Cloud agent). Without the secret the
+job still opens the pull request and waits for a person.
+
+Resolving a conflict by hand: keep the seam lines above, take upstream's side everywhere else, and
+regenerate `apps/web/src/routeTree.gen.ts` by running the web build.
+
+A sync can bring in new upstream workflows. Most of them are scheduled on Blacksmith runners this
+fork does not have, so their runs queue forever. After a sync, check the Actions tab and disable
+anything new. Only Fork CI, Sync upstream and Fork nightly release stay active.
+
+## Nightly builds
+
+`.github/workflows/release-fork.yml` runs at 05:41 UTC on days `main` moved and can be run by hand.
+It builds the Windows x64 and Linux x64 desktop apps and CLI archives, unsigned, through upstream's
+reusable build job on GitHub-hosted runners, and publishes them as a prerelease tagged
+`v<version>-nightly.<date>.<n>`. There is no macOS build; signing it needs an Apple developer
+account.
+
+Install the first copy by hand from the Releases page. Windows shows a SmartScreen prompt once
+because the build is unsigned: More info, then Run anyway. From then on the app updates itself from
+this fork's releases on the nightly channel. An app installed from upstream keeps updating from
+upstream, so it has to be replaced once. The `t3` CLI from one of these archives updates from this
+fork as well.
