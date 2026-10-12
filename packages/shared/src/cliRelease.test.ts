@@ -9,6 +9,7 @@ import {
   cliReleaseIndexPageUrl,
   newestCliReleaseVersion,
   parseChecksums,
+  cliReleaseRepository,
 } from "./cliRelease.ts";
 
 describe("cliRelease", () => {
@@ -83,6 +84,15 @@ describe("cliRelease", () => {
     expect(newestCliReleaseVersion(releases, "nightly")).toBe("1.2.4-nightly.20260912.7");
     expect(newestCliReleaseVersion(releases, "stable")).toBe("1.2.3");
     expect(newestCliReleaseVersion([{ tag_name: "v1.2.3" }], "preview")).toBeUndefined();
+  });
+
+  it("follows the repository the build provided and falls back to upstream", () => {
+    expect(cliReleaseRepository("someone/t3code-fork")).toBe("someone/t3code-fork");
+    expect(cliReleaseRepository(" someone/t3code-fork ")).toBe("someone/t3code-fork");
+    expect(cliReleaseRepository(undefined)).toBe("pingdotgg/t3code");
+    expect(cliReleaseRepository("")).toBe("pingdotgg/t3code");
+    expect(cliReleaseRepository("owner/name/extra")).toBe("pingdotgg/t3code");
+    expect(cliReleaseRepository("https://github.com/someone/fork")).toBe("pingdotgg/t3code");
   });
 
   it("pages through the release index at the largest page GitHub allows", () => {
