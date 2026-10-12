@@ -61,7 +61,12 @@ it.effect("registers kanban tools through the plugin host and files an issue ove
   Effect.scoped(
     Effect.gen(function* () {
       const layerServer = PluginHost.layerMcp(McpHttpServer.toolkitRegistration).pipe(
-        Layer.provide(Layer.mock(PluginHost.PluginHost)({ activeIds: new Set(["kanban"]) })),
+        Layer.provide(
+          Layer.mock(PluginHost.PluginHost)({
+            activeIds: new Set(["kanban"]),
+            databases: new Map(),
+          }),
+        ),
         Layer.provide(KanbanStore.layer),
         Layer.provide(Layer.mock(ThreadManagementService.ThreadManagementService)({})),
         Layer.provideMerge(McpHttpServer.layerMcpTransport),

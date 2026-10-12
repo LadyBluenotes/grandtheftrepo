@@ -14,6 +14,11 @@ directories and never edit an upstream file. Upstream is merged nightly by
 Enabled state is `plugins.json` under the server state directory. A missing entry means enabled.
 Changes apply on the next server start.
 
+A plugin that declares `migrations` gets its own SQLite file, `plugins/<id>.sqlite` under the state
+directory, opened and migrated before the plugin starts; its `layer` and `mcp` see that file as
+`SqlClient`, never the core database. A failed migration keeps the plugin, and anything that depends
+on it, off for that start and shows as `startError` in `plugins.list`.
+
 ## Upstream seams
 
 These are the only lines upstream files carry for the plugin system. A merge conflict in one of
