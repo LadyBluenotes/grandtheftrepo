@@ -155,7 +155,7 @@ export const make = (plugins: ReadonlyArray<Registered>) =>
     const withStartErrors = (statuses: ReadonlyArray<PluginStatus>) =>
       statuses.map((status) => {
         const startError = startErrors.get(status.id) ?? null;
-        return { ...status, active: status.active && startError === null, startError };
+        return { ...status, active: activeIds.has(status.id), startError };
       });
 
     const setEnabled = Effect.fn("PluginHost.setEnabled")(function* (id: string, enabled: boolean) {
