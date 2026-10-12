@@ -89,8 +89,11 @@ them half-evaluated. The host hands `toolkitRegistration` to `ServerPlugin.mcp` 
   plugin's own database. A tier with nothing saved falls back to the built-in: one instance's model
   list, first model `strong`, last `cheap`. Agents read it with the `routing_tiers` MCP tool; the
   panel on the Plugins page reads and saves it through `routing.tiers.get` and `routing.tiers.set`.
-  Server: `apps/server/src/plugins/routing/`. Contracts: `packages/contracts/src/plugins/routing.ts`.
-  Web: `apps/web/src/plugins/routing/`.
+  A launcher starts work through `TierSelectionService.launch` or `delegate`: they pick a tier from
+  the caller's task class, one tier up per failed run of the same work, hand the launch that tier's
+  model, and append a `routing_recommended` row to `routing_events`; with the plugin off the launch
+  is unchanged. Server: `apps/server/src/plugins/routing/`. Contracts:
+  `packages/contracts/src/plugins/routing.ts`. Web: `apps/web/src/plugins/routing/`.
 - **learning**: a record of corrections, visible instances of work going wrong, taken from
   events the server already emits: failed or interrupted provider turns, pull request wakes
   while changes are requested, and threads reopened after settlement. Agents read and add

@@ -1,5 +1,5 @@
 import * as Schema from "effect/Schema";
-import { ProjectId, TrimmedNonEmptyString } from "../baseSchemas.ts";
+import { NonNegativeInt, ProjectId, TrimmedNonEmptyString } from "../baseSchemas.ts";
 import { ProviderInstanceId } from "../providerInstance.ts";
 import { definePluginMethods } from "./method.ts";
 
@@ -52,6 +52,31 @@ export const RoutingTiersSetInput = Schema.Struct({
   entry: Schema.NullOr(RoutingEntry),
 });
 export type RoutingTiersSetInput = typeof RoutingTiersSetInput.Type;
+
+/** The kind of work a launch does, named by the caller. It picks the tier the work starts on. */
+export const RoutingTaskClass = Schema.Literals([
+  "mechanical",
+  "implementation",
+  "planning",
+  "design",
+  "risky_review",
+]);
+export type RoutingTaskClass = typeof RoutingTaskClass.Type;
+
+/**
+ * Why a launch got its tier: a person set it (`manual`), earlier launches of the same work failed
+ * (`escalation`), or the task class alone (`rule`).
+ */
+export const RoutingTierReason = Schema.Literals(["manual", "escalation", "rule"]);
+export type RoutingTierReason = typeof RoutingTierReason.Type;
+
+/** The `detail` of a `routing_recommended` event, stored as JSON. */
+export const RoutingRecommendedDetail = Schema.Struct({
+  taskClass: RoutingTaskClass,
+  failedRuns: NonNegativeInt,
+  reason: RoutingTierReason,
+});
+export type RoutingRecommendedDetail = typeof RoutingRecommendedDetail.Type;
 
 export class RoutingError extends Schema.TaggedError<RoutingError>()("RoutingError", {
   code: Schema.Literals(["inactive", "invalid", "not_found", "io"]),
