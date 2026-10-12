@@ -90,7 +90,10 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.SYNC_TOKEN || github.token }}
         run: |
-          git push --force origin "upstream/${UPSTREAM_BRANCH}:refs/heads/${SYNC_BRANCH}"
+          # Never force: once Copilot or a person has pushed a resolution to the
+          # branch, a non-fast-forward push is rejected and that work survives.
+          git push origin "upstream/${UPSTREAM_BRANCH}:refs/heads/${SYNC_BRANCH}" \
+            || echo "${SYNC_BRANCH} carries commits beyond upstream; left as is."
           {
             echo "Nightly sync of \`${UPSTREAM_REPO}\` at \`${{ steps.merge.outputs.upstream_sha }}\` did not merge automatically."
             echo
