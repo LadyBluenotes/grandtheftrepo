@@ -41,7 +41,7 @@ const TelemetryBudgetsTool = Tool.make("telemetry_budgets", {
 
 const TelemetryToolOutputTool = Tool.make("telemetry_tool_output", {
   description:
-    "Report which tools produce the most output in a project's window: from (inclusive) and to (exclusive), ISO instants in UTC, over every run. byTool lists each tool (a tool's name, command:<program>, file_search or web_search) with its calls, estimated tokens, share of the total and median and 95th percentile per call, largest first. largest lists the ten biggest single results with their tool, thread, run and item. Sizes are estimates, characters over four with an inline image as 1,500, not a tokenizer's counts. Check this before a long task to see which of your tools are expensive. With no tool items in the window both lists are empty and missingReason says why.",
+    "Report which tools produce the most output in a project's window: from (inclusive) and to (exclusive), ISO instants in UTC, over every run and over the calls a provider's subagent makes, which belong to no run. byTool lists each tool (a tool's name, command:<program>, file_search or web_search) with its calls, estimated tokens, share of the total and median and 95th percentile per call, largest first. largest lists the ten biggest single results with their tool, thread, run (null for a subagent's call) and item. Sizes are estimates, characters over four with an inline image as 1,500, not a tokenizer's counts. Check this before a long task to see which of your tools are expensive. With no tool items in the window both lists are empty and missingReason says why.",
   parameters: TelemetryToolOutputInput,
   success: TelemetryToolOutputResult,
   failure: OrchestratorMcpFailure,

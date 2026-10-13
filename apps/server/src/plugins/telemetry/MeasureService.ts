@@ -129,7 +129,8 @@ export const make = Effect.fn("MeasureService.make")(function* (
       const toolCalls =
         tierModel === undefined
           ? projectToolCalls
-          : projectToolCalls.filter((call) => runIds.has(call.run_id));
+          : // A call with no run has no model, so no tier claims it.
+            projectToolCalls.filter((call) => call.run_id !== null && runIds.has(call.run_id));
       const turnUsage =
         tierModel === undefined
           ? projectTurnUsage

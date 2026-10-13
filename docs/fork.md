@@ -125,7 +125,9 @@ them half-evaluated. The host hands `toolkitRegistration` to `ServerPlugin.mcp` 
   tool call (migration 4 adds them and replays the log), and carry per-tool and largest-result
   `detail` through `telemetry.measures` and the `telemetry_tool_output` MCP tool. They read no
   tier, so the sweep asks for them without one: the default budget on the largest result names
-  `standard` only because a budget needs a tier, and judges every run, routing plugin on or off.
+  `standard` only because a budget needs a tier, and judges every run, routing plugin on or off. A
+  call a provider's subagent makes has no run: the reactor keeps it with the item's own time
+  (migration 5), the two measures count it, and the per-run measures and a tier leave it out.
   `telemetry.report` and the `telemetry_report` MCP tool fold a project's range
   into ten sections, from the thread records, the learning and review plugins and the host's
   attention flags, with the same report as one self-contained HTML page; at start the plugin gives

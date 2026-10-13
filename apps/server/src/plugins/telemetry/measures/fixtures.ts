@@ -53,6 +53,7 @@ export const call = (overrides: Partial<ToolCallRow> = {}): ToolCallRow => {
     path: "src/a.ts",
     command: null,
     output_tokens: null,
+    item_at: null,
     status: "completed",
     ...overrides,
   };
@@ -95,7 +96,7 @@ export const rowOf = (item: OrchestrationV2TurnItem): ToolCallRow => {
   const output = toolOutputFields(item);
   return {
     item_id: calls["turnItem.id"],
-    run_id: calls["turnItem.runId"] ?? "",
+    run_id: calls["turnItem.runId"],
     thread_id: calls["turnItem.threadId"],
     ordinal: calls["turnItem.ordinal"],
     item_type: calls["turnItem.type"],
@@ -103,6 +104,7 @@ export const rowOf = (item: OrchestrationV2TurnItem): ToolCallRow => {
     path: calls["turnItem.input"] ?? calls["turnItem.fileName"],
     command: output["turnItem.input"],
     output_tokens: output["turnItem.output"] ?? output["turnItem.results"],
+    item_at: output["turnItem.startedAt"] ?? output["turnItem.updatedAt"],
     status: calls["turnItem.status"],
   };
 };

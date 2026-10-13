@@ -8,6 +8,7 @@ import type {
 import type { FieldPath } from "../fields.ts";
 import { programName } from "./commandProgram.ts";
 import {
+  inWindow,
   type Measure,
   type MeasureInput,
   ok,
@@ -37,6 +38,8 @@ const PROVENANCE = [
   "turnItem.input",
   "turnItem.output",
   "turnItem.results",
+  "turnItem.startedAt",
+  "turnItem.updatedAt",
 ] as const satisfies ReadonlyArray<FieldPath>;
 
 /** The tool items that return something to the model. A file change returns nothing to size. */
@@ -85,13 +88,18 @@ export const toolOutputFlagText = (largest: TelemetryLargestOutput, threadTitle:
 };
 
 /**
- * The window's calls with an output size: those of runs that started in it, of the item types
- * that return something. A call whose size is not recorded yet is left out, not read as zero.
+ * The window's calls with an output size, of the item types that return something. A call of a
+ * run is in the window when its run started in it, as for every per-run measure. A call with no
+ * run, which a provider's subagent makes, is in it when the item itself started or last changed
+ * in it, and its `runId` stays null. A call whose size is not recorded yet is left out, not read
+ * as zero.
  */
 const outputCalls = (input: MeasureInput) => {
   const runs = new Set(windowRuns(input).map((run) => run.run_id));
   return input.toolCalls.flatMap((call) =>
-    runs.has(call.run_id) && OUTPUT_TYPES.has(call.item_type) && call.output_tokens !== null
+    (call.run_id === null ? inWindow(input, call.item_at) : runs.has(call.run_id)) &&
+    OUTPUT_TYPES.has(call.item_type) &&
+    call.output_tokens !== null
       ? [{ call, tool: toolKey(call), tokens: call.output_tokens }]
       : [],
   );
@@ -115,7 +123,7 @@ const totalSpec = {
 } as const satisfies Spec;
 
 /**
- * Estimated tokens of all tool output in runs that started in the window, with each tool's calls,
+ * Estimated tokens of all tool output in the window (see `outputCalls`), with each tool's calls,
  * share, median and 95th percentile, largest total first. An item with no output is a call of
  * zero. The shares are of this total and sum to one, or are all zero when every output is empty.
  */
@@ -154,7 +162,7 @@ const maxSpec = {
 } as const satisfies Spec;
 
 /**
- * Estimated tokens of the largest single tool result in runs that started in the window, with the
+ * Estimated tokens of the largest single tool result in the window (see `outputCalls`), with the
  * ten largest. Equal sizes list by item id, so a window answers the same each time.
  */
 export const toolOutputMaxPerCall: Measure = (input) => {

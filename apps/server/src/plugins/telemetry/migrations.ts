@@ -11,6 +11,7 @@ import type { PluginMigration } from "../Plugin.ts";
  * breaches and recoveries their sweep records.
  * 4: the size of each tool call's output and the head of a command's command line, which the tool
  * output measures read, and the budget on the largest single result.
+ * 5: tool calls with no run, which a provider's subagent makes, and the time that places them.
  */
 export const migrations: ReadonlyArray<PluginMigration> = [
   [
@@ -161,6 +162,46 @@ export const migrations: ReadonlyArray<PluginMigration> = [
       `;
       // As in migration 2: without its cursor the reactor replays from the first event, and
       // every tool call upsert fills the new columns.
+      yield* sql`DROP TABLE IF EXISTS host_reactor_cursor`;
+      yield* sql`DROP TABLE IF EXISTS host_reactor_failure`;
+    }),
+  ],
+  [
+    5,
+    "runless_tool_calls",
+    Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      // SQLite cannot drop NOT NULL from a column, so the table is rebuilt with `run_id` nullable
+      // and `item_at`, when the item started or else last changed, which places a call that has no
+      // run in a window. `item_at` is NULL until the replay below rewrites each row.
+      yield* sql`
+        CREATE TABLE telemetry_tool_calls_v5 (
+          item_id TEXT PRIMARY KEY,
+          run_id TEXT,
+          thread_id TEXT NOT NULL,
+          ordinal INTEGER NOT NULL,
+          item_type TEXT NOT NULL,
+          tool_name TEXT,
+          path TEXT,
+          command TEXT,
+          output_tokens INTEGER,
+          item_at TEXT,
+          status TEXT NOT NULL,
+          event_sequence INTEGER NOT NULL
+        )
+      `;
+      yield* sql`
+        INSERT INTO telemetry_tool_calls_v5
+          (item_id, run_id, thread_id, ordinal, item_type, tool_name, path, command, output_tokens,
+           status, event_sequence)
+        SELECT item_id, run_id, thread_id, ordinal, item_type, tool_name, path, command,
+          output_tokens, status, event_sequence
+        FROM telemetry_tool_calls
+      `;
+      yield* sql`DROP TABLE telemetry_tool_calls`;
+      yield* sql`ALTER TABLE telemetry_tool_calls_v5 RENAME TO telemetry_tool_calls`;
+      yield* sql`CREATE INDEX telemetry_tool_calls_thread ON telemetry_tool_calls (thread_id)`;
+      // As in migration 4: the replay stores the calls the reactor used to skip for want of a run.
       yield* sql`DROP TABLE IF EXISTS host_reactor_cursor`;
       yield* sql`DROP TABLE IF EXISTS host_reactor_failure`;
     }),

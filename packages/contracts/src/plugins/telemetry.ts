@@ -40,6 +40,7 @@ export type TelemetryToolOutput = typeof TelemetryToolOutput.Type;
 export const TelemetryLargestOutput = Schema.Struct({
   tool: Schema.String,
   threadId: Schema.String,
+  /** Null for a call a provider's subagent made, which belongs to no run. */
   runId: Schema.NullOr(Schema.String),
   itemId: Schema.String,
   estimatedTokens: NonNegativeInt,

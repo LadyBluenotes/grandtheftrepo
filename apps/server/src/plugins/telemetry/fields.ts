@@ -121,6 +121,12 @@ export const toolOutputFields = (item: OrchestrationV2TurnItem) => ({
   /** A file or web search's results. */
   "turnItem.results":
     item.type === "file_search" || item.type === "web_search" ? outputTokens(item.results) : null,
+  /**
+   * When the item started, else when it last changed: where a call with no run, which a provider's
+   * subagent makes, falls in a window. A call with a run is placed by its run.
+   */
+  "turnItem.startedAt": iso(item.startedAt),
+  "turnItem.updatedAt": iso(item.updatedAt),
 });
 
 export const threadFields = (thread: OrchestrationV2AppThread) => ({

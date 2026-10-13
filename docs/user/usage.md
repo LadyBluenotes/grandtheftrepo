@@ -142,12 +142,12 @@ that tier's model in the week. Going over raises an attention flag; coming back 
 Tiers come from the routing plugin, so the tier budgets judge nothing while it is off.
 
 A fourth budget caps the largest single tool result at 8,000 estimated tokens, judged once a
-project has at least 20 tool calls in the week. It counts every run, whatever its tier, and works
-with the routing plugin off. Its flag names the tool and the thread, with a hint such as reading a
-line range or paginating. Sizes are estimates, not a tokenizer's counts: characters over four, with
-an inline image as 1,500. Shell commands group by the program they run, such as `command:git`; a
-Windows `cmd` or PowerShell wrapper groups under the wrapper (`command:cmd`, `command:pwsh`), and a
-heredoc or an alias under its first word.
+project has at least 20 tool calls in the week. It counts every run, whatever its tier, and the
+tool calls a subagent makes, and works with the routing plugin off. Its flag names the tool and the
+thread, with a hint such as reading a line range or paginating. Sizes are estimates, not a
+tokenizer's counts: characters over four, with an inline image as 1,500. Shell commands group by the
+program they run, such as `command:git`; a Windows `cmd` or PowerShell wrapper groups under the
+wrapper (`command:cmd`, `command:pwsh`), and a heredoc or an alias under its first word.
 
 Edit each budget's threshold, minimum sample and on/off switch under **Plugins → Telemetry**.
 Turn a budget off to pause it; **Remove** deletes it and its history.
