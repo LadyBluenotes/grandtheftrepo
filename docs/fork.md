@@ -112,7 +112,7 @@ them half-evaluated. The host hands `toolkitRegistration` to `ServerPlugin.mcp` 
   runs, tool calls, threads and provider turn token usage from the event log in the plugin's own
   tables, and pure functions in `measures/` compute each measure from those rows; cost is priced
   with the rate table the Usage page saves. A measure whose input is not recorded, or comes from a
-  plugin that is off or not built yet, answers `unavailable` with the reason. Migration 2 drops
+  plugin that is off, answers `unavailable` with the reason. Migration 2 drops
   the reactor's cursor so the new tables fill from the first event; a request waits a few seconds
   for the reactor to catch up, and past that every measure answers `unavailable`. Where
   compaction before the upgrade kept a later thread event in place of a `thread.settled`, who
@@ -130,6 +130,11 @@ them half-evaluated. The host hands `toolkitRegistration` to `ServerPlugin.mcp` 
   `standard` only because a budget needs a tier, and judges every run, routing plugin on or off. A
   call a provider's subagent makes has no run: the reactor keeps it with the item's own time
   (migration 4), the two measures count it, and the per-run measures and a tier leave it out.
+  `knowledge_reuse` is the share of runs that started in the window and edited a file that first
+  read a path under `KNOWLEDGE_DIRECTORY` (`.knowledge/`), by tool call ordinal. `MeasureService`
+  reads the knowledge plugin's `KnowledgeStore` where it runs only to count the project's accepted
+  pages, so the measure answers `unavailable` while that plugin is off or the project has none. It
+  is a rate, so the learning regression sweep compares it.
   `telemetry.report` and the `telemetry_report` MCP tool fold a project's range
   into ten sections, from the thread records, the learning and review plugins and the host's
   attention flags, with the same report as one self-contained HTML page; at start the plugin gives

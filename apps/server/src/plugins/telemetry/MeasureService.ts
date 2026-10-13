@@ -21,6 +21,7 @@ import {
   parseRateTable,
   type RateTable,
 } from "../../usage/usagePricing.ts";
+import * as KnowledgeStore from "../knowledge/KnowledgeStore.ts";
 import * as CorrectionStore from "../learning/CorrectionStore.ts";
 import * as ItemStore from "../learning/items/ItemStore.ts";
 import * as VerdictStore from "../review/VerdictStore.ts";
@@ -135,8 +136,8 @@ export const make = Effect.fn("MeasureService.make")(function* (
         tierModel === undefined
           ? projectTurnUsage
           : projectTurnUsage.filter((turn) => turn.run_id !== null && runIds.has(turn.run_id));
-      // Read where the call runs: the learning and review plugins' stores are siblings, absent
-      // while their plugin is off.
+      // Read where the call runs: the learning, review and knowledge plugins' stores are
+      // siblings, absent while their plugin is off.
       const store = yield* Effect.serviceOption(CorrectionStore.CorrectionStore);
       const corrections = Option.isSome(store)
         ? yield* store.value.list({ projectId, ...window })
@@ -149,6 +150,10 @@ export const make = Effect.fn("MeasureService.make")(function* (
       const verdicts = Option.isSome(verdictStore)
         ? yield* verdictStore.value.listWindow({ projectId, from: EPOCH, to: window.to })
         : undefined;
+      const knowledge = yield* Effect.serviceOption(KnowledgeStore.KnowledgeStore);
+      const knowledgePages = Option.isSome(knowledge)
+        ? (yield* knowledge.value.list({ projectId, state: "accepted" })).length
+        : undefined;
       const current = yield* settings.getSettings;
       return computeMeasures({
         ...window,
@@ -160,6 +165,7 @@ export const make = Effect.fn("MeasureService.make")(function* (
         corrections,
         deliveries,
         verdicts,
+        knowledgePages,
         pricing: {
           rates: yield* rates,
           overrides: createOverrideRateTable(current.usagePriceOverrides),
@@ -171,6 +177,7 @@ export const make = Effect.fn("MeasureService.make")(function* (
         SqlError: failWith("The telemetry database could not be read."),
         LearningError: failWith("The learning plugin's corrections or items could not be read."),
         ReviewVerdictError: failWith("The review plugin's verdicts could not be read."),
+        KnowledgeError: failWith("The knowledge plugin's pages could not be read."),
         RoutingError: (error) => Effect.fail(new TelemetryError({ message: error.message })),
         ServerSettingsError: failWith(
           "Server settings, which hold custom model prices, could not be read.",
