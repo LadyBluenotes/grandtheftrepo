@@ -601,7 +601,7 @@ it.effect(
         [flag?.plugin_id, flag?.thread_id, flag?.kind, flag?.text, flag?.cleared_at],
         [
           "policy",
-          `policy:claude:${w.claudeFile}`,
+          `policy:${everywhere}:claude:${w.claudeFile}`,
           "delivery_drift",
           `The "review" policy block in ${w.claudeFile} was edited outside T3 Code; reinstall to restore it.`,
           null,
@@ -643,7 +643,7 @@ it.effect("an agent's directory that goes away is flagged as removed and never c
     assert.deepStrictEqual(yield* w.run(), { examined: 1, acted: 1, flags: 1 });
     assert.deepStrictEqual(openFlags(yield* w.flags), [
       [
-        `policy:codex:${w.codexFile}`,
+        `policy:${alpha}:codex:${w.codexFile}`,
         `The "alpha/review" policy block in ${w.codexFile} was removed outside T3 Code; reinstall to restore it.`,
       ],
     ]);
@@ -689,43 +689,58 @@ it.effect("a dry run counts the drift it finds and raises and clears nothing", (
   }).pipe(Effect.provide(layerTest)),
 );
 
-it.effect("one flag per file names every policy block that changed, and follows them", () =>
-  Effect.gen(function* () {
-    const policies = yield* PolicyService.PolicyService;
-    const w = yield* world;
-    yield* accepted(everywhere, "review", "Run the tests.");
-    yield* accepted(alpha, "style", "Keep it short.");
-    assert.deepStrictEqual(yield* w.run(), { examined: 4, acted: 4, flags: 0 });
+it.effect(
+  "one flag per project and file names the project's blocks that changed, and follows them",
+  () =>
+    Effect.gen(function* () {
+      const policies = yield* PolicyService.PolicyService;
+      const w = yield* world;
+      yield* accepted(alpha, "review", "Run the tests.");
+      yield* accepted(alpha, "style", "Keep it short.");
+      yield* accepted(beta, "other", "Mine.");
+      assert.deepStrictEqual(yield* w.run(), { examined: 6, acted: 6, flags: 0 });
 
-    // One block edited, the other taken out of the file.
-    yield* w.edit(w.claudeFile, (text) =>
-      text
-        .replace("Run the tests.", "Skip the tests.")
-        .replace(
-          /<!-- fork-policy:start key=alpha\/style -->[\s\S]*?<!-- fork-policy:end key=alpha\/style -->\n?/,
-          "",
-        ),
-    );
-    assert.deepStrictEqual(yield* w.run(), { examined: 4, acted: 1, flags: 1 });
-    const [flag, ...rest] = yield* w.flags;
-    assert.deepStrictEqual(rest, []);
-    assert.strictEqual(
-      flag?.text,
-      `The "review" and "alpha/style" policy blocks in ${w.claudeFile} were edited or removed outside T3 Code; reinstall to restore them.`,
-    );
+      // In alpha one block is edited and the other taken out of the file; beta's is edited too.
+      yield* w.edit(w.claudeFile, (text) =>
+        text
+          .replace("Run the tests.", "Skip the tests.")
+          .replace("Mine.", "Not mine.")
+          .replace(
+            /<!-- fork-policy:start key=alpha\/style -->[\s\S]*?<!-- fork-policy:end key=alpha\/style -->\n?/,
+            "",
+          ),
+      );
+      assert.deepStrictEqual(yield* w.run(), { examined: 6, acted: 2, flags: 2 });
+      const [flag, other, ...rest] = yield* w.flags;
+      assert.deepStrictEqual(rest, []);
+      assert.deepStrictEqual(
+        [flag?.thread_id, flag?.text],
+        [
+          `policy:${alpha}:claude:${w.claudeFile}`,
+          `The "alpha/review" and "alpha/style" policy blocks in ${w.claudeFile} were edited or removed outside T3 Code; reinstall to restore them.`,
+        ],
+      );
+      assert.deepStrictEqual(
+        [other?.thread_id, other?.text],
+        [
+          `policy:${beta}:claude:${w.claudeFile}`,
+          `The "beta/other" policy block in ${w.claudeFile} was edited outside T3 Code; reinstall to restore it.`,
+        ],
+      );
 
-    // Putting one back rewrites the same flag for the other.
-    yield* policies.install({ projectId: everywhere, key: "review", agents: ["claude"] });
-    assert.deepStrictEqual(yield* w.run(), { examined: 4, acted: 2, flags: 1 });
-    const [rewritten, ...others] = yield* w.flags;
-    assert.deepStrictEqual(others, []);
-    assert.strictEqual(rewritten?.id, flag?.id);
-    assert.isNull(rewritten?.cleared_at);
-    assert.strictEqual(
-      rewritten?.text,
-      `The "alpha/style" policy block in ${w.claudeFile} was removed outside T3 Code; reinstall to restore it.`,
-    );
-  }).pipe(Effect.provide(layerTest)),
+      // Putting one of alpha's back rewrites alpha's flag for the other and leaves beta's alone.
+      yield* policies.install({ projectId: alpha, key: "review", agents: ["claude"] });
+      assert.deepStrictEqual(yield* w.run(), { examined: 6, acted: 2, flags: 2 });
+      const [rewritten, untouched, ...others] = yield* w.flags;
+      assert.deepStrictEqual(others, []);
+      assert.strictEqual(rewritten?.id, flag?.id);
+      assert.isNull(rewritten?.cleared_at);
+      assert.strictEqual(
+        rewritten?.text,
+        `The "alpha/style" policy block in ${w.claudeFile} was removed outside T3 Code; reinstall to restore it.`,
+      );
+      assert.deepStrictEqual(untouched, other);
+    }).pipe(Effect.provide(layerTest)),
 );
 
 it.effect("a run does not hold a flag back, and a block only waiting for a run is not drift", () =>
@@ -747,7 +762,7 @@ it.effect("a run does not hold a flag back, and a block only waiting for a run i
     assert.include(yield* w.fs.readFileString(w.codexFile), "Skip the tests.");
     assert.deepStrictEqual(
       openFlags(yield* w.flags).map(([key]) => key),
-      [`policy:codex:${w.codexFile}`],
+      [`policy:${alpha}:codex:${w.codexFile}`],
     );
   }).pipe(Effect.provide(layerTest)),
 );

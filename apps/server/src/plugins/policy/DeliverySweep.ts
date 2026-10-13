@@ -52,9 +52,9 @@ interface RecordedRow {
  * thread does. A waiting policy leaves nothing behind and the next tick looks again.
  *
  * After the installs it checks every delivery it recorded and keeps one `delivery_drift` flag per
- * agent file whose block was edited or deleted since. It never writes such a block: a person may
- * have edited it on purpose, and an install from the Policies screen or `policy.install` puts the
- * accepted version back, after which the next tick clears the flag.
+ * project and agent file whose block was edited or deleted since. It never writes such a block: a
+ * person may have edited it on purpose, and an install from the Policies screen or `policy.install`
+ * puts the accepted version back, after which the next tick clears the flag.
  *
  * `examined` counts policy and agent pairs, `acted` installs and flags raised, rewritten or
  * cleared, `flags` deliveries a failed install or verification left unverified plus the drift
@@ -211,8 +211,10 @@ export const make = Effect.gen(function* () {
   );
 
   /**
-   * One flag per agent and file, `policy:<agent>:<path>`, for the policies delivered into it: a
-   * file holds every policy's block, so the flag names those that changed. Each file is read once.
+   * One flag per project, agent and file, `policy:<projectId>:<agent>:<path>`, for the project's
+   * policies delivered into it: a file holds every policy's block, so the flag names those of the
+   * project that changed. The project is second in the key so the project's board can list it
+   * (`kanban/attentionRows.ts`); the environment's `*` has no board. Each file is read once.
    * A block is judged against the hash its install recorded, not the version accepted now, so a
    * block that is merely waiting for a run to end is intact, and one that was edited, or whose
    * file or markers are gone, is not. A file that cannot be read keeps the flag it had. The read
@@ -229,7 +231,7 @@ export const make = Effect.gen(function* () {
       const unread = new Set<string>();
       for (const [flag, rows] of Map.groupBy(
         recorded,
-        (row) => `policy:${row.agent}:${row.targetPath}`,
+        (row) => `policy:${row.project_id}:${row.agent}:${row.targetPath}`,
       )) {
         const [first] = rows;
         if (first === undefined) continue;

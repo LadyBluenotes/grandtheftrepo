@@ -40,9 +40,9 @@ every accepted page and the index, so they replace such an edit.
 
 On each regular check, T3 Code also reads every page file and index block it wrote, and raises a
 Delivery drift flag for each one that was edited or deleted since, naming the file, whether or not
-a thread is running. Nothing is rewritten for you. **Reinstall** puts the files back, and the flag
-clears on the next check. A file of an agent that is no longer set up has no flag, because a
-reinstall would not touch it.
+a thread is running. The flag shows under Waiting on you on the project's board. Nothing is
+rewritten for you. **Reinstall** puts the files back, and the flag clears on the next check. A file
+of an agent that is no longer set up has no flag, because a reinstall would not touch it.
 
 Turning the knowledge plugin off on the **Plugins** page removes the screen and the tools after the
 next restart. Pages and index blocks already in the project stay.

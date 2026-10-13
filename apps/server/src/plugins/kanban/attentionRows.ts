@@ -36,9 +36,10 @@ const isSettled = (thread: OrchestrationV2ThreadShell) =>
  * One project's attention rows, oldest first, from three sources:
  *
  * - the pending request on each of the project's threads that is neither archived nor settled;
- * - open flags on one of its unarchived threads, or keyed to the project itself, such as a
- *   budget's `budget:<id>:<projectId>`; a flag on another project's thread, or on an archived one,
- *   is left out;
+ * - open flags on one of its unarchived threads, or keyed to the project itself: a key that ends in
+ *   `:<projectId>`, such as a budget's `budget:<id>:<projectId>`, or has it as a segment, such as a
+ *   delivery drift flag's `policy:<projectId>:<agent>:<path>`; a flag on another project's thread,
+ *   or on an archived one, is left out;
  * - routing mismatches on one of its unarchived threads.
  */
 export const attentionRows = (input: {
@@ -75,7 +76,10 @@ export const attentionRows = (input: {
 
   const flags = input.flags.flatMap((flag): ReadonlyArray<KanbanAttentionRow> => {
     const thread = byId.get(flag.threadId);
-    if (thread === undefined && !flag.threadId.endsWith(`:${input.projectId}`)) return [];
+    const projectKey =
+      flag.threadId.endsWith(`:${input.projectId}`) ||
+      flag.threadId.includes(`:${input.projectId}:`);
+    if (thread === undefined && !projectKey) return [];
     return [
       {
         source: "flag",
