@@ -1,6 +1,7 @@
 import type { PluginStatus } from "@t3tools/contracts";
 import {
   ActivityIcon,
+  BookOpenTextIcon,
   GraduationCapIcon,
   RouteIcon,
   ShrinkIcon,
@@ -42,4 +43,10 @@ export const pluginRegistry: ReadonlyArray<PluginEntry> = [
   { id: "routing", title: "Routing", icon: RouteIcon, SettingsPanel: RoutingSettingsPanel },
   { id: "learning", title: "Learning", icon: GraduationCapIcon, Screen: LearningScreen },
   { id: "caveman", title: "Caveman", icon: ShrinkIcon, SettingsPanel: CavemanSettingsPanel },
+  {
+    id: "knowledge",
+    title: "Knowledge",
+    icon: BookOpenTextIcon,
+    Screen: lazy(() => import("./knowledge/KnowledgePage")),
+  },
 ];

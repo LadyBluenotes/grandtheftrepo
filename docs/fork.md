@@ -217,6 +217,24 @@ them half-evaluated. The host hands `toolkitRegistration` to `ServerPlugin.mcp` 
   the panel on the Plugins page uses `caveman.status`, `caveman.setRoute`, `caveman.learnPlan` and
   `caveman.learnRefresh`. Server: `apps/server/src/plugins/caveman/`. Contracts:
   `packages/contracts/src/plugins/caveman.ts`. Web: `apps/web/src/plugins/caveman/`.
+- **knowledge**: short markdown pages per project that a person accepted, each written to
+  `<project>/.knowledge/<key>.md` and listed in one index block in the project's `CLAUDE.md`,
+  `AGENTS.md` and `.github/copilot-instructions.md`, for the agents in use as the policy plugin
+  resolves them. The block helpers both plugins use are in
+  `apps/server/src/plugins/InstructionBlocks.ts`. Agents propose drafts with the
+  `knowledge_propose` MCP tool, from a thread only, for a project the server knows, and read
+  accepted pages with `knowledge_list`. `knowledge.accept` (from `draft`) and `.retire` (from
+  `accepted`) move a page in one conditional update, so a request that lost a race is refused, and
+  install at once; an install failure is their error, though the change stands.
+  `knowledge.discard` keeps a draft as retired without writing. `knowledge.install` and `.verify`
+  are gateway methods too. Each install records, per page file (`page:<key>`) and per agent's
+  index block, the hash of what it wrote. The `knowledge/delivery` sweep writes only a component
+  whose record differs from what the accepted pages render to and whose file still holds what was
+  recorded, even with no agent in use, and only while no thread in the project has a run; a file
+  edited by hand stays `drifted` in `verify` until a person installs. Server:
+  `apps/server/src/plugins/knowledge/`. Contracts: `packages/contracts/src/plugins/knowledge.ts`.
+  Web: `apps/web/src/plugins/knowledge/`, at `/plugins/knowledge`. User guide:
+  [Project knowledge](./user/knowledge.md).
 
 `apps/web/src/routeTree.gen.ts` is generated and committed. A conflict there is resolved by running
 the web dev server or build once, which regenerates it.

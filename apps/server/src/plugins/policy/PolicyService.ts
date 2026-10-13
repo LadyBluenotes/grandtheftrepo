@@ -27,8 +27,9 @@ import * as SqlClient from "effect/sql/SqlClient";
 import type * as SqlError from "effect/sql/SqlError";
 
 import * as ServerSettings from "../../serverSettings.ts";
+import * as Blocks from "../InstructionBlocks.ts";
 import * as Files from "./InstructionFiles.ts";
-import { blockId, findBlock, placeBlock, renderBlock, sha256 } from "./Render.ts";
+import { blockId, policyMarkers, renderBlock } from "./Render.ts";
 
 interface VersionRow {
   readonly version: number;
@@ -127,7 +128,7 @@ const make = Effect.gen(function* () {
   const installLock = yield* Semaphore.make(1);
   const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
   /** A missing `RULES.md` is empty. */
-  const readRules = Effect.map(Files.read(rulesPath), (text) => text ?? "");
+  const readRules = Effect.map(Blocks.read(rulesPath), (text) => text ?? "");
 
   const versionsOf = (projectId: ProjectId, key: string) =>
     Effect.map(
@@ -245,7 +246,7 @@ const make = Effect.gen(function* () {
       }
       const id = blockId(projectId, key);
       const block = renderBlock({ id, rules, body: policy.body, version: policy.version });
-      const targets = yield* Files.targets();
+      const targets = yield* Blocks.targets();
       // Every file is read before any is written, so a damaged block refuses the whole install.
       const plans: Array<{ agent: PolicyAgent; path: string; next: string | undefined }> = [];
       for (const agent of agents) {
@@ -254,21 +255,21 @@ const make = Effect.gen(function* () {
           plans.push({ agent, path: filePath, next: undefined });
           continue;
         }
-        const text = (yield* Files.read(filePath)) ?? "";
-        const found = findBlock(text, id);
+        const text = (yield* Blocks.read(filePath)) ?? "";
+        const found = Blocks.findBlock(text, policyMarkers(id));
         if (found.kind === "damaged") {
           return yield* invalid(
             `${filePath} has a damaged fork-policy block for "${key}". Fix or remove it by hand.`,
           );
         }
-        plans.push({ agent, path: filePath, next: placeBlock(text, found, block.text) });
+        plans.push({ agent, path: filePath, next: Blocks.placeBlock(text, found, block.text) });
       }
       const at = yield* nowIso;
       if (beforeWrite !== undefined) yield* beforeWrite;
       const results: Array<PolicyInstallResult> = [];
       for (const plan of plans) {
         if (plan.next !== undefined) {
-          yield* Files.write(plan.path, plan.next);
+          yield* Blocks.write(plan.path, plan.next);
           yield* sql`INSERT OR REPLACE INTO deliveries ${sql.insert({
             project_id: projectId,
             key,
@@ -302,13 +303,13 @@ const make = Effect.gen(function* () {
   const verify = Effect.fn("PolicyService.verify")(
     function* ({ projectId, key, agents = POLICY_AGENTS }: PolicyAgentsInput) {
       const id = blockId(projectId, key);
-      const rulesHash = sha256(yield* readRules);
+      const rulesHash = Blocks.sha256(yield* readRules);
       const deliveries = new Map(
         (yield* sql<DeliveryRow>`
           SELECT * FROM deliveries WHERE project_id = ${projectId} AND "key" = ${key}
         `).map((row) => [row.agent, row]),
       );
-      const targets = yield* Files.targets();
+      const targets = yield* Blocks.targets();
       const at = yield* nowIso;
       const results: Array<PolicyVerifyResult> = [];
       for (const agent of agents) {
