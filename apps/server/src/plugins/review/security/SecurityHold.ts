@@ -53,13 +53,17 @@ export const RESUME_ACTION = { label: "Open thread", target: "thread" } as const
 export const holdText = (open: number) =>
   `Security hold: ${open} ${open === 1 ? "finding needs" : "findings need"} acknowledgement.`;
 
-/** A project's mode: `warn` until one is saved. */
-export const modeOf = (sql: SqlClient.SqlClient, projectId: ProjectId) =>
+/** A project's saved mode, or null when none is saved. */
+export const savedModeOf = (sql: SqlClient.SqlClient, projectId: ProjectId) =>
   Effect.map(
     sql<{ readonly mode: SecurityMode }>`SELECT mode FROM security_mode
       WHERE project_id = ${projectId}`,
-    ([row]) => row?.mode ?? "warn",
+    ([row]): SecurityMode | null => row?.mode ?? null,
   );
+
+/** A project's mode: `warn` until one is saved. */
+export const modeOf = (sql: SqlClient.SqlClient, projectId: ProjectId) =>
+  Effect.map(savedModeOf(sql, projectId), (mode) => mode ?? "warn");
 
 /**
  * The open findings holding the thread: every unacknowledged one, once any of them was recorded

@@ -108,7 +108,7 @@ const connects = (host: string, port: number) =>
   }).pipe(Effect.timeoutOption(CONNECT_TIMEOUT), Effect.map(Option.getOrElse(() => false)));
 
 /** Null when the origin is not on this machine, where one connect would prove nothing. */
-const listening = (origin: string) => {
+export const listening = (origin: string) => {
   if (!URL.canParse(origin)) return Effect.succeed(null);
   const url = new URL(origin);
   const host = url.hostname.replace(/^\[|\]$/g, "");

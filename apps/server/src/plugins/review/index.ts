@@ -2,8 +2,10 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 
 import type { ServerPlugin } from "../Plugin.ts";
+import { fromService } from "../Readiness.ts";
 import * as Mcp from "./mcp.ts";
 import { migrations } from "./migrations.ts";
+import * as Checks from "./readiness.ts";
 import * as ReviewGate from "./ReviewGate.ts";
 import * as ReviewInvalidationSweep from "./ReviewInvalidationSweep.ts";
 import * as ReviewRequests from "./ReviewRequests.ts";
@@ -35,8 +37,10 @@ export const plugin = {
         ReviewRequests.layer,
         ReviewGate.layer,
         SecurityHold.layer,
+        Checks.layer,
       ),
     ),
   ),
   mcp: (register) => register(Mcp.ReviewToolkit, Mcp.handlers),
+  readiness: fromService(Checks.ReviewReadiness),
 } satisfies ServerPlugin<unknown>;

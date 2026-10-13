@@ -3,10 +3,12 @@ import * as Layer from "effect/Layer";
 
 import type { ServerPlugin } from "../Plugin.ts";
 import * as PluginReactor from "../PluginReactor.ts";
+import { fromService } from "../Readiness.ts";
 import * as AdherenceReactor from "./AdherenceReactor.ts";
 import * as AdherenceService from "./AdherenceService.ts";
 import { migrations } from "./migrations.ts";
 import * as Mcp from "./mcp.ts";
+import * as Checks from "./readiness.ts";
 import * as TierMapService from "./TierMapService.ts";
 import * as TierSelectionService from "./TierSelectionService.ts";
 
@@ -36,8 +38,11 @@ export const plugin = {
   dependsOn: [],
   migrations,
   layer: Layer.mergeAll(
-    TierSelectionService.layer.pipe(Layer.provideMerge(TierMapService.layer)),
+    Layer.merge(TierSelectionService.layer, Checks.layer).pipe(
+      Layer.provideMerge(TierMapService.layer),
+    ),
     adherence,
   ),
   mcp: (register) => register(Mcp.RoutingToolkit, Mcp.handlers),
+  readiness: fromService(Checks.RoutingReadiness),
 } satisfies ServerPlugin<unknown>;

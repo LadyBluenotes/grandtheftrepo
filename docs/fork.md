@@ -36,6 +36,16 @@ A sweep that finds something waiting on a person raises a flag with `Attention.r
 with `Attention.clear` once the cause is gone. Flags live in the host's `attention` table in that
 same file, so any plugin can raise one without depending on the plugin that shows them.
 
+A plugin says what it needs to do its work through `ServerPlugin.readiness`: checks, each `ready`,
+`attention` or `off`, with one sentence and where a person fixes it. `PluginHost.readiness` runs
+every active plugin's checks in the caller's fiber and gives a plugin that does not run one `off`
+check naming its switch, the dependency that is off, or its start error; `plugins.readiness` and
+the `plugins_readiness` MCP tool both answer with it, and the Plugins page shows it above the plugin
+list. A plugin's checks come from one service built in its own layer and read with
+`Readiness.fromService`, because the plugin's database is reachable only there: the caller's
+`SqlClient` is the core one. Checks only read; none installs, starts a model or leaves loopback. See
+[`plugins/Readiness.ts`](../apps/server/src/plugins/Readiness.ts).
+
 ## Upstream seams
 
 These are the only lines upstream files carry for this fork. A merge conflict in one of them is

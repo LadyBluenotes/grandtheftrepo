@@ -25,6 +25,8 @@ import { useEnvironment, usePrimaryEnvironmentId } from "~/state/environments";
 import { useAtomCommand } from "~/state/use-atom-command";
 import { PLUGINS_UNSUPPORTED, pluginBadge } from "./pluginRoute";
 import { PluginEnvironmentContext, pluginSetEnabled, usePluginStatuses } from "./pluginState";
+import { ReadinessChecklist } from "./readiness/Checklist";
+import { pluginRowId, useReadinessChanged } from "./readiness/state";
 import { pluginRegistry } from "./registry";
 
 /**
@@ -88,12 +90,14 @@ function PluginsList() {
   const named = useEnvironment(environmentId === primary ? null : environmentId);
   const setEnabled = useAtomCommand(pluginSetEnabled, { reportFailure: false });
   const canWrite = useAtomValue(pluginSetEnabled.permissionAtom(environmentId));
+  const readinessChanged = useReadinessChanged();
 
   const toggle = async (id: string, enabled: boolean) => {
     if (environmentId === null) return;
     const result = await setEnabled({ environmentId, input: { id, enabled } });
     if (result._tag === "Success") {
       refresh();
+      readinessChanged();
       return;
     }
     if (isAtomCommandInterrupted(result)) return;
@@ -116,6 +120,7 @@ function PluginsList() {
       ) : (
         <ScrollArea className="min-h-0 flex-1">
           <WorkspacePageContainer>
+            <ReadinessChecklist />
             <SettingsSection title="Plugins" hideTitle>
               {statuses.map((status) => {
                 const entry = pluginRegistry.find((candidate) => candidate.id === status.id);
@@ -125,6 +130,7 @@ function PluginsList() {
                 return (
                   <SettingsRow
                     key={status.id}
+                    id={pluginRowId(status.id)}
                     title={title}
                     status={
                       <div className="max-w-full overflow-hidden">

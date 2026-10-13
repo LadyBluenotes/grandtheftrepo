@@ -1,3 +1,4 @@
+import type { ProjectId, ReadinessCheck } from "@t3tools/contracts";
 import type * as Effect from "effect/Effect";
 import type * as Layer from "effect/Layer";
 import type * as SqlClient from "effect/sql/SqlClient";
@@ -44,4 +45,14 @@ export interface ServerPlugin<R = never, RMcp = R> {
   readonly mcp?: (
     register: typeof toolkitRegistration,
   ) => Layer.Layer<never, never, RMcp | SqlClient.SqlClient>;
+  /**
+   * What the plugin needs to do its work, for the checklist on the Plugins page and the
+   * `plugins_readiness` tool. The host calls it only while the plugin runs, in the caller's fiber,
+   * which holds every active plugin's services, so it reads its own with `Effect.serviceOption`
+   * (see `Readiness.fromService`). A check reads and never writes: no model, no install, no network
+   * beyond a loopback probe. With a null project, checks that need one are left out.
+   */
+  readonly readiness?: (
+    projectId: ProjectId | null,
+  ) => Effect.Effect<ReadonlyArray<ReadinessCheck>>;
 }

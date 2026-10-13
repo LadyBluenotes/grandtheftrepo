@@ -14,6 +14,7 @@
 - [Project knowledge](./user/knowledge.md)
 - [Learning](./user/learning.md)
 - [Weekly report](./user/weekly-report.md)
+- [Plugin readiness](./user/readiness.md)
 - [Appearance and themes](./user/appearance.md)
 - [Keyboard shortcuts](./user/keybindings.md)
 - [SnapShots](./user/snap-shot.md)

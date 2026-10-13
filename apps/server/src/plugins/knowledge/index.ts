@@ -3,10 +3,12 @@ import * as Layer from "effect/Layer";
 
 import type { ServerPlugin } from "../Plugin.ts";
 import * as PluginSupervisor from "../PluginSupervisor.ts";
+import { fromService } from "../Readiness.ts";
 import * as DeliverySweep from "./DeliverySweep.ts";
 import * as KnowledgeStore from "./KnowledgeStore.ts";
 import * as Mcp from "./mcp.ts";
 import { migrations } from "./migrations.ts";
+import * as Checks from "./readiness.ts";
 
 // Registering fails only on a second sweep under this plugin's own name, a defect.
 const start = Effect.gen(function* () {
@@ -23,6 +25,9 @@ export const plugin = {
   id: "knowledge",
   dependsOn: [],
   migrations,
-  layer: Layer.effectDiscard(start).pipe(Layer.provideMerge(KnowledgeStore.layer)),
+  layer: Layer.merge(Layer.effectDiscard(start), Checks.layer).pipe(
+    Layer.provideMerge(KnowledgeStore.layer),
+  ),
   mcp: (register) => register(Mcp.KnowledgeToolkit, Mcp.handlers),
+  readiness: fromService(Checks.KnowledgeReadiness),
 } satisfies ServerPlugin<unknown>;

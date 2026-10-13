@@ -124,6 +124,8 @@ export class KanbanStore extends Context.Service<
     /** Archives Done issues older than `ARCHIVE_AFTER` in every loaded project. */
     readonly sweepArchive: Effect.Effect<void>;
     readonly board: (projectId: ProjectId) => Effect.Effect<KanbanBoard, KanbanError>;
+    /** The project's base folder as the board resolves it; unlike `board`, nothing is loaded or created. */
+    readonly directory: (projectId: ProjectId) => Effect.Effect<string, KanbanError>;
     /** The loaded project holding an issue that links `threadId`, if any. No disk or database read. */
     readonly linkedProject: (threadId: ThreadId) => Effect.Effect<ProjectId | undefined>;
   }
@@ -791,6 +793,7 @@ const make = Effect.gen(function* () {
       discard: true,
     }).pipe(Effect.catch((cause) => Effect.logWarning("kanban: archive sweep failed", { cause }))),
     board: (projectId) => Effect.map(load(projectId), board),
+    directory: (projectId) => Effect.map(resolveDirectory(projectId), ({ directory }) => directory),
     linkedProject: (threadId) =>
       Effect.sync(() => {
         for (const [projectId, state] of loaded)
