@@ -81,6 +81,17 @@ export const PolicyVerifyResult = Schema.Struct({
 });
 export type PolicyVerifyResult = typeof PolicyVerifyResult.Type;
 
+/**
+ * What `list` answers for one agent: `verify`'s result, except that an intact block installed from
+ * a version other than the accepted one is `outdated`. `verify` says `ok` there, because the block
+ * is what was installed; the listing is what shows that a newer acceptance has not been delivered.
+ */
+export const PolicyDeliveryStatus = Schema.Struct({
+  ...PolicyVerifyResult.fields,
+  status: Schema.Literals(["ok", "outdated", "drifted", "missing"]),
+});
+export type PolicyDeliveryStatus = typeof PolicyDeliveryStatus.Type;
+
 /** One version of a policy in its latest state; `at` is when it reached that state. */
 export const PolicyVersion = Schema.Struct({
   version: Schema.Int,
@@ -103,7 +114,7 @@ export type PolicyDelivery = typeof PolicyDelivery.Type;
 /**
  * One policy as `list` shows it: the accepted version, else the latest draft, with every version,
  * the last delivery per agent and each agent's file re-read now. `status` is what `verify` would
- * answer, read without marking the delivery verified.
+ * answer, plus `outdated`, read without marking the delivery verified.
  */
 export const PolicyListing = Schema.Struct({
   projectId: ProjectId,
@@ -116,7 +127,7 @@ export const PolicyListing = Schema.Struct({
   /** Earliest first. */
   versions: Schema.Array(PolicyVersion),
   deliveries: Schema.Array(PolicyDelivery),
-  status: Schema.Array(PolicyVerifyResult),
+  status: Schema.Array(PolicyDeliveryStatus),
 });
 export type PolicyListing = typeof PolicyListing.Type;
 

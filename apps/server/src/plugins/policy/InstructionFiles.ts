@@ -17,7 +17,6 @@ import { resolveClaudeHomePath } from "../../provider/Drivers/ClaudeHome.ts";
 import { resolveCodexHomeLayout } from "../../provider/Drivers/CodexHomeLayout.ts";
 import * as ServerConfig from "../../config.ts";
 import * as ServerSettings from "../../serverSettings.ts";
-import { findBlock, type FoundBlock } from "./Render.ts";
 
 const decodeClaudeSettings = Schema.decodeUnknownOption(ClaudeSettings);
 const decodeCodexSettings = Schema.decodeUnknownOption(CodexSettings);
@@ -86,12 +85,3 @@ export const read = Effect.fn("InstructionFiles.read")(function* (filePath: stri
 
 export const write = (filePath: string, contents: string) =>
   writeFileStringAtomically({ filePath, contents });
-
-/** The key's block as the file holds it now; absent when there is no file. */
-export const verify = Effect.fn("InstructionFiles.verify")(function* (
-  filePath: string,
-  id: string,
-) {
-  const text = yield* read(filePath);
-  return text === undefined ? ({ kind: "absent" } satisfies FoundBlock) : findBlock(text, id);
-});

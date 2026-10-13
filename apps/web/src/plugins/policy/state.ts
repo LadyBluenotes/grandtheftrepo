@@ -10,10 +10,10 @@ import {
   type PolicyAgent,
   type PolicyAgentsInput,
   type PolicyCreateInput,
+  type PolicyDeliveryStatus,
   type PolicyInstallResult,
   type PolicyListing,
   type PolicyState,
-  type PolicyVerifyResult,
   type PolicyVersion,
   type PolicyVersionRef,
   type ProjectId,
@@ -131,10 +131,11 @@ export const STATE_BADGE: Record<
 };
 
 export const DELIVERY_BADGE: Record<
-  PolicyVerifyResult["status"],
+  PolicyDeliveryStatus["status"],
   { readonly label: string; readonly variant: "success" | "warning" | "error" }
 > = {
   ok: { label: "OK", variant: "success" },
+  outdated: { label: "Outdated", variant: "warning" },
   drifted: { label: "Drifted", variant: "warning" },
   missing: { label: "Missing", variant: "error" },
 };

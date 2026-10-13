@@ -44,6 +44,9 @@ export function PolicyScreen() {
   const [creating, setCreating] = useState(false);
   const list = usePolicyList(scope);
   const { canWrite } = usePolicyCommands();
+  // A failed re-read keeps the last data in `list.data`, so the error is checked first and the
+  // screen never shows statuses that could not be re-read.
+  const loaded = list.error === null && list.data !== null;
   const policies = useMemo(() => scopePolicies(list.data ?? [], scope), [list.data, scope]);
   const selected = policies.find((policy) => policy.key === selectedKey) ?? null;
   const scopeLabel =
@@ -98,7 +101,7 @@ export function PolicyScreen() {
             <Button
               size="sm"
               variant="outline"
-              disabled={!canWrite || list.data === null}
+              disabled={!canWrite || !loaded}
               onClick={() => {
                 setSelectedKey(null);
                 setCreating(true);
@@ -109,11 +112,9 @@ export function PolicyScreen() {
             </Button>
           </div>
         </WorkspacePageHeader>
-        {list.data === null ? (
-          list.error === null ? null : (
-            <PluginNotice>{list.error}</PluginNotice>
-          )
-        ) : (
+        {list.error !== null ? (
+          <PluginNotice>{list.error}</PluginNotice>
+        ) : list.data === null ? null : (
           <ScrollArea className="min-h-0 flex-1">
             <WorkspacePageContainer width="wide">
               {policies.length === 0 && !creating ? (
@@ -138,7 +139,8 @@ export function PolicyScreen() {
               ) : selected === null ? null : (
                 <>
                   <PolicyEditor
-                    key={`${scope}/${selected.key}`}
+                    // The form starts from the body on show, so a new version on show remounts it.
+                    key={`${scope}/${selected.key}/${selected.version}`}
                     scope={scope}
                     policy={selected}
                     onChanged={list.refresh}

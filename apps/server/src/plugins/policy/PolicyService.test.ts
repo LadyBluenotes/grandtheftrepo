@@ -45,6 +45,23 @@ const layerDatabase = Layer.effect(
   ),
 );
 
+/** Every path a text read asked for, so a test can count how often a file is read. */
+const reads: Array<string> = [];
+
+const layerCountedReads = Layer.effect(
+  FileSystem.FileSystem,
+  Effect.map(FileSystem.FileSystem, (fs) =>
+    FileSystem.FileSystem.of({
+      ...fs,
+      readFileString: (filePath, encoding) =>
+        Effect.suspend(() => {
+          reads.push(filePath);
+          return fs.readFileString(filePath, encoding);
+        }),
+    }),
+  ),
+);
+
 const layerTest = PolicyService.layer.pipe(
   Layer.provideMerge(layerDatabase),
   Layer.provideMerge(
@@ -63,6 +80,7 @@ const layerTest = PolicyService.layer.pipe(
   Layer.provideMerge(
     Layer.fresh(ServerConfig.layerTest(process.cwd(), { prefix: "t3code-policy-test-" })),
   ),
+  Layer.provideMerge(layerCountedReads),
   Layer.provideMerge(NodeServices.layer),
 );
 
@@ -481,6 +499,86 @@ it.layer(layerTest)("PolicyService", (it) => {
         [],
       );
       yield* fs.remove(rulesPath);
+    }),
+  );
+
+  it.effect("list reads each instruction file once however many policies it holds", () =>
+    Effect.gen(function* () {
+      const policies = yield* PolicyService.PolicyService;
+      const path = yield* Path.Path;
+      const home = yield* HostProcess.HomeDirectory;
+      const claudeFile = path.join(home, "claude-config", "CLAUDE.md");
+      const codexFile = path.join(home, ".codex", "AGENTS.md");
+      const local = ProjectId.make("project-reads");
+      const keys = ["alpha", "beta", "gamma"];
+      for (const key of keys) {
+        yield* policies.create({ projectId: local, key, title: key, body: `Reads ${key}.` });
+        yield* policies.accept({ projectId: local, key, version: 1 });
+        yield* policies.install({ projectId: local, key, agents: ["claude", "codex"] });
+      }
+
+      reads.length = 0;
+      const listed = yield* policies.list(local);
+
+      assert.strictEqual(reads.filter((file) => file === claudeFile).length, 1);
+      assert.strictEqual(reads.filter((file) => file === codexFile).length, 1);
+      for (const key of keys) {
+        assert.deepStrictEqual(
+          listed
+            .find((policy) => policy.key === key)
+            ?.status.map((agent) => [agent.agent, agent.status]),
+          [
+            ["claude", "ok"],
+            ["codex", "ok"],
+            ["copilot", "missing"],
+          ],
+        );
+      }
+    }),
+  );
+
+  it.effect("a delivery of another version than the accepted one lists as outdated", () =>
+    Effect.gen(function* () {
+      const policies = yield* PolicyService.PolicyService;
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const home = yield* HostProcess.HomeDirectory;
+      const codexFile = path.join(home, ".codex", "AGENTS.md");
+      const local = ProjectId.make("project-outdated");
+      const key = "stale";
+      const codexStatus = Effect.map(
+        policies.list(local),
+        (listed) =>
+          listed
+            .find((policy) => policy.key === key)
+            ?.status.find((agent) => agent.agent === "codex")?.status,
+      );
+
+      yield* policies.create({ projectId: local, key, title: "Stale", body: "Outdated one." });
+      yield* policies.accept({ projectId: local, key, version: 1 });
+      yield* policies.install({ projectId: local, key, agents: ["codex"] });
+      assert.strictEqual(yield* codexStatus, "ok");
+
+      // Version 2 is accepted but not delivered: the file still holds version 1, intact.
+      yield* policies.create({ projectId: local, key, title: "Stale", body: "Outdated two." });
+      yield* policies.accept({ projectId: local, key, version: 2 });
+      assert.strictEqual(yield* codexStatus, "outdated");
+      // verify still answers whether the block is what was installed.
+      assert.strictEqual(
+        (yield* policies.verify({ projectId: local, key, agents: ["codex"] }))[0]?.status,
+        "ok",
+      );
+
+      // A hand edit is reported over the older version.
+      const text = yield* fs.readFileString(codexFile);
+      yield* fs.writeFileString(codexFile, text.replace("Outdated one.", "Edited by hand."));
+      assert.strictEqual(yield* codexStatus, "drifted");
+
+      yield* policies.install({ projectId: local, key, agents: ["codex"] });
+      assert.strictEqual(yield* codexStatus, "ok");
+      // Restoring version 1 leaves version 2 in the file, which is not the accepted one either.
+      yield* policies.accept({ projectId: local, key, version: 1 });
+      assert.strictEqual(yield* codexStatus, "outdated");
     }),
   );
 });

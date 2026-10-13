@@ -7,6 +7,7 @@ import {
   type PolicyAgent,
   type PolicyAgentsInput,
   type PolicyCreateInput,
+  type PolicyDeliveryStatus,
   type PolicyInstallResult,
   type PolicyListing,
   type PolicyState,
@@ -78,8 +79,10 @@ export class PolicyService extends Context.Service<
     ) => Effect.Effect<ReadonlyArray<PolicyVerifyResult>, PolicyError>;
     /**
      * The project's policies and the environment-wide ones, each with its versions and every
-     * agent's file re-read now. Unlike `verify` it marks nothing verified and takes no lock, so a
-     * read during an install can show a block as drifted until the next one.
+     * agent's file re-read now, each file once however many policies it holds. Unlike `verify` it
+     * marks nothing verified and takes no lock, so a read during an install can show a block as
+     * drifted until the next one. It also tells an intact block of an older version from a current
+     * one (`outdated`), which `verify` does not.
      */
     readonly list: (
       projectId: ProjectId,
@@ -287,15 +290,20 @@ const make = Effect.gen(function* () {
     }),
   );
 
-  /** One agent's delivery against its file now; an agent never delivered to is missing. */
-  const inspect = Effect.fn("PolicyService.inspect")(function* (input: {
+  /**
+   * One agent's delivery against the text of the file it went into; an agent never delivered to is
+   * missing. `text` is that file's contents, undefined when there is no such file, so a caller
+   * checking many blocks reads each file once.
+   */
+  const inspect = (input: {
     readonly id: string;
     readonly rulesHash: string;
     readonly agent: PolicyAgent;
     readonly targetPath: string;
     readonly delivery: DeliveryRow | undefined;
-  }) {
-    const { agent, delivery } = input;
+    readonly text: string | undefined;
+  }) => {
+    const { agent, delivery, text } = input;
     if (delivery === undefined) {
       return {
         agent,
@@ -305,7 +313,7 @@ const make = Effect.gen(function* () {
         rulesCurrent: false,
       } satisfies PolicyVerifyResult;
     }
-    const found = yield* Files.verify(delivery.target_path, input.id);
+    const found = text === undefined ? ({ kind: "absent" } as const) : findBlock(text, input.id);
     const blockMatches = found.kind === "found" && found.hash === delivery.rendered_hash;
     return {
       agent,
@@ -314,7 +322,7 @@ const make = Effect.gen(function* () {
       blockMatches,
       rulesCurrent: delivery.rules_hash === input.rulesHash,
     } satisfies PolicyVerifyResult;
-  });
+  };
 
   const verify = Effect.fn("PolicyService.verify")(
     function* ({ projectId, key, agents = POLICY_AGENTS }: PolicyAgentsInput) {
@@ -329,12 +337,14 @@ const make = Effect.gen(function* () {
       const at = yield* nowIso;
       const results: Array<PolicyVerifyResult> = [];
       for (const agent of agents) {
-        const result = yield* inspect({
+        const delivery = deliveries.get(agent);
+        const result = inspect({
           id,
           rulesHash,
           agent,
           targetPath: targets[agent],
-          delivery: deliveries.get(agent),
+          delivery,
+          text: delivery === undefined ? undefined : yield* Files.read(delivery.target_path),
         });
         if (result.blockMatches) {
           yield* sql`
@@ -375,6 +385,12 @@ const make = Effect.gen(function* () {
       `;
       const targets = yield* Files.targets();
       const rulesHash = sha256(yield* readRules);
+      // An instruction file holds every policy's block, so each file the deliveries went into is
+      // read once here and every block is found in that text.
+      const texts = new Map<string, string | undefined>();
+      for (const filePath of new Set(deliveries.map((row) => row.target_path))) {
+        texts.set(filePath, yield* Files.read(filePath));
+      }
       const listings: Array<PolicyListing> = [];
       for (const policy of policies) {
         const own = (row: { readonly project_id: ProjectId; readonly key: string }) =>
@@ -383,16 +399,25 @@ const make = Effect.gen(function* () {
         const byVersion = new Map(versions.filter(own).map((row) => [row.version, row]));
         const delivered = deliveries.filter(own);
         const id = blockId(policy.project_id, policy.key);
-        const status: Array<PolicyVerifyResult> = [];
+        const status: Array<PolicyDeliveryStatus> = [];
         for (const agent of POLICY_AGENTS) {
+          const delivery = delivered.find((row) => row.agent === agent);
+          const result = inspect({
+            id,
+            rulesHash,
+            agent,
+            targetPath: targets[agent],
+            delivery,
+            text: delivery === undefined ? undefined : texts.get(delivery.target_path),
+          });
+          // An intact block still hashes as installed after a newer version is accepted, so `ok`
+          // alone would hide that the file holds another version than the accepted one.
           status.push(
-            yield* inspect({
-              id,
-              rulesHash,
-              agent,
-              targetPath: targets[agent],
-              delivery: delivered.find((row) => row.agent === agent),
-            }),
+            result.status === "ok" &&
+              policy.state === "accepted" &&
+              delivery?.version !== policy.version
+              ? { ...result, status: "outdated" }
+              : result,
           );
         }
         listings.push({
