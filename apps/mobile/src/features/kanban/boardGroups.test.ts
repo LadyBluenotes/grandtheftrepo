@@ -170,13 +170,14 @@ describe("boardGroups", () => {
       title: "Ticket t",
       labels: ["2 of 5 open", "#42", "Snoozed"],
       threadId: "thread-a",
+      wakesAt: "2026-10-14T09:00:00.000Z",
     });
   });
 
   it("opens and describes the most recently linked thread this client has", () => {
     const threads = new Map<string, BoardThread>([
-      ["old", { snoozed: true, pullRequestNumber: 7 }],
-      ["new", { snoozed: false, pullRequestNumber: 9 }],
+      ["old", { snoozedUntil: "2026-10-20T00:00:00.000Z", pullRequestNumber: 7 }],
+      ["new", { snoozedUntil: null, pullRequestNumber: 9 }],
     ]);
     const [group] = boardGroups(
       board([
@@ -200,13 +201,13 @@ describe("boardGroups", () => {
 
 describe("boardThread", () => {
   it("is snoozed only while the wake time is ahead", () => {
-    const snoozed = (snoozedUntil: string) =>
+    const snoozedUntil = (wakeAt: string) =>
       boardThread(
-        makeThreadShellFixture({ snoozedUntil, snoozedAt: "2026-10-13T09:00:00.000Z" }),
+        makeThreadShellFixture({ snoozedUntil: wakeAt, snoozedAt: "2026-10-13T09:00:00.000Z" }),
         NOW,
-      ).snoozed;
-    expect(snoozed("2026-10-14T09:00:00.000Z")).toBe(true);
-    expect(snoozed("2026-10-13T10:00:00.000Z")).toBe(false);
+      ).snoozedUntil;
+    expect(snoozedUntil("2026-10-14T09:00:00.000Z")).toBe("2026-10-14T09:00:00.000Z");
+    expect(snoozedUntil("2026-10-13T10:00:00.000Z")).toBeNull();
   });
 
   it("names the open pull request over a merged one, and has none without a link", () => {
@@ -250,6 +251,64 @@ describe("boardState", () => {
   it("lists the groups once the board has tickets", () => {
     const state = boardState({ ...idle, active: true, board: board([issue("a", "todo")]) });
     expect(state.kind === "groups" && state.groups.map((group) => group.status)).toEqual(["todo"]);
+  });
+
+  it("names the earliest end of a Snoozed label the board shows", () => {
+    const wakes = new Map<string, string | null>([
+      ["later", "2026-10-16T09:00:00.000Z"],
+      ["sooner", "2026-10-14T09:00:00.000Z"],
+      // Older than "awake", so no label shows for it and its wake time does not count.
+      ["hidden", "2026-10-13T13:00:00.000Z"],
+      ["awake", null],
+    ]);
+    const state = boardState({
+      ...idle,
+      active: true,
+      board: board([
+        issue("a", "todo", { threads: [link("later", "2026-10-10T00:00:00.000Z")] }),
+        issue("b", "todo", { threads: [link("sooner", "2026-10-10T00:00:00.000Z")] }),
+        issue("c", "todo", {
+          threads: [
+            link("hidden", "2026-10-09T00:00:00.000Z"),
+            link("awake", "2026-10-11T00:00:00.000Z"),
+          ],
+        }),
+      ]),
+      threadOf: (id) => {
+        const snoozedUntil = wakes.get(id);
+        return snoozedUntil === undefined ? undefined : { snoozedUntil, pullRequestNumber: null };
+      },
+    });
+    expect(state.kind === "groups" && state.nextWakeAt).toBe("2026-10-14T09:00:00.000Z");
+  });
+
+  it("has no wake to wait for when nothing shows Snoozed", () => {
+    const state = boardState({ ...idle, active: true, board: board([issue("a", "todo")]) });
+    expect(state.kind === "groups" && state.nextWakeAt).toBeNull();
+  });
+
+  it("drops Snoozed when the screen computes the same board again after the wake time", () => {
+    const shell = makeThreadShellFixture({
+      id: ThreadId.make("thread-a"),
+      snoozedUntil: "2026-10-13T12:30:00.000Z",
+      snoozedAt: "2026-10-13T09:00:00.000Z",
+    });
+    const tickets = board([
+      issue("t", "todo", { threads: [link("thread-a", "2026-10-10T00:00:00.000Z")] }),
+    ]);
+    const at = (now: string) => {
+      const state = boardState({
+        ...idle,
+        active: true,
+        board: tickets,
+        threadOf: (id) => (id === shell.id ? boardThread(shell, now) : undefined),
+      });
+      return state.kind === "groups"
+        ? { labels: state.groups[0]?.rows[0]?.labels, nextWakeAt: state.nextWakeAt }
+        : null;
+    };
+    expect(at(NOW)).toEqual({ labels: ["Snoozed"], nextWakeAt: "2026-10-13T12:30:00.000Z" });
+    expect(at("2026-10-13T12:30:00.050Z")).toEqual({ labels: [], nextWakeAt: null });
   });
 
   it("hides the entry and says so when the server does not run the plugin", () => {

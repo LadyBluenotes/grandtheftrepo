@@ -17,6 +17,7 @@ import { useAdaptiveWorkspaceLayout } from "../layout/AdaptiveWorkspaceLayout";
 import { SettingsScreenContent } from "../settings/components/SettingsScreen";
 import { boardState, boardThread, type BoardRow, type BoardState } from "./boardGroups";
 import { kanbanActive, kanbanBoard } from "./state";
+import { useSnoozeWake } from "./useSnoozeWake";
 
 type ListItem =
   | {
@@ -80,6 +81,8 @@ function BoardList(props: {
     active === true ? kanbanBoard({ environmentId, input: { projectId } }) : null,
   );
   const shells = useThreadShells();
+  // A snooze ending emits no event, so the rows are computed again when the earliest one does.
+  const [snoozeWakeTick, setSnoozeWakeTick] = useState(0);
   const threads = useMemo(() => {
     const now = new Date().toISOString();
     const byId = new Map<ThreadId, EnvironmentThreadShell>();
@@ -93,10 +96,15 @@ function BoardList(props: {
         return shell === undefined ? undefined : boardThread(shell, now);
       },
     };
-  }, [environmentId, shells]);
+  }, [environmentId, shells, snoozeWakeTick]);
   const state = useMemo(
     () => boardState({ active, board: board.data, error: board.error, threadOf: threads.threadOf }),
     [active, board.data, board.error, threads],
+  );
+  useSnoozeWake(
+    state.kind === "groups" ? state.nextWakeAt : null,
+    snoozeWakeTick,
+    setSnoozeWakeTick,
   );
   const items = useMemo(() => listItems(state), [state]);
 

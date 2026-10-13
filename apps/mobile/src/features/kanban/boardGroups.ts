@@ -24,13 +24,14 @@ const STATUS_LABEL: Record<KanbanStatus, string> = {
 
 /** What a ticket's thread adds to its row. */
 export interface BoardThread {
-  readonly snoozed: boolean;
+  /** When the snooze ends; null unless the thread is snoozed at the time asked. */
+  readonly snoozedUntil: string | null;
   readonly pullRequestNumber: number | null;
 }
 
 export function boardThread(shell: EnvironmentThreadShell, now: string): BoardThread {
   return {
-    snoozed: effectiveSnoozed(shell, { now }),
+    snoozedUntil: effectiveSnoozed(shell, { now }) ? (shell.snoozedUntil ?? null) : null,
     pullRequestNumber:
       resolveThreadCurrentPullRequestLink(shell.pullRequests ?? [])?.number ?? null,
   };
@@ -46,6 +47,8 @@ export interface BoardRow {
   readonly labels: ReadonlyArray<string>;
   /** The thread a tap opens; null when the ticket has none this client knows. */
   readonly threadId: ThreadId | null;
+  /** When the "Snoozed" label should go, so the screen can redraw then; null when not snoozed. */
+  readonly wakesAt: string | null;
 }
 
 interface BoardGroup {
@@ -59,7 +62,12 @@ export type BoardState =
   | { readonly kind: "loading" }
   | { readonly kind: "failed"; readonly message: string }
   | { readonly kind: "empty"; readonly message: string }
-  | { readonly kind: "groups"; readonly groups: ReadonlyArray<BoardGroup> };
+  | {
+      readonly kind: "groups";
+      readonly groups: ReadonlyArray<BoardGroup>;
+      /** The earliest moment a "Snoozed" label ends. A snooze expiring emits no event. */
+      readonly nextWakeAt: string | null;
+    };
 
 /** The Board entry shows only where the plugin runs; unknown counts as not yet. */
 export function boardEntryVisible(active: boolean | null): boolean {
@@ -104,9 +112,10 @@ function boardRow(
         ? []
         : [`${issue.criteriaOpen} of ${issue.criteriaTotal} open`]),
       ...(pullRequestNumber === null ? [] : [`#${pullRequestNumber}`]),
-      ...(thread?.info.snoozed === true ? ["Snoozed"] : []),
+      ...(thread?.info.snoozedUntil == null ? [] : ["Snoozed"]),
     ],
     threadId: thread?.id ?? null,
+    wakesAt: thread?.info.snoozedUntil ?? null,
   };
 }
 
@@ -128,6 +137,21 @@ export function boardGroups(
   });
 }
 
+function earliestWake(groups: ReadonlyArray<BoardGroup>): string | null {
+  let earliest: string | null = null;
+  for (const group of groups) {
+    for (const row of group.rows) {
+      if (
+        row.wakesAt !== null &&
+        (earliest === null || Date.parse(row.wakesAt) < Date.parse(earliest))
+      ) {
+        earliest = row.wakesAt;
+      }
+    }
+  }
+  return earliest;
+}
+
 export function boardState(input: {
   /** From `plugins.list`; null while it is unknown. */
   readonly active: boolean | null;
@@ -142,7 +166,7 @@ export function boardState(input: {
     const groups = boardGroups(input.board, input.threadOf);
     return groups.length === 0
       ? { kind: "empty", message: BOARD_EMPTY_MESSAGE }
-      : { kind: "groups", groups };
+      : { kind: "groups", groups, nextWakeAt: earliestWake(groups) };
   }
   return input.error === null ? { kind: "loading" } : { kind: "failed", message: input.error };
 }
