@@ -83,6 +83,19 @@ interface Component {
   readonly action: Pages.CatchUp;
 }
 
+/**
+ * One recorded delivery against the hash its install recorded. `removed` is a file, or an index
+ * block, that is gone; `edited` one that holds something else, a damaged block included.
+ */
+export interface KnowledgeDrift {
+  /** The delivery row's `agent`: `page:<key>`, or the agent whose index block it is. */
+  readonly id: string;
+  /** The page's key; undefined for an agent's index block. */
+  readonly page: string | undefined;
+  readonly path: string;
+  readonly status: "ok" | "edited" | "removed";
+}
+
 export class KnowledgeStore extends Context.Service<
   KnowledgeStore,
   {
@@ -122,6 +135,15 @@ export class KnowledgeStore extends Context.Service<
     readonly verify: (
       input: KnowledgeProjectInput,
     ) => Effect.Effect<ReadonlyArray<KnowledgeVerifyResult>, KnowledgeError>;
+    /**
+     * Each delivery an install keeps current, a page file or an index block of an agent in use,
+     * against the hash that install recorded, so a file still waiting for the sweep to catch up is
+     * intact and only a file changed outside T3 Code is not. Nothing is written or marked verified.
+     * A page that was never delivered has no entry.
+     */
+    readonly drift: (
+      projectId: ProjectId,
+    ) => Effect.Effect<ReadonlyArray<KnowledgeDrift>, KnowledgeError>;
     /**
      * Whether the sweep has something to catch up on: a page file or an agent's index block whose
      * delivery is not what the accepted pages render to now, and that still holds what was
@@ -460,6 +482,54 @@ const make = Effect.gen(function* () {
     }),
   );
 
+  const drift = Effect.fn("KnowledgeStore.drift")(
+    function* (projectId: ProjectId) {
+      const plan = yield* planOf(projectId);
+      const delivered = yield* deliveriesOf(projectId);
+      const results: Array<KnowledgeDrift> = [];
+      for (const page of plan.rendered.pages) {
+        const row = delivered.get(pageDelivery(page.key));
+        if (row === undefined) continue;
+        const current = fileHash(yield* Blocks.read(row.path));
+        results.push({
+          id: row.agent,
+          page: page.key,
+          path: row.path,
+          status: current === undefined ? "removed" : current === row.hash ? "ok" : "edited",
+        });
+      }
+      for (const { agent } of plan.agents) {
+        const row = delivered.get(agent);
+        if (row === undefined) continue;
+        const text = yield* Blocks.read(row.path);
+        const found: Blocks.FoundBlock =
+          text === undefined ? { kind: "absent" } : Blocks.findBlock(text, Pages.INDEX_MARKERS);
+        results.push({
+          id: row.agent,
+          page: undefined,
+          path: row.path,
+          status:
+            found.kind === "found" && found.hash === row.hash
+              ? "ok"
+              : found.kind === "absent"
+                ? "removed"
+                : "edited",
+        });
+      }
+      return results;
+    },
+    // Under the install lock, so a read never lands between an install's write and its record.
+    installLock.withPermits(1),
+    provided,
+    Effect.catchTags({
+      SqlError: io("Could not read the deliveries."),
+      SchemaError: io("Could not read the pages."),
+      PlatformError: io("Could not read the project's knowledge files."),
+      ServerSettingsError: io("Could not read the server settings."),
+      ProjectOperationError: io("Could not read the project."),
+    }),
+  );
+
   /** Every component of the project, with the sweep's decision for each. */
   const componentsOf = Effect.fn("KnowledgeStore.componentsOf")(function* (projectId: ProjectId) {
     const plan = yield* planOf(projectId);
@@ -688,6 +758,7 @@ const make = Effect.gen(function* () {
     discard,
     install,
     verify,
+    drift,
     outdated,
     catchUp,
   });
