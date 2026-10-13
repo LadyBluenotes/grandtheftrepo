@@ -192,53 +192,158 @@ it.effect("keeps one row per run with its latest state, and a replay adds nothin
   ).pipe(Effect.provide(layerSink)),
 );
 
-it.effect("keeps one row per tool call with its path, skipping other items and runless ones", () =>
+it.effect("keeps one row per tool call with its path and time, runless ones too", () =>
   Effect.scoped(
     Effect.gen(function* () {
       const { sql, drain } = yield* react;
+      const later = DateTime.makeUnsafe("2026-10-03T00:00:00.000Z");
       const items = [
         Fixtures.itemEvent(Fixtures.readItem),
         Fixtures.itemEvent(Fixtures.editItem),
+        // A provider's subagent makes calls that belong to no run.
         Fixtures.itemEvent({
           ...Fixtures.readItem,
           id: TurnItemId.make("item:runless"),
           runId: null,
         }),
+        // An item that never started is placed by when it last changed.
+        Fixtures.itemEvent({
+          ...Fixtures.readItem,
+          id: TurnItemId.make("item:unstarted"),
+          runId: null,
+          startedAt: null,
+          updatedAt: later,
+        }),
         Fixtures.itemEvent(Fixtures.noticeItem),
       ];
       yield* write(items);
       yield* drain;
+      const row = (
+        id: string,
+        fields: {
+          readonly run_id: string | null;
+          readonly ordinal: number;
+          readonly item_type: string;
+          readonly tool_name: string | null;
+          readonly output_tokens: number | null;
+          readonly item_at: string;
+          readonly event_sequence: number;
+        },
+      ) => ({
+        item_id: id,
+        thread_id: Fixtures.threadId,
+        path: "src/a.ts",
+        command: null,
+        status: "failed",
+        ...fields,
+      });
+      const at = DateTime.formatIso(Fixtures.at);
       const expected = (readSequence: number, editSequence: number) => [
-        {
-          item_id: "item:edit",
+        row("item:edit", {
           run_id: Fixtures.runId,
-          thread_id: Fixtures.threadId,
           ordinal: 2,
           item_type: "file_change",
           tool_name: null,
-          path: "src/a.ts",
-          status: "failed",
+          output_tokens: null,
+          item_at: at,
           event_sequence: editSequence,
-        },
-        {
-          item_id: "item:read",
+        }),
+        row("item:read", {
           run_id: Fixtures.runId,
-          thread_id: Fixtures.threadId,
           ordinal: 1,
           item_type: "dynamic_tool",
           tool_name: "Read",
-          path: "src/a.ts",
-          status: "failed",
+          output_tokens: 0,
+          item_at: at,
           event_sequence: readSequence,
-        },
+        }),
+        row("item:runless", {
+          run_id: null,
+          ordinal: 3,
+          item_type: "dynamic_tool",
+          tool_name: "Read",
+          output_tokens: 0,
+          item_at: at,
+          event_sequence: 3,
+        }),
+        row("item:unstarted", {
+          run_id: null,
+          ordinal: 4,
+          item_type: "dynamic_tool",
+          tool_name: "Read",
+          output_tokens: 0,
+          item_at: DateTime.formatIso(later),
+          event_sequence: 4,
+        }),
       ];
       // The sink renumbers item ordinals into positions in the thread, keeping their order.
-      const rows = sql`SELECT * FROM telemetry_tool_calls ORDER BY item_id`;
+      const rows = sql`SELECT item_id, run_id, thread_id, ordinal, item_type, tool_name, path,
+        command, output_tokens, item_at, status, event_sequence
+        FROM telemetry_tool_calls ORDER BY item_id`;
       assert.deepEqual(yield* rows, expected(1, 2));
 
       yield* write([Fixtures.itemEvent(Fixtures.readItem), Fixtures.itemEvent(Fixtures.editItem)]);
       yield* drain;
-      assert.deepEqual(yield* rows, expected(5, 6));
+      assert.deepEqual(yield* rows, expected(6, 7));
+    }),
+  ).pipe(Effect.provide(layerSink)),
+);
+
+it.effect("sizes each tool call's output by its item type and keeps a command's head", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const { sql, drain } = yield* react;
+      const longCommand = `git log ${"x".repeat(600)}`;
+      yield* write(
+        [
+          Fixtures.readItem,
+          Fixtures.editItem,
+          Fixtures.commandItem,
+          {
+            ...Fixtures.commandItem,
+            id: TurnItemId.make("item:command-long"),
+            input: longCommand,
+            output: "y".repeat(4001),
+          },
+          Fixtures.mcpItem,
+          Fixtures.fileSearchItem,
+          Fixtures.webSearchItem,
+        ].map(Fixtures.itemEvent),
+      );
+      yield* drain;
+      const rows = yield* sql<{
+        readonly item_id: string;
+        readonly command: string | null;
+        readonly output_tokens: number | null;
+      }>`SELECT item_id, command, output_tokens FROM telemetry_tool_calls ORDER BY item_id`;
+      // Characters over four, rounded up: a string as it is, anything else as its JSON. An item
+      // with nothing to size is NULL; one that returned nothing is 0.
+      assert.deepEqual(
+        rows.map((row) => [row.item_id, row.output_tokens]),
+        [
+          ["item:command", 14],
+          ["item:command-long", 1001],
+          ["item:edit", null],
+          ["item:file-search", 20],
+          ["item:mcp", 18],
+          ["item:read", 0],
+          ["item:web-search", 23],
+        ],
+      );
+      // Only a command keeps its command line, cut to the head that names the program.
+      assert.deepEqual(
+        rows.map((row) => [row.item_id, row.command?.length ?? null]),
+        [
+          ["item:command", Fixtures.commandItem.input.length],
+          ["item:command-long", 512],
+          ["item:edit", null],
+          ["item:file-search", null],
+          ["item:mcp", null],
+          ["item:read", null],
+          ["item:web-search", null],
+        ],
+      );
+      assert.strictEqual(rows[1]?.command, longCommand.slice(0, 512));
     }),
   ).pipe(Effect.provide(layerSink)),
 );
@@ -652,6 +757,87 @@ it.effect(
             min_sample: 20,
             enabled: 1,
           })),
+        );
+      }),
+    ).pipe(Effect.provide(layerSink)),
+);
+
+it.effect(
+  "upgrading to migration 4 keeps the tool calls, adds the new columns, and replays the calls skipped for want of a run",
+  () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { sql } = yield* PluginDatabase.open({
+          id: "telemetry",
+          filename: ":memory:",
+          migrations: migrations.slice(0, 3),
+        });
+        const runless = {
+          ...Fixtures.mcpItem,
+          id: TurnItemId.make("item:runless"),
+          runId: null,
+        };
+        yield* write([Fixtures.itemEvent(Fixtures.commandItem), Fixtures.itemEvent(runless)]);
+        // The reactor before the upgrade had handled both and kept only the call with a run,
+        // without a size.
+        yield* Effect.scoped(
+          Effect.flatMap(
+            PluginReactor.start({ plugin: "telemetry", from: "now", handlers: {} }),
+            (reactor) => reactor.drain,
+          ).pipe(Effect.provideService(SqlClient.SqlClient, sql)),
+        );
+        yield* sql`INSERT INTO telemetry_tool_calls
+        (item_id, run_id, thread_id, ordinal, item_type, tool_name, path, status, event_sequence)
+        VALUES ('item:command', ${Fixtures.runId}, ${Fixtures.threadId}, 1, 'command_execution',
+          NULL, NULL, 'failed', 1)`;
+        const [, , upgrade] = migrations[3]!;
+        yield* upgrade.pipe(Effect.provideService(SqlClient.SqlClient, sql));
+        const calls = sql`SELECT item_id, run_id, command, output_tokens, item_at
+          FROM telemetry_tool_calls ORDER BY item_id`;
+        // The row survives as it was; what the new columns hold waits for the replay.
+        assert.deepEqual(yield* calls, [
+          {
+            item_id: "item:command",
+            run_id: Fixtures.runId,
+            command: null,
+            output_tokens: null,
+            item_at: null,
+          },
+        ]);
+        assert.strictEqual(
+          (yield* sql`SELECT name FROM sqlite_master WHERE type = 'index'
+            AND tbl_name = 'telemetry_tool_calls' AND name = 'telemetry_tool_calls_thread'`).length,
+          1,
+        );
+
+        yield* startReactor(sql, Reactor.handlers);
+        const at = DateTime.formatIso(Fixtures.at);
+        assert.deepEqual(yield* calls, [
+          {
+            item_id: "item:command",
+            run_id: Fixtures.runId,
+            command: Fixtures.commandItem.input,
+            output_tokens: 14,
+            item_at: at,
+          },
+          // The call with no run is stored now, with the time that places it.
+          { item_id: "item:runless", run_id: null, command: null, output_tokens: 18, item_at: at },
+        ]);
+        // The measure reads no tier, so the one budget on `standard` judges every run.
+        assert.deepEqual(
+          yield* sql`SELECT measure, tier, threshold, direction, project_id, min_sample, enabled
+          FROM budgets WHERE measure = 'tool_output_max_per_call'`,
+          [
+            {
+              measure: "tool_output_max_per_call",
+              tier: "standard",
+              threshold: 8000,
+              direction: "lower_is_better",
+              project_id: null,
+              min_sample: 20,
+              enabled: 1,
+            },
+          ],
         );
       }),
     ).pipe(Effect.provide(layerSink)),

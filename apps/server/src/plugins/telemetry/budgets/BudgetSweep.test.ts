@@ -14,12 +14,19 @@ import * as Layer from "effect/Layer";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as TestClock from "effect/testing/TestClock";
 
+import * as ThreadManagementService from "../../../orchestration-v2/ThreadManagementService.ts";
 import * as ProjectService from "../../../project/ProjectService.ts";
 import * as Attention from "../../Attention.ts";
 import * as HostDatabase from "../../HostDatabase.ts";
+import { thread as threadShell } from "../../kanban/writerFixtures.ts";
 import * as PluginDatabase from "../../PluginDatabase.ts";
 import * as TierMapService from "../../routing/TierMapService.ts";
+import * as Fixtures from "../eventFixtures.ts";
+import { input as measureInput, returned, run as measureRun } from "../measures/fixtures.ts";
+import type { ToolCallRow } from "../measures/input.ts";
+import { toolOutputMaxPerCall } from "../measures/toolOutput.ts";
 import { migrations } from "../migrations.ts";
+import { outputTokens } from "../outputTokens.ts";
 import * as BudgetStore from "./BudgetStore.ts";
 import * as BudgetSweep from "./BudgetSweep.ts";
 
@@ -58,6 +65,8 @@ const measure = (name: string, value: number | null, sampleSize: number): Teleme
  * otherwise, next to another measure that always answers, and fails for projects in `failing`.
  * `state.during` runs inside each measure request, as a save could while the sweep waits on one;
  * `state.standard`, when set, is what a running routing plugin resolves the standard tier to.
+ * `tools` sets the tool calls of the window starting on a date, which the real
+ * `tool_output_max_per_call` measures when a request names no tier; `titles` names threads.
  */
 const setup = (projects: ReadonlyArray<ProjectId> = [projectA]) =>
   Effect.gen(function* () {
@@ -73,6 +82,8 @@ const setup = (projects: ReadonlyArray<ProjectId> = [projectA]) =>
       migrations: HostDatabase.migrations,
     });
     const answers = new Map<string, TelemetryMeasure>();
+    const toolCalls = new Map<string, ReadonlyArray<ToolCallRow>>();
+    const threadTitles = new Map<string, string>();
     const requests: Array<TelemetryMeasuresInput> = [];
     const failing = new Set<ProjectId>();
     const state: {
@@ -87,6 +98,13 @@ const setup = (projects: ReadonlyArray<ProjectId> = [projectA]) =>
         Attention.layer.pipe(Layer.provide(Layer.succeed(HostDatabase.HostDatabase, host.sql))),
         Layer.mock(ProjectService.ProjectService)({
           listShells: () => Effect.sync(() => state.projects.map(shell)),
+        }),
+        Layer.mock(ThreadManagementService.ThreadManagementService)({
+          getThreadShell: (threadId) =>
+            Effect.sync(() => {
+              const title = threadTitles.get(threadId);
+              return title === undefined ? null : { ...threadShell(threadId), title };
+            }),
         }),
       ),
     );
@@ -128,6 +146,15 @@ const setup = (projects: ReadonlyArray<ProjectId> = [projectA]) =>
             answers.get(`${input.projectId} ${input.from} ${input.tier}`) ??
               measure("context_efficiency", null, 0),
             measure("repeated_reads", 0.1, 4),
+            // The real measure over the rows set for the window, whatever tier was asked.
+            toolOutputMaxPerCall(
+              measureInput({
+                from: input.from,
+                to: input.to,
+                runs: [measureRun({ run_id: Fixtures.runId, started_at: input.from })],
+                toolCalls: toolCalls.get(`${input.projectId} ${input.from}`) ?? [],
+              }),
+            ),
           ]);
         }),
       ),
@@ -149,6 +176,10 @@ const setup = (projects: ReadonlyArray<ProjectId> = [projectA]) =>
           `${projectId} ${day(from)} ${tier}`,
           measure("context_efficiency", value, sampleSize),
         ),
+      /** The tool calls of the window starting `from`, in `projectId`. */
+      tools: (from: string, calls: ReadonlyArray<ToolCallRow>, projectId = projectA) =>
+        toolCalls.set(`${projectId} ${day(from)}`, calls),
+      titles: threadTitles,
       sweep: (dryRun = false) =>
         state.standard === undefined
           ? sweep.run({ dryRun })
@@ -178,8 +209,9 @@ const setup = (projects: ReadonlyArray<ProjectId> = [projectA]) =>
     };
   });
 
-/** The default `standard` budget, the second the migration adds. */
+/** The default `standard` budget, the second the migration adds, and the tool output one, the fourth. */
 const STANDARD = 2;
+const TOOL_OUTPUT = 4;
 
 it.effect("an over-threshold window writes one breach and raises one flag", () =>
   Effect.scoped(
@@ -188,10 +220,11 @@ it.effect("an over-threshold window writes one breach and raises one flag", () =
       budgets.answer("2026-10-05", "standard", 1900);
 
       assert.deepEqual(yield* budgets.sweep(), { examined: 1, acted: 1, flags: 1 });
-      // The last seven whole UTC days, once per tier the three defaults name.
+      // The last seven whole UTC days, once per tier the three tier defaults name, and once for
+      // the tool output budget, which names a tier but is asked for without one.
       assert.deepEqual(
         budgets.requests.map(({ tier, from, to }) => [tier, from, to]),
-        (["cheap", "standard", "strong"] as const).map((tier) => [
+        ([...(["cheap", "standard", "strong"] as const), undefined] as const).map((tier) => [
           tier,
           day("2026-10-05"),
           day("2026-10-12"),
@@ -362,7 +395,8 @@ it.effect("an unmeasured window writes nothing, and is asked again on the next t
 
       budgets.state.replaying = false;
       assert.deepEqual(yield* budgets.sweep(), { examined: 1, acted: 1, flags: 1 });
-      assert.strictEqual(budgets.requests.length, 6);
+      // Four requests a pass: three tiers and the tool output budget's, which names none.
+      assert.strictEqual(budgets.requests.length, 8);
     }),
   ),
 );
@@ -450,7 +484,7 @@ it.effect("a budget removed or edited while it is measured gets no event and no 
       assert.deepEqual(yield* budgets.flags, []);
       assert.deepEqual(
         (yield* budgets.store.list({})).map((budget) => budget.tier),
-        ["cheap", "strong"],
+        ["cheap", "strong", "standard"],
       );
 
       // The strong budget's threshold moves above the value while it is measured.
@@ -542,7 +576,7 @@ it.effect(
         assert.deepEqual(yield* budgets.sweep(), { examined: 0, acted: 1, flags: 0 });
         assert.deepEqual(
           budgets.requests.slice(asked).map((request) => request.projectId),
-          [projectA, projectA, projectA],
+          [projectA, projectA, projectA, projectA],
         );
         assert.deepEqual(yield* open, []);
       }),
@@ -582,6 +616,172 @@ it.effect("disabling or removing a budget clears its flag; enabling it again rai
       assert.deepEqual(yield* budgets.sweep(), { examined: 0, acted: 1, flags: 0 });
       assert.deepEqual(yield* open, []);
       assert.deepEqual(yield* budgets.events, []);
+    }),
+  ),
+);
+
+const BIG_THREAD = "thread:big";
+const BIG_TOOL = "mcp__t3-code__thread_list";
+
+/**
+ * `count` tool calls of the fixture run, all of 200 estimated tokens but one: a 40,000-character
+ * result of an MCP tool in `BIG_THREAD`.
+ */
+const callsWithOneOver = (count: number): ReadonlyArray<ToolCallRow> => [
+  ...Array.from({ length: count - 1 }, (_, index) =>
+    returned("Read", 200, { run_id: Fixtures.runId, item_id: `item:small:${index}` }),
+  ),
+  returned(BIG_TOOL, outputTokens("x".repeat(40_000)), {
+    run_id: Fixtures.runId,
+    item_id: "item:big",
+    thread_id: BIG_THREAD,
+  }),
+];
+
+it.effect(
+  "twenty calls with one 40,000-character result breach the default budget, naming its tool and thread",
+  () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const budgets = yield* setup();
+        budgets.titles.set(BIG_THREAD, "Fix the importer");
+        budgets.tools("2026-10-05", callsWithOneOver(20));
+
+        assert.deepEqual(yield* budgets.sweep(), { examined: 1, acted: 1, flags: 1 });
+        assert.deepEqual(yield* budgets.events, [
+          {
+            budget_id: TOOL_OUTPUT,
+            project_id: projectA,
+            kind: "breach",
+            window_from: day("2026-10-05"),
+            window_to: day("2026-10-12"),
+            value: 10_000,
+            threshold: 8000,
+            sample_size: 20,
+          },
+        ]);
+        const [flag, ...rest] = yield* budgets.flags;
+        assert.strictEqual(rest.length, 0);
+        assert.deepEqual(
+          [flag?.plugin_id, flag?.thread_id, flag?.kind, flag?.text, flag?.cleared_at],
+          [
+            "telemetry",
+            `budget:${TOOL_OUTPUT}:${projectA}`,
+            "budget_breach",
+            `Tool output: ${BIG_TOOL} returned ~10000 tokens in "Fix the importer". Ask the tool to paginate its results.`,
+            null,
+          ],
+        );
+
+        // The window did not change, so it is not measured again and no second breach follows.
+        const asked = budgets.requests.length;
+        assert.deepEqual(yield* budgets.sweep(), { examined: 0, acted: 0, flags: 0 });
+        assert.strictEqual(budgets.requests.length, asked);
+        assert.strictEqual((yield* budgets.events).length, 1);
+        assert.strictEqual((yield* budgets.flags).length, 1);
+        const listed = yield* budgets.store.list({ projectId: projectA });
+        assert.deepEqual(
+          listed.filter((budget) => budget.id === TOOL_OUTPUT).map((budget) => budget.state),
+          ["breach"],
+        );
+      }),
+    ),
+);
+
+it.effect("names the thread by its id when its title cannot be read", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const budgets = yield* setup();
+      budgets.tools("2026-10-05", callsWithOneOver(20));
+
+      assert.deepEqual(yield* budgets.sweep(), { examined: 1, acted: 1, flags: 1 });
+      assert.deepEqual(
+        (yield* budgets.flags).map((flag) => flag.text),
+        [
+          `Tool output: ${BIG_TOOL} returned ~10000 tokens in "${BIG_THREAD}". Ask the tool to paginate its results.`,
+        ],
+      );
+    }),
+  ),
+);
+
+it.effect("nineteen calls, under the minimum of twenty, write nothing whatever the largest", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const budgets = yield* setup();
+      budgets.tools("2026-10-05", callsWithOneOver(19));
+
+      assert.deepEqual(yield* budgets.sweep(), { examined: 0, acted: 0, flags: 0 });
+      assert.deepEqual(yield* budgets.events, []);
+      assert.deepEqual(yield* budgets.flags, []);
+    }),
+  ),
+);
+
+it.effect("a window with no tool items is unavailable, so it writes nothing", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const budgets = yield* setup();
+
+      assert.deepEqual(yield* budgets.sweep(), { examined: 0, acted: 0, flags: 0 });
+      assert.deepEqual(yield* budgets.events, []);
+      assert.deepEqual(yield* budgets.flags, []);
+    }),
+  ),
+);
+
+it.effect("a tool output budget is measured without a tier, so no tier's routing decides it", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      // The routing plugin is off: the tier budgets cannot be placed, and this one still is.
+      const budgets = yield* setup();
+      budgets.tools("2026-10-05", callsWithOneOver(20));
+      assert.deepEqual(yield* budgets.sweep(), { examined: 1, acted: 1, flags: 1 });
+      const [first, second, third, untiered] = budgets.requests;
+      assert.deepEqual(
+        [first, second, third].map((request) => request?.tier),
+        ["cheap", "standard", "strong"],
+      );
+      assert.deepEqual(Object.keys(untiered ?? {}).toSorted(), ["from", "projectId", "to"]);
+
+      // The routing plugin comes on and the standard tier resolves to a model: the tier budgets
+      // are judged on the new terms, and this one, which reads no tier, is not asked again.
+      const asked = budgets.requests.length;
+      budgets.state.standard = {
+        providerInstanceId: ProviderInstanceId.make("codex"),
+        model: "gpt-a",
+      };
+      yield* budgets.sweep();
+      assert.isFalse(budgets.requests.slice(asked).some((request) => request.tier === undefined));
+      assert.strictEqual((yield* budgets.events).length, 1);
+      assert.strictEqual((yield* budgets.flags).length, 1);
+    }),
+  ),
+);
+
+it.effect("a later window without the large result writes a recovery and clears the flag", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const budgets = yield* setup();
+      budgets.tools("2026-10-05", callsWithOneOver(20));
+      budgets.tools(
+        "2026-10-06",
+        Array.from({ length: 20 }, () => returned("Read", 200, { run_id: Fixtures.runId })),
+      );
+      yield* budgets.sweep();
+
+      yield* TestClock.adjust("1 day");
+      assert.deepEqual(yield* budgets.sweep(), { examined: 1, acted: 1, flags: 0 });
+      assert.deepEqual(
+        (yield* budgets.events).map((event) => [event.kind, event.value]),
+        [
+          ["breach", 10_000],
+          ["recovery", 200],
+        ],
+      );
+      const flags = yield* budgets.flags;
+      assert.strictEqual(flags.length, 1);
+      assert.isNotNull(flags[0]?.cleared_at);
     }),
   ),
 );

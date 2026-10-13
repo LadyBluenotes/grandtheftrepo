@@ -18,7 +18,7 @@ const comparable = (window: TelemetryMeasuresResult) =>
  * Compares each project's efficiency measures over the last seven whole UTC days with the seven
  * before, once a day, and strengthens the project's `efficiency_regression:<measure>` item for
  * each measure that got worse past its threshold, keyed by measure and window so a window adds
- * evidence once. A recovery does nothing. A project's `regression_runs` row is written only after
+ * evidence once. A measure `thresholds.ts` lists as not compared is skipped. A recovery does nothing. A project's `regression_runs` row is written only after
  * all its measures were compared, so a crash or timeout compares it again on the next tick. A
  * project waits for the next tick too when its measures cannot be read, or when either window is
  * unavailable in every measure, as telemetry answers while it replays the event log or holds a
@@ -68,8 +68,9 @@ export const sweep = Effect.gen(function* () {
         const earlier = new Map(before.map((measure) => [measure.measure, measure]));
         const regressions = after.flatMap((measure) => {
           const was = earlier.get(measure.measure);
+          const threshold = thresholdFor(measure.measure);
           const summary =
-            was === undefined ? null : compare(was, measure, thresholdFor(measure.measure));
+            was === undefined || threshold === null ? null : compare(was, measure, threshold);
           return summary === null ? [] : [{ measure: measure.measure, summary }];
         });
         acted += regressions.length;

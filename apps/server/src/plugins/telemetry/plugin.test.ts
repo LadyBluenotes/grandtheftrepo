@@ -12,6 +12,7 @@ import {
   TelemetryError,
   TelemetryMeasuresResult,
   TelemetryReportResult,
+  TelemetryToolOutputResult,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -73,6 +74,9 @@ const decodeBudgets = Schema.decodeUnknownEffect(TelemetryBudgetsResult);
 const decodeBudgetsJson = Schema.decodeUnknownSync(Schema.fromJsonString(TelemetryBudgetsResult));
 const decodeBudget = Schema.decodeUnknownEffect(TelemetryBudget);
 const decodeMeasuresJson = Schema.decodeUnknownSync(Schema.fromJsonString(TelemetryMeasuresResult));
+const decodeToolOutputJson = Schema.decodeUnknownSync(
+  Schema.fromJsonString(TelemetryToolOutputResult),
+);
 const decodeTelemetryError = Schema.decodeUnknownEffect(TelemetryError);
 
 /** The `TelemetryError` a gateway call failed with. */
@@ -236,7 +240,7 @@ const layerTest = Layer.mergeAll(
 
 /**
  * One window's rows, as the reactor would have stored them: a thread settled by hand in the
- * window, one run in it that read the same file twice.
+ * window, one run in it that read the same file twice, returning 100 and 300 estimated tokens.
  */
 const seed = (sql: SqlClient.SqlClient) =>
   Effect.gen(function* () {
@@ -250,10 +254,11 @@ const seed = (sql: SqlClient.SqlClient) =>
       VALUES ('run:1', 'thread:1', 'message:1', 1, 'completed', 'test-model',
         '2026-10-02T00:00:00.000Z', '2026-10-02T00:10:00.000Z', 1)`;
     yield* sql`INSERT INTO telemetry_tool_calls
-        (item_id, run_id, thread_id, ordinal, item_type, tool_name, path, status, event_sequence)
+        (item_id, run_id, thread_id, ordinal, item_type, tool_name, path, output_tokens, status,
+         event_sequence)
       VALUES
-        ('item:1', 'run:1', 'thread:1', 1, 'dynamic_tool', 'Read', 'src/a.ts', 'completed', 1),
-        ('item:2', 'run:1', 'thread:1', 2, 'dynamic_tool', 'Read', 'src/a.ts', 'completed', 1)`;
+        ('item:1', 'run:1', 'thread:1', 1, 'dynamic_tool', 'Read', 'src/a.ts', 100, 'completed', 1),
+        ('item:2', 'run:1', 'thread:1', 2, 'dynamic_tool', 'Read', 'src/a.ts', 300, 'completed', 1)`;
   });
 
 /**
@@ -384,7 +389,7 @@ it.effect(
           yield* seed(host.databases.get("telemetry")!);
           const fromHandler = yield* measures().pipe(Effect.flatMap(decodeMeasures));
           const byName = new Map(fromHandler.map((measure) => [measure.measure, measure]));
-          assert.strictEqual(fromHandler.length, 14);
+          assert.strictEqual(fromHandler.length, 16);
           assert.deepEqual(
             ["time_to_accepted_outcome", "repeated_reads", "material_correction_burden"].map(
               (name) => [byName.get(name)?.state, byName.get(name)?.value],
@@ -409,6 +414,54 @@ it.effect(
           // MCP carries a list as JSON text; the server keeps `structuredContent` for objects.
           assert.deepEqual(decodeMeasuresJson(called.content?.[0]?.text ?? ""), fromHandler);
 
+          // The tool output tool is a fold over those two measures' detail, and needs no tier.
+          assert.include(tools, "telemetry_tool_output");
+          const toolOutput = decodeToolOutputJson(
+            (yield* call("tools/call", {
+              name: "telemetry_tool_output",
+              arguments: measuresInput,
+            })).content?.[0]?.text ?? "",
+          );
+          assert.deepEqual(toolOutput, {
+            byTool: [
+              { tool: "Read", calls: 2, estimatedTokens: 400, share: 1, p50: 100, p95: 300 },
+            ],
+            largest: [
+              {
+                tool: "Read",
+                threadId: "thread:1",
+                runId: "run:1",
+                itemId: "item:2",
+                estimatedTokens: 300,
+              },
+              {
+                tool: "Read",
+                threadId: "thread:1",
+                runId: "run:1",
+                itemId: "item:1",
+                estimatedTokens: 100,
+              },
+            ],
+            missingReason: null,
+          });
+          // The same rows ride on the measures the RPC returns.
+          assert.deepEqual(byName.get("tool_output_total")?.detail?.byTool, toolOutput.byTool);
+          assert.deepEqual(
+            byName.get("tool_output_max_per_call")?.detail?.largest,
+            toolOutput.largest,
+          );
+          assert.deepEqual(
+            ["tool_output_total", "tool_output_max_per_call"].map((name) => [
+              byName.get(name)?.state,
+              byName.get(name)?.value,
+              byName.get(name)?.sampleSize,
+            ]),
+            [
+              ["ok", 400, 2],
+              ["ok", 300, 2],
+            ],
+          );
+
           // The report: the RPC and the tool answer the same, with a page to render.
           const fromGateway = yield* report().pipe(Effect.flatMap(decodeReport));
           assert.include(tools, "telemetry_report");
@@ -419,7 +472,7 @@ it.effect(
           assert.deepEqual(decodeReportJson(reported.content?.[0]?.text ?? ""), fromGateway);
           assert.deepEqual(
             [fromGateway.report.projectTitle, fromGateway.report.efficiency.count],
-            [`Project ${measuresInput.projectId}`, 14],
+            [`Project ${measuresInput.projectId}`, 16],
           );
           assert.deepEqual(
             [fromGateway.report.failures.state, fromGateway.report.findings.missingReason],
@@ -522,6 +575,17 @@ it.effect("budgets: the RPC and the tool agree, a save is checked, and a removal
             ["cheap", 800, "ok"],
             ["standard", 1500, "ok"],
             ["strong", 3000, "ok"],
+            // The measure reads no tier, so this one row on `standard` judges every run.
+            ["standard", 8000, "ok"],
+          ],
+        );
+        assert.deepEqual(
+          listed.map((budget) => budget.measure),
+          [
+            "context_efficiency",
+            "context_efficiency",
+            "context_efficiency",
+            "tool_output_max_per_call",
           ],
         );
         const tool = yield* mcp;
@@ -549,7 +613,7 @@ it.effect("budgets: the RPC and the tool agree, a save is checked, and a removal
           minSample: 10,
           enabled: true,
         }).pipe(Effect.flatMap(decodeBudget));
-        assert.deepEqual([added.id, added.projectId], [4, measuresInput.projectId]);
+        assert.deepEqual([added.id, added.projectId], [5, measuresInput.projectId]);
 
         const invalid = yield* refusal(
           viaGateway("settingsWrite", TELEMETRY_METHODS.budgetsSet.method, {
@@ -575,9 +639,14 @@ it.effect("budgets: the RPC and the tool agree, a save is checked, and a removal
         const after = yield* viaGateway("read", TELEMETRY_METHODS.budgets.method, {}).pipe(
           Effect.flatMap(decodeBudgets),
         );
+        // The one patched and the one added are gone; the rest keep their order.
         assert.deepEqual(
-          after.map((budget) => budget.tier),
-          ["cheap", "strong"],
+          after.map((budget) => [budget.measure, budget.tier]),
+          [
+            ["context_efficiency", "cheap"],
+            ["context_efficiency", "strong"],
+            ["tool_output_max_per_call", "standard"],
+          ],
         );
         assert.deepEqual(
           yield* viaGateway("read", TELEMETRY_METHODS.budgetEvents.method, {
@@ -652,6 +721,7 @@ it.effect(
           assert.include(tools, "supervisor_status");
           assert.notInclude(tools, "telemetry_measures");
           assert.notInclude(tools, "telemetry_budgets");
+          assert.notInclude(tools, "telemetry_tool_output");
           assert.notInclude(tools, "telemetry_report");
 
           // Nothing seeds: no task, no thread.

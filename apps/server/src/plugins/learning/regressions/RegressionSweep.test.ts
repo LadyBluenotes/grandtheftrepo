@@ -359,3 +359,63 @@ it.effect("a project whose measures cannot be read waits for the next tick; the 
     }),
   ),
 );
+
+it.effect(
+  "tool output total doubling opens nothing, while the largest result worsening past the threshold does",
+  () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const learning = yield* setup();
+        learning.windows.set(day("2026-09-28"), [
+          measure("tool_output_total", 5000),
+          measure("tool_output_max_per_call", 4000),
+        ]);
+        learning.windows.set(day("2026-10-05"), [
+          measure("tool_output_total", 10_000),
+          measure("tool_output_max_per_call", 6000),
+        ]);
+
+        // Only the per-call measure is compared; the project still counts as compared.
+        assert.deepEqual(yield* learning.sweep(), { examined: 1, acted: 1, flags: 0 });
+        assert.deepEqual(yield* learning.itemsOf(projectId), [
+          [
+            "efficiency_regression:tool_output_max_per_call",
+            1,
+            "open",
+            null,
+            [
+              [
+                `regression:tool_output_max_per_call:${day("2026-10-05")}`,
+                "tool_output_max_per_call 4000 → 6000 (+50%)",
+              ],
+            ],
+          ],
+        ]);
+      }),
+    ),
+);
+
+it.effect(
+  "a window where the tool output total doubles and the largest result does not opens no item",
+  () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const learning = yield* setup();
+        learning.windows.set(day("2026-09-28"), [
+          measure("tool_output_total", 5000),
+          measure("tool_output_max_per_call", 4000),
+        ]);
+        learning.windows.set(day("2026-10-05"), [
+          measure("tool_output_total", 10_000),
+          measure("tool_output_max_per_call", 4000),
+        ]);
+
+        assert.deepEqual(yield* learning.sweep(), { examined: 1, acted: 0, flags: 0 });
+        assert.deepEqual(yield* learning.itemsOf(projectId), []);
+        assert.deepEqual(
+          (yield* learning.runs).map((run) => run.project_id),
+          [projectId],
+        );
+      }),
+    ),
+);

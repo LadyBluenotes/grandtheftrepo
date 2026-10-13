@@ -60,6 +60,7 @@ resolved by keeping the line.
 | `apps/web/src/components/sidebar/mainAppLocation.ts`         | `/board` and the `/plugins` paths in `isSidebarUtilityPage`                                                                                                            |
 | `apps/web/src/components/sidebar/SidebarChrome.tsx`          | the board's `SidebarUtilityItem`, gated on `kanbanSupportedAtom`, and `<PluginSidebarEntries />` after the Usage entry, plus imports; `SidebarUtilityItem` is exported |
 | `apps/web/src/components/CommandPalette.tsx`                 | the board's `actionItems.push` block, gated the same way, plus imports                                                                                                 |
+| `apps/server/src/orchestration-v2/toolOutputImageBytes.ts`   | `export function carriesImage`, the one exported function: does a record hold image bytes or the size stripping left, so the estimate matches what ingestion stores    |
 | `third-party-licenses.config.json`                           | the `Caveman reply rules` and `Ponytail ladder` entries at the end of `customNotices`, so the adapted policy text is credited in the app's license list                |
 | `scripts/build-desktop-artifact.ts`                          | in `createBuildConfig`, unsigned Mac builds get `identity: "-"`, `hardenedRuntime: false` and no GitHub update feed, plus their tests                                  |
 
@@ -106,7 +107,7 @@ them half-evaluated. The host hands `toolkitRegistration` to `ServerPlugin.mcp` 
   `packages/client-runtime/src/plugins/kanban.ts`. Server: `apps/server/src/plugins/kanban/`.
   Contracts: `packages/contracts/src/plugins/kanban.ts`. Web: `apps/web/src/plugins/kanban/`.
   Mobile: `apps/mobile/src/features/kanban/`. User guide: [Kanban board](./user/kanban.md).
-- **telemetry**: the fourteen efficiency measures of #1 over a project's window, from the
+- **telemetry**: the sixteen efficiency measures of #1 and #35 over a project's window, from the
   `telemetry.measures` gateway method and the `telemetry_measures` MCP tool. Its reactor keeps
   runs, tool calls, threads and provider turn token usage from the event log in the plugin's own
   tables, and pure functions in `measures/` compute each measure from those rows; cost is priced
@@ -121,7 +122,15 @@ them half-evaluated. The host hands `toolkitRegistration` to `ServerPlugin.mcp` 
   replays the log to record each run's instance. The `telemetry/budgets` sweep judges each budget,
   one measure for one tier, over the last seven whole UTC days per project, writes a
   `budget_events` row only when its state changes, and raises or clears a `budget_breach`
-  attention flag. `telemetry.report` and the `telemetry_report` MCP tool fold a project's range
+  attention flag. `tool_output_total` and `tool_output_max_per_call` size each tool call's output as
+  characters over four, an inline image as 1,500, from the sizes the reactor stores beside each
+  tool call (migration 4 adds them and replays the log), and carry per-tool and largest-result
+  `detail` through `telemetry.measures` and the `telemetry_tool_output` MCP tool. They read no
+  tier, so the sweep asks for them without one: the default budget on the largest result names
+  `standard` only because a budget needs a tier, and judges every run, routing plugin on or off. A
+  call a provider's subagent makes has no run: the reactor keeps it with the item's own time
+  (migration 4), the two measures count it, and the per-run measures and a tier leave it out.
+  `telemetry.report` and the `telemetry_report` MCP tool fold a project's range
   into ten sections, from the thread records, the learning and review plugins and the host's
   attention flags, with the same report as one self-contained HTML page; at start the plugin gives
   each project with a default model a `Weekly report` thread and a scheduled task that posts that
@@ -152,7 +161,8 @@ them half-evaluated. The host hands `toolkitRegistration` to `ServerPlugin.mcp` 
   drop a repeat; no promoter is registered yet, so records wait. A third sweep compares each
   project's telemetry measures over the last seven whole UTC days with the seven before, once a
   day, and opens or strengthens an `efficiency_regression:<measure>` item, with no owner kind, for
-  each measure worse by its threshold in `regressions/thresholds.ts`; with telemetry off it does
+  each measure worse by its threshold in `regressions/thresholds.ts`, except a volume measure
+  such as `tool_output_total`, which that file lists as not compared; with telemetry off it does
   nothing. Server:
   `apps/server/src/plugins/learning/`. Contracts:
   `packages/contracts/src/plugins/learning.ts`. No screen yet.

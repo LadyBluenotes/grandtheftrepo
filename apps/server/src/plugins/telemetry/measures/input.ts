@@ -46,12 +46,19 @@ export interface RunRow {
 
 export interface ToolCallRow {
   readonly item_id: string;
-  readonly run_id: string;
+  /** Null for a call a provider's subagent made, which belongs to no run. */
+  readonly run_id: string | null;
   readonly thread_id: string;
   readonly ordinal: number;
   readonly item_type: string;
   readonly tool_name: string | null;
   readonly path: string | null;
+  /** A command's command line, cut short. Null for any other item, and until the replay after migration 4. */
+  readonly command: string | null;
+  /** The estimated tokens of the output; null for an item with none to size, and until the same replay. */
+  readonly output_tokens: number | null;
+  /** When the item started, else when it last changed; places a call with no run. Null until the replay after migration 4. */
+  readonly item_at: string | null;
   readonly status: string;
 }
 
@@ -115,7 +122,15 @@ export const ok = (
   value: number,
   sampleSize: number,
   missingReason: string | null = null,
-): TelemetryMeasure => ({ ...spec, state: "ok", value, sampleSize, missingReason });
+  detail?: TelemetryMeasure["detail"],
+): TelemetryMeasure => ({
+  ...spec,
+  state: "ok",
+  value,
+  sampleSize,
+  missingReason,
+  ...(detail === undefined ? {} : { detail }),
+});
 
 export const unavailable = (spec: Spec, missingReason: string): TelemetryMeasure => ({
   ...spec,
@@ -189,10 +204,14 @@ export const readPath = (call: ToolCallRow) => (action(call) === "read" ? call.p
 /** The path a call edited. */
 export const editPath = (call: ToolCallRow) => (action(call) === "file_change" ? call.path : null);
 
-/** Each run's tool calls in the order they ran. */
+/**
+ * Each run's tool calls in the order they ran. A call with no run is left out on purpose: the
+ * measures built on this look at what a run did, and a subagent's call is in none.
+ */
 export const callsByRun = (calls: ReadonlyArray<ToolCallRow>) => {
   const byRun = new Map<string, ToolCallRow[]>();
   for (const call of calls) {
+    if (call.run_id === null) continue;
     const list = byRun.get(call.run_id);
     if (list === undefined) byRun.set(call.run_id, [call]);
     else list.push(call);

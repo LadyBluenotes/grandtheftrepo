@@ -5,6 +5,8 @@ import {
   TelemetryBudgetsResult,
   TelemetryMeasuresInput,
   TelemetryMeasuresResult,
+  TelemetryToolOutputInput,
+  TelemetryToolOutputResult,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
@@ -12,6 +14,7 @@ import { Tool, Toolkit } from "effect/ai";
 
 import * as McpToolAccess from "../../mcp/McpToolAccess.ts";
 import * as BudgetStore from "./budgets/BudgetStore.ts";
+import { toolOutputOf } from "./measures/toolOutput.ts";
 import * as Telemetry from "./Telemetry.ts";
 
 const TelemetryMeasuresTool = Tool.make("telemetry_measures", {
@@ -36,7 +39,22 @@ const TelemetryBudgetsTool = Tool.make("telemetry_budgets", {
   .annotate(Tool.Readonly, true)
   .annotate(Tool.Destructive, false);
 
-export const TelemetryToolkit = Toolkit.make(TelemetryMeasuresTool, TelemetryBudgetsTool);
+const TelemetryToolOutputTool = Tool.make("telemetry_tool_output", {
+  description:
+    "Report which tools produce the most output in a project's window: from (inclusive) and to (exclusive), ISO instants in UTC, over every run and over the calls a provider's subagent makes, which belong to no run. byTool lists each tool (a tool's name, command:<program>, file_search or web_search) with its calls, estimated tokens, share of the total and median and 95th percentile per call, largest first. largest lists the ten biggest single results with their tool, thread, run (null for a subagent's call) and item. Sizes are estimates, characters over four with an inline image as 1,500, not a tokenizer's counts. Check this before a long task to see which of your tools are expensive. With no tool items in the window both lists are empty and missingReason says why.",
+  parameters: TelemetryToolOutputInput,
+  success: TelemetryToolOutputResult,
+  failure: OrchestratorMcpFailure,
+  failureMode: "return",
+})
+  .annotate(Tool.Readonly, true)
+  .annotate(Tool.Destructive, false);
+
+export const TelemetryToolkit = Toolkit.make(
+  TelemetryMeasuresTool,
+  TelemetryBudgetsTool,
+  TelemetryToolOutputTool,
+);
 
 const inactive = Effect.fail(
   new OrchestratorMcpFailure({
@@ -71,6 +89,12 @@ export const handlers = McpToolAccess.toLayer(
     return {
       telemetry_measures: McpToolAccess.reads((input) =>
         Effect.flatMap(telemetry, (t) => t.measures(input)).pipe(Effect.catchTags(failure)),
+      ),
+      telemetry_tool_output: McpToolAccess.reads((input) =>
+        Effect.flatMap(telemetry, (t) => t.measures(input)).pipe(
+          Effect.map(toolOutputOf),
+          Effect.catchTags(failure),
+        ),
       ),
       telemetry_budgets: McpToolAccess.reads((input) =>
         Effect.flatMap(budgets, (store) => store.list(input)).pipe(Effect.catchTags(failure)),
