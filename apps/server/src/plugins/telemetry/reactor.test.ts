@@ -174,6 +174,7 @@ it.effect("keeps one row per run with its latest state, and a replay adds nothin
         turn_id: "message:telemetry",
         ordinal: 2,
         status: "failed",
+        provider_instance_id: "codex",
         model: "test-model",
         started_at: DateTime.formatIso(Fixtures.at),
         completed_at: DateTime.formatIso(Fixtures.at),
@@ -568,7 +569,7 @@ it.effect(
     ).pipe(Effect.provide(layerSink)),
 );
 
-it.effect("upgrading to migration 2 replays the log into the new tables", () =>
+it.effect("upgrading from migration 1 replays the log into the new tables", () =>
   Effect.scoped(
     Effect.gen(function* () {
       const { sql } = yield* PluginDatabase.open({
@@ -587,8 +588,9 @@ it.effect("upgrading to migration 2 replays the log into the new tables", () =>
       // A failure the old reactor gave up on must not outlive the replay.
       yield* sql`INSERT INTO host_reactor_failure (sequence, type, attempts, last_error, failed_at)
         VALUES (1, 'run.created', 5, 'boom', '2026-01-01T00:00:00.000Z')`;
-      const [, , upgrade] = migrations[1]!;
-      yield* upgrade.pipe(Effect.provideService(SqlClient.SqlClient, sql));
+      for (const [, , upgrade] of migrations.slice(1)) {
+        yield* upgrade.pipe(Effect.provideService(SqlClient.SqlClient, sql));
+      }
       yield* startReactor(sql, Reactor.handlers);
       assert.deepEqual(
         (yield* sql<{ readonly run_id: string }>`SELECT run_id FROM telemetry_runs`).map(
@@ -599,4 +601,58 @@ it.effect("upgrading to migration 2 replays the log into the new tables", () =>
       assert.deepEqual(yield* sql`SELECT sequence FROM host_reactor_failure`, []);
     }),
   ).pipe(Effect.provide(layerSink)),
+);
+
+it.effect(
+  "upgrading to migration 3 backfills each run's provider instance and adds the budgets",
+  () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { sql } = yield* PluginDatabase.open({
+          id: "telemetry",
+          filename: ":memory:",
+          migrations: migrations.slice(0, 2),
+        });
+        yield* write([Fixtures.runEvent("run.created")]);
+        // The reactor before the upgrade had stored the run without its provider instance.
+        yield* Effect.scoped(
+          Effect.flatMap(
+            PluginReactor.start({ plugin: "telemetry", from: "now", handlers: {} }),
+            (reactor) => reactor.drain,
+          ).pipe(Effect.provideService(SqlClient.SqlClient, sql)),
+        );
+        yield* sql`INSERT INTO telemetry_runs
+          (run_id, thread_id, turn_id, ordinal, status, model, started_at, completed_at,
+           event_sequence)
+        VALUES (${Fixtures.runId}, ${Fixtures.threadId}, 'message:telemetry', 2, 'failed',
+          'test-model', NULL, NULL, 1)`;
+        const [, , upgrade] = migrations[2]!;
+        yield* upgrade.pipe(Effect.provideService(SqlClient.SqlClient, sql));
+        assert.deepEqual(yield* sql`SELECT provider_instance_id FROM telemetry_runs`, [
+          { provider_instance_id: null },
+        ]);
+        yield* startReactor(sql, Reactor.handlers);
+        assert.deepEqual(yield* sql`SELECT provider_instance_id FROM telemetry_runs`, [
+          { provider_instance_id: "codex" },
+        ]);
+        // The three placeholder budgets, one per tier, for every project.
+        assert.deepEqual(
+          yield* sql`SELECT measure, tier, threshold, direction, project_id, min_sample, enabled
+          FROM budgets ORDER BY id`,
+          [
+            ["cheap", 800],
+            ["standard", 1500],
+            ["strong", 3000],
+          ].map(([tier, threshold]) => ({
+            measure: "context_efficiency",
+            tier,
+            threshold,
+            direction: "lower_is_better",
+            project_id: null,
+            min_sample: 20,
+            enabled: 1,
+          })),
+        );
+      }),
+    ).pipe(Effect.provide(layerSink)),
 );

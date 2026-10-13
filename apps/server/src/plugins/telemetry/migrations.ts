@@ -7,6 +7,8 @@ import type { PluginMigration } from "../Plugin.ts";
  * 2: the runs, tool calls and threads the measures read, and the run each provider turn
  * belongs to. The reactor fills every column through `fields.ts`. `event_sequence` is the
  * sequence of the event a row was last written from, so a retried older event cannot overwrite it.
+ * 3: the provider instance of each run, which places it on a routing tier, and budgets with the
+ * breaches and recoveries their sweep records.
  */
 export const migrations: ReadonlyArray<PluginMigration> = [
   [
@@ -85,6 +87,57 @@ export const migrations: ReadonlyArray<PluginMigration> = [
       // from the first event; every handler is an upsert, so the replay only fills the new rows.
       // Old failures go with it: the replay records again any that still fail, and a given-up
       // row left behind would keep the measures unavailable for good.
+      yield* sql`DROP TABLE IF EXISTS host_reactor_cursor`;
+      yield* sql`DROP TABLE IF EXISTS host_reactor_failure`;
+    }),
+  ],
+  [
+    3,
+    "budgets",
+    Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      // NULL until the replay below rewrites the run from its events.
+      yield* sql`ALTER TABLE telemetry_runs ADD COLUMN provider_instance_id TEXT`;
+      // A null `project_id` judges every project, one by one.
+      yield* sql`
+        CREATE TABLE budgets (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          measure TEXT NOT NULL,
+          tier TEXT NOT NULL,
+          threshold REAL NOT NULL,
+          direction TEXT NOT NULL,
+          project_id TEXT,
+          min_sample INTEGER NOT NULL,
+          enabled INTEGER NOT NULL
+        )
+      `;
+      // A budget's state in a project is its newest event there, by id.
+      yield* sql`
+        CREATE TABLE budget_events (
+          id INTEGER PRIMARY KEY,
+          budget_id INTEGER NOT NULL,
+          project_id TEXT NOT NULL,
+          kind TEXT NOT NULL,
+          window_from TEXT NOT NULL,
+          window_to TEXT NOT NULL,
+          value REAL NOT NULL,
+          threshold REAL NOT NULL,
+          sample_size INTEGER NOT NULL,
+          occurred_at TEXT NOT NULL
+        )
+      `;
+      yield* sql`CREATE INDEX budget_events_budget ON budget_events (budget_id, project_id)`;
+      yield* sql`CREATE INDEX budget_events_project ON budget_events (project_id, occurred_at)`;
+      // Output tokens per turn for each tier, as placeholders to tune.
+      yield* sql`
+        INSERT INTO budgets (measure, tier, threshold, direction, project_id, min_sample, enabled)
+        VALUES
+          ('context_efficiency', 'cheap', 800, 'lower_is_better', NULL, 20, 1),
+          ('context_efficiency', 'standard', 1500, 'lower_is_better', NULL, 20, 1),
+          ('context_efficiency', 'strong', 3000, 'lower_is_better', NULL, 20, 1)
+      `;
+      // As in migration 2: without its cursor the reactor replays from the first event, and
+      // every run upsert fills the new column.
       yield* sql`DROP TABLE IF EXISTS host_reactor_cursor`;
       yield* sql`DROP TABLE IF EXISTS host_reactor_failure`;
     }),

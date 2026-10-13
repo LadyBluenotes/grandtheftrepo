@@ -133,6 +133,17 @@ This connection supplies usage information; configure
 the provider separately to send agent requests through the hub. Remove the hub from the same
 settings section when you no longer need it.
 
+## Token budgets
+
+A budget is a limit on one efficiency measure for one model tier, judged in each project over
+the last seven whole days (UTC). By default each tier caps its output tokens per turn: 800 for
+cheap, 1,500 for standard and 3,000 for strong, judged once a project has at least 20 turns on
+that tier's model in the week. Going over raises an attention flag; coming back under clears it.
+Tiers come from the routing plugin, so budgets judge nothing while it is off.
+
+Edit each budget's threshold, minimum sample and on/off switch under **Plugins → Telemetry**.
+Turn a budget off to pause it; **Remove** deletes it and its history.
+
 ## Subscription usage widget
 
 Add **Subscription usage** from your iOS or Android widget gallery to see remaining Codex and
