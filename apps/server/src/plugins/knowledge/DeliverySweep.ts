@@ -4,6 +4,8 @@ import * as Option from "effect/Option";
 import * as SqlClient from "effect/sql/SqlClient";
 
 import * as ThreadManagementService from "../../orchestration-v2/ThreadManagementService.ts";
+import * as Attention from "../Attention.ts";
+import * as DeliveryDrift from "../DeliveryDrift.ts";
 import * as KnowledgeStore from "./KnowledgeStore.ts";
 
 /**
@@ -12,12 +14,21 @@ import * as KnowledgeStore from "./KnowledgeStore.ts";
  * is stale, and only at a session boundary: while any thread in the project has a run, it waits,
  * leaves nothing behind, and the next tick looks again. A file that no longer holds what was
  * delivered was edited by hand and is never written by the sweep; `verify` reports it and a
- * person's install repairs it. `examined` counts projects, `acted` catch-ups, `flags` catch-ups
- * that failed. A dry run counts the catch-ups it would make and writes nothing.
+ * person's install repairs it.
+ *
+ * After the catch-ups it checks every page file and index block an install recorded, and keeps one
+ * `delivery_drift` flag, `knowledge:<project>:<delivery>:<path>`, for each that was edited or
+ * deleted since, at any time and with or without a run. A person's install puts the accepted
+ * pages back, after which the next tick clears the flag. Like a catch-up it never writes one.
+ *
+ * `examined` counts projects, `acted` catch-ups and flags raised, rewritten or cleared, `flags`
+ * catch-ups that failed plus the drift flags standing. A dry run counts what it would do and
+ * changes nothing.
  */
 export const make = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
   const store = yield* KnowledgeStore.KnowledgeStore;
+  const attention = yield* Attention.Attention;
 
   /**
    * Read fresh each time, from the host's thread service where the sweep runs. A run that is only
@@ -65,17 +76,19 @@ export const make = Effect.gen(function* () {
       ),
     );
 
-  const run = Effect.fn("KnowledgeDeliverySweep.run")(function* ({
+  /** A project with nothing accepted still has blocks to take down while a delivery is recorded. */
+  const projectsToTend = sql<{ readonly project_id: ProjectId }>`
+    SELECT project_id FROM knowledge_entry WHERE state = 'accepted'
+    UNION SELECT project_id FROM knowledge_delivery
+    ORDER BY project_id
+  `;
+
+  const catchUpDue = Effect.fn("KnowledgeDeliverySweep.catchUp")(function* ({
     dryRun,
   }: {
     readonly dryRun: boolean;
   }) {
-    // A project with nothing accepted still has blocks to take down while a delivery is recorded.
-    const projects = yield* sql<{ readonly project_id: ProjectId }>`
-      SELECT project_id FROM knowledge_entry WHERE state = 'accepted'
-      UNION SELECT project_id FROM knowledge_delivery
-      ORDER BY project_id
-    `;
+    const projects = yield* projectsToTend;
     let examined = 0;
     let acted = 0;
     let flags = 0;
@@ -132,6 +145,83 @@ export const make = Effect.gen(function* () {
       if (installed === "failed") flags += 1;
     }
     return { examined, acted, flags };
+  });
+
+  /**
+   * One flag per recorded page file and agent index block, keyed
+   * `knowledge:<project>:<delivery>:<path>`, with the delivery as the store names it (`page:<key>`,
+   * or the agent). A project the server no longer knows has nothing to judge, so its flags clear.
+   * A file that cannot be read keeps its own flag while the project's other files are still
+   * judged; a project whose targets cannot be listed keeps all its flags.
+   */
+  const flagDrift = Effect.fn("KnowledgeDeliverySweep.flagDrift")(function* ({
+    dryRun,
+  }: {
+    readonly dryRun: boolean;
+  }) {
+    const judged = new Map<string, string | undefined>();
+    /** Flags of files that could not be read, and prefixes of projects that could not be listed. */
+    const unreadable = new Set<string>();
+    const unlisted: Array<string> = [];
+    for (const { project_id: projectId } of yield* projectsToTend) {
+      const prefix = `knowledge:${projectId}:`;
+      const targets = yield* store.drift(projectId).pipe(
+        Effect.catchTags({
+          KnowledgeError: (error) =>
+            error.code === "not_found"
+              ? Effect.succeed([])
+              : Effect.as(
+                  Effect.logWarning("knowledge delivery: could not check for edits", {
+                    projectId,
+                    message: error.message,
+                  }),
+                  undefined,
+                ),
+        }),
+      );
+      if (targets === undefined) {
+        unlisted.push(prefix);
+        continue;
+      }
+      for (const target of targets) {
+        const flag = `${prefix}${target.id}:${target.path}`;
+        if (target.status === "unreadable") {
+          unreadable.add(flag);
+          continue;
+        }
+        judged.set(
+          flag,
+          target.status === "ok"
+            ? undefined
+            : DeliveryDrift.flagText({
+                what:
+                  target.page === undefined
+                    ? "The knowledge index"
+                    : `The knowledge page "${target.page}"`,
+                path: target.path,
+                change: target.status,
+              }),
+        );
+      }
+    }
+    return yield* DeliveryDrift.reconcile(attention, {
+      pluginId: "knowledge",
+      dryRun,
+      judged,
+      leave: (flag) => unreadable.has(flag) || unlisted.some((prefix) => flag.startsWith(prefix)),
+    });
+  });
+
+  const run = Effect.fn("KnowledgeDeliverySweep.run")(function* (input: {
+    readonly dryRun: boolean;
+  }) {
+    const catchUps = yield* catchUpDue(input);
+    const drift = yield* flagDrift(input);
+    return {
+      examined: catchUps.examined,
+      acted: catchUps.acted + drift.changes,
+      flags: catchUps.flags + drift.standing,
+    };
   });
 
   return { plugin: "knowledge", name: "delivery", run };
