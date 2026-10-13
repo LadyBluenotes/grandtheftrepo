@@ -18,6 +18,7 @@ const service = Effect.serviceOption(PolicyService.PolicyService).pipe(
 
 /** Merged into the host's dispatch table through `PluginHost.handlers`. */
 export const table = PluginRpc.defineHandlers(POLICY_METHODS)({
+  list: (input) => Effect.flatMap(service, (policies) => policies.listWithStatus(input.projectId)),
   create: (input) => Effect.flatMap(service, (policies) => policies.create(input)),
   accept: (input) => Effect.flatMap(service, (policies) => policies.accept(input)),
   install: (input) => Effect.flatMap(service, (policies) => policies.install(input)),
