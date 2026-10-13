@@ -495,6 +495,41 @@ describe("SpecService", () => {
       ).pipe(Effect.provide(layerTest)),
   );
 
+  it.effect("a title edited while the child drafts: malformed, the card stays in Triage", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { spec, store, launched, specify, react, file, fileText } = yield* start;
+        const { id } = yield* file("Login loops", rough);
+
+        yield* specify({ projectId, id });
+        // The child was asked to spec the old title; the description is as it was.
+        yield* store.write(projectId, "user", {
+          action: "issue.update",
+          id,
+          title: "Login loops on Safari",
+        });
+        const edited = yield* fileText(id);
+        const threadId = launched[0]!.threadId!;
+        const runId = RunId.make("run:spec-retitled");
+        yield* react([
+          threadCreated(threadId),
+          planned(threadId, runId, 1, validSpec),
+          runUpdated(threadId, runId, "completed"),
+        ]);
+
+        const report = yield* spec.latest({ projectId, id });
+        assert.strictEqual(report?.attempt.status, "malformed");
+        assert.strictEqual(
+          report?.attempt.reason,
+          "The issue changed while the spec was drafted. Run specify again.",
+        );
+        assert.strictEqual(report?.issueStatus, "triage");
+        assert.strictEqual(yield* fileText(id), edited);
+        assert.lengthOf((yield* store.getIssue({ projectId, id })).criteria, 0);
+      }),
+    ).pipe(Effect.provide(layerTest)),
+  );
+
   it.effect(
     "a card deleted and recreated with the same text while the child drafts: malformed",
     () =>

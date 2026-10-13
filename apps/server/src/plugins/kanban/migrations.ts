@@ -11,8 +11,8 @@ import type { PluginMigration } from "../Plugin.ts";
  *
  * `spec_attempt` holds each try at turning an issue into a spec. A `running` one waits for its
  * drafting thread's run to end, found by `child_thread_id`. `source_hash` is the hash of the
- * issue's creation time and description when the attempt started: the issue is admitted only
- * while it still has them.
+ * issue's creation time, title and description when the attempt started: the issue is admitted
+ * only while it still has them.
  */
 export const migrations: ReadonlyArray<PluginMigration> = [
   [

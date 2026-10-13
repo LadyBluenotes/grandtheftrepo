@@ -41,12 +41,15 @@ import * as ProjectService from "../../project/ProjectService.ts";
 import * as Files from "./KanbanFiles.ts";
 
 /**
- * What `admit` compares: the hash of the issue a spec was checked or drafted from. The creation
- * time is in it because the slug and the description alone are the same for a card deleted and
- * recreated under its title, and `createdAt` is set once and never rewritten.
+ * What `admit` compares: the hash of the issue a spec was checked or drafted from, which is the
+ * title and description the drafting prompt is built from. The creation time is in it because a
+ * card deleted and recreated under its title has the same slug and, if filed with the same text,
+ * the same title and description; `createdAt` is set once and never rewritten.
  */
-export const hashSource = (issue: Pick<KanbanIssue, "createdAt" | "description">) =>
-  NodeCrypto.createHash("sha256").update(`${issue.createdAt}\n${issue.description}`).digest("hex");
+export const hashSource = (issue: Pick<KanbanIssue, "createdAt" | "title" | "description">) =>
+  NodeCrypto.createHash("sha256")
+    .update(`${issue.createdAt}\n${issue.title}\n${issue.description}`)
+    .digest("hex");
 
 /** Done issues wait this long before the sweep archives them. */
 const ARCHIVE_AFTER = Duration.days(7);
@@ -95,9 +98,9 @@ export class KanbanStore extends Context.Service<
      * state, and every other change is logged. An issue already out of those columns is `left` as
      * it is. The description is never touched.
      *
-     * `sourceHash` is the `hashSource` of the issue the criteria came from. The check is inside
-     * the write, so an issue edited, or deleted and recreated under the same id, since then is
-     * `changed`: nothing is written.
+     * `sourceHash` is the `hashSource` of the issue the criteria came from: its creation time,
+     * title and description. The check is inside the write, so an issue edited, or deleted and
+     * recreated under the same id, since then is `changed`: nothing is written.
      */
     readonly admit: (
       projectId: ProjectId,

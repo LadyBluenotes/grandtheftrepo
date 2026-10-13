@@ -50,10 +50,10 @@ const ENDED = new Set<OrchestrationV2Run["status"]>([
  * `finish`, called by the reactor when that thread's run ends, validates what it wrote. A valid
  * spec admits the issue with its Acceptance items as criteria; a malformed one only records why.
  *
- * Each attempt records the hash of the issue it started from, its creation time and description,
- * and the admission applies only while the issue still has it: an issue edited, or deleted and
- * recreated under the same id, while a child drafted closes the attempt as `malformed` and stays
- * where it is.
+ * Each attempt records the hash of the issue it started from, its creation time, title and
+ * description, and the admission applies only while the issue still has them: an issue edited, or
+ * deleted and recreated under the same id, while a child drafted closes the attempt as
+ * `malformed` and stays where it is.
  *
  * The attempt is stored, with its outcome, before the issue is admitted: admitting renames the
  * issue file, which no SQL transaction can cover, and a card admitted without an attempt would
