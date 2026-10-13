@@ -1,9 +1,5 @@
-import type {
-  EnvironmentId,
-  KanbanAttentionKind,
-  KanbanAttentionRow,
-  ProjectId,
-} from "@t3tools/contracts";
+import { kanbanAttentionStripRows } from "@t3tools/client-runtime/plugins/kanban";
+import type { EnvironmentId, KanbanAttentionRow, ProjectId } from "@t3tools/contracts";
 import { useNavigate } from "@tanstack/react-router";
 import { FlagIcon, MessageCircleQuestionMarkIcon, ShieldAlertIcon } from "lucide-react";
 
@@ -12,17 +8,6 @@ import { Badge } from "~/components/ui/badge";
 import { Button } from "~/components/ui/button";
 import { useEnvironmentQuery } from "~/state/query";
 import { attentionResumeTarget, kanbanAttention } from "./state";
-
-const KIND_LABEL: Record<KanbanAttentionKind, string> = {
-  question: "Question",
-  permission: "Permission",
-  budget_breach: "Budget breach",
-  routing_mismatch: "Routing mismatch",
-  two_writers: "Two writers",
-  stale_review: "Stale review",
-  security_hold: "Security hold",
-  unowned_finding: "Unowned finding",
-};
 
 /**
  * Everything in the project waiting on a person, above the board's columns, oldest first:
@@ -38,7 +23,7 @@ export function AttentionStrip({
 }) {
   const navigate = useNavigate();
   const attention = useEnvironmentQuery(kanbanAttention({ environmentId, input: { projectId } }));
-  const rows = attention.data ?? [];
+  const rows = kanbanAttentionStripRows(attention.data ?? []);
   if (rows.length === 0) return null;
 
   const resume = (row: KanbanAttentionRow) => {
@@ -71,13 +56,9 @@ export function AttentionStrip({
             <AlertTitle>
               <span className="flex min-w-0 items-center gap-1.5">
                 <Badge size="sm" variant="outline">
-                  {KIND_LABEL[row.kind]}
+                  {row.label}
                 </Badge>
-                <span className="min-w-0 truncate">
-                  {row.threadTitle === null
-                    ? "This project"
-                    : row.threadTitle.trim() || "Untitled thread"}
-                </span>
+                <span className="min-w-0 truncate">{row.title}</span>
               </span>
             </AlertTitle>
             <AlertDescription>{row.text}</AlertDescription>
