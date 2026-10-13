@@ -37,6 +37,12 @@ const ENVIRONMENT_LABEL = "Environment";
  * edited here like any other.
  */
 export function PolicyScreen() {
+  // Project ids belong to one environment, so the scope and selection start over with it.
+  const environmentId = usePluginEnvironmentId();
+  return <PolicyScreenContent key={environmentId ?? "none"} />;
+}
+
+function PolicyScreenContent() {
   const environmentId = usePluginEnvironmentId();
   const projects = useProjects().filter((project) => project.environmentId === environmentId);
   const [scope, setScope] = useState<ProjectId>(POLICY_ENVIRONMENT_PROJECT_ID);

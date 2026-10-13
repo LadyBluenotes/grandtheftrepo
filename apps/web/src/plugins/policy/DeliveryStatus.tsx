@@ -39,8 +39,9 @@ export function DeliveryStatus({
     const result = await install({ projectId: scope, key: policy.key });
     setInstalling(false);
     reportFailure("Could not reinstall the policy", result);
-    if (result._tag !== "Success") return;
+    // Install writes agent by agent, so a failed one may have written some; re-read either way.
     onChanged();
+    if (result._tag !== "Success") return;
     const skipped = result.value.filter((agent) => agent.status === "skipped");
     if (skipped.length > 0) {
       toastManager.add(

@@ -391,13 +391,18 @@ const make = Effect.gen(function* () {
       for (const filePath of new Set(deliveries.map((row) => row.target_path))) {
         texts.set(filePath, yield* Files.read(filePath));
       }
+      // Rows are grouped by policy once, so each policy takes its own without scanning the rest.
+      // A key never holds "/", so the project id and key cannot run together.
+      const ownerOf = (row: { readonly project_id: ProjectId; readonly key: string }) =>
+        `${row.project_id}/${row.key}`;
+      const versionRows = Map.groupBy(versions, ownerOf);
+      const deliveryRows = Map.groupBy(deliveries, ownerOf);
       const listings: Array<PolicyListing> = [];
       for (const policy of policies) {
-        const own = (row: { readonly project_id: ProjectId; readonly key: string }) =>
-          row.project_id === policy.project_id && row.key === policy.key;
+        const owner = ownerOf(policy);
         // Ordered by id, so the last row for a version is its state.
-        const byVersion = new Map(versions.filter(own).map((row) => [row.version, row]));
-        const delivered = deliveries.filter(own);
+        const byVersion = new Map((versionRows.get(owner) ?? []).map((row) => [row.version, row]));
+        const delivered = deliveryRows.get(owner) ?? [];
         const id = blockId(policy.project_id, policy.key);
         const status: Array<PolicyDeliveryStatus> = [];
         for (const agent of POLICY_AGENTS) {

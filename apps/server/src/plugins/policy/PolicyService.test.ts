@@ -581,4 +581,35 @@ it.layer(layerTest)("PolicyService", (it) => {
       assert.strictEqual(yield* codexStatus, "outdated");
     }),
   );
+
+  it.effect("list gives a key held by the environment and a project each its own rows", () =>
+    Effect.gen(function* () {
+      const policies = yield* PolicyService.PolicyService;
+      const local = ProjectId.make("project-same-key");
+      const key = "shared";
+      // The environment's policy has one version and a delivery; the project's has two and none.
+      yield* policies.create({ projectId, key, title: "Wide", body: "Same key, environment." });
+      yield* policies.accept({ projectId, key, version: 1 });
+      yield* policies.install({ projectId, key, agents: ["codex"] });
+      yield* policies.create({ projectId: local, key, title: "Local", body: "Same key, project." });
+      yield* policies.create({ projectId: local, key, title: "Local", body: "Same key, again." });
+
+      const listed = yield* policies.list(local);
+      const of = (owner: ProjectId) =>
+        listed.find((policy) => policy.projectId === owner && policy.key === key);
+      assert.deepStrictEqual(
+        of(projectId)?.versions.map((version) => version.version),
+        [1],
+      );
+      assert.deepStrictEqual(
+        of(projectId)?.deliveries.map((delivery) => delivery.agent),
+        ["codex"],
+      );
+      assert.deepStrictEqual(
+        of(local)?.versions.map((version) => version.version),
+        [1, 2],
+      );
+      assert.deepStrictEqual(of(local)?.deliveries, []);
+    }),
+  );
 });
