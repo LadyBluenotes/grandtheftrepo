@@ -17,9 +17,9 @@ import { AGENT_LABEL, canInstall, DELIVERY_BADGE, usePolicyCommands } from "./st
 
 /**
  * Each agent's instruction file against the policy's accepted version, as the list re-read it:
- * `ok`, `outdated` when the block is intact but from another version than the accepted one,
+ * `ok`, `outdated` when the block is intact but is another version than the accepted one,
  * `drifted` when the block was edited, `missing` when the file or block is gone or nothing was
- * ever installed. Reinstall, offered whatever the status while a version is accepted, writes the
+ * installed into the file the agent reads now. Reinstall, offered whatever the status while a version is accepted, writes the
  * accepted version to every agent whose directory exists, then the list re-reads.
  */
 export function DeliveryStatus({

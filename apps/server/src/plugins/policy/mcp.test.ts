@@ -4,6 +4,7 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import { EnvironmentId, POLICY_ENVIRONMENT_PROJECT_ID, ProjectId } from "@t3tools/contracts";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as SqlClient from "effect/sql/SqlClient";
 import { HttpBody, HttpClient, HttpRouter } from "effect/http";
@@ -33,8 +34,22 @@ const clientScope: McpInvocationContext.McpInvocationScope = {
   issuedAt: 1,
 };
 
+/** Every file exists and none can be read as text, so a listing that opens an instruction file dies. */
+const layerUnreadableFiles = Layer.effect(
+  FileSystem.FileSystem,
+  Effect.map(FileSystem.FileSystem, (fs) =>
+    FileSystem.FileSystem.of({
+      ...fs,
+      exists: () => Effect.succeed(true),
+      readFileString: () => Effect.die("policy_list opened an instruction file"),
+    }),
+  ),
+);
+
+/** The service on files it cannot read, over a database the test can write to directly. */
 const layerPolicy = PolicyService.layer.pipe(
-  Layer.provide(
+  Layer.provide(layerUnreadableFiles),
+  Layer.provideMerge(
     Layer.effect(
       SqlClient.SqlClient,
       Effect.map(
@@ -157,11 +172,27 @@ it.effect(
           key: "tone",
           version: 1,
         });
+        // The tone policy was delivered into a file the service cannot read; listing it still works.
+        const sql = Context.get(services, SqlClient.SqlClient);
+        yield* sql`INSERT INTO deliveries ${sql.insert({
+          project_id: POLICY_ENVIRONMENT_PROJECT_ID,
+          key: "tone",
+          version: 1,
+          agent: "claude",
+          target_path: "/home/test/.claude/CLAUDE.md",
+          rendered_hash: "block-hash",
+          rules_hash: "rules-hash",
+          installed_at: "2026-10-13T00:00:00.000Z",
+          verified_at: null,
+          verification_method: null,
+        })}`;
         const listed = resultText(
           yield* rpc(4, "tools/call", { name: "policy_list", arguments: { projectId } }),
         );
         expect(listed).toBe(
-          "*/tone · v1 · accepted · Tone\nproject-1/review · v1 · draft · Review",
+          "*/tone · v1 · accepted · Tone\n" +
+            "  claude: v1 /home/test/.claude/CLAUDE.md installed 2026-10-13T00:00:00.000Z verified never\n" +
+            "project-1/review · v1 · draft · Review",
         );
 
         const noProject = resultText(

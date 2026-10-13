@@ -24,10 +24,10 @@ saving it adds a draft. Accepting a draft makes it current and the server delive
 **New policy** starts one from an empty form; its key is lowercase letters, digits and dashes.
 
 Delivery shows, for Claude, Codex and Copilot, whether the agent's instruction file holds the
-accepted version: `OK`, `Outdated` when the file still holds an earlier version because the
-accepted one has not been delivered yet, `Drifted` when the block was edited by hand, or `Missing`
-when nothing was installed or the file lost it. **Reinstall** writes the accepted version again; an
-agent whose directory does not exist is skipped. The screen re-reads when you come back to it, so a change an
+accepted version: `OK`, `Outdated` when the file holds a different version from the accepted one,
+`Drifted` when the block was edited by hand, or `Missing` when nothing was installed in the file the
+agent reads now or the file lost it. **Reinstall** writes the accepted version again; an agent whose
+directory does not exist is skipped. The screen re-reads when you come back to it, so a change an
 agent made through the `policy_*` tools shows then.
 
 ### The ponytail policy

@@ -103,6 +103,24 @@ it.effect("seeds the ladder as an accepted policy that installs into an agent's 
   }).pipe(Effect.provide(layerTest)),
 );
 
+it.effect("seeds the ladder even when a delivered instruction file cannot be read", () =>
+  Effect.gen(function* () {
+    const policies = yield* PolicyService.PolicyService;
+    const fs = yield* FileSystem.FileSystem;
+    yield* policies.create({ projectId, key: "other", title: "Other", body: "Another policy." });
+    yield* policies.accept({ projectId, key: "other", version: 1 });
+    const [claude] = yield* policies.install({ projectId, key: "other", agents: ["claude"] });
+    // A directory where the delivered file was: it exists and cannot be read as text.
+    yield* fs.remove(claude!.path);
+    yield* fs.makeDirectory(claude!.path);
+
+    yield* Ponytail.seed();
+    assert.deepStrictEqual(yield* stored, [
+      { project_id: projectId, version: 1, state: "accepted", body: Ponytail.PONYTAIL_TEXT },
+    ]);
+  }).pipe(Effect.provide(layerTest)),
+);
+
 it.effect("leaves an edited ladder alone when the plugin starts again", () =>
   Effect.gen(function* () {
     const policies = yield* PolicyService.PolicyService;

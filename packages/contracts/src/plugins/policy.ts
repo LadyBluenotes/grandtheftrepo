@@ -71,7 +71,10 @@ export type PolicyInstallResult = typeof PolicyInstallResult.Type;
 
 export const PolicyVerifyResult = Schema.Struct({
   agent: PolicyAgent,
-  /** `drifted` when the block is there but differs; `missing` when the file or the block is gone. */
+  /**
+   * `drifted` when the block is there but differs; `missing` when the file or the block is gone, or
+   * the delivery went into a file the agent no longer reads.
+   */
   status: Schema.Literals(["ok", "drifted", "missing"]),
   path: Schema.String,
   /** The block in the file hashes to what was installed. */

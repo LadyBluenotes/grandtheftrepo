@@ -109,21 +109,23 @@ export function PolicyEditor({
                     {formatRelativeTimeLabel(version.at)}
                   </span>
                 </TableCell>
-                <TableCell className="text-right">
-                  {version.state === "accepted" ? null : (
-                    <Button
-                      size="xs"
-                      variant="outline"
-                      disabled={!canWrite || busy}
-                      onClick={() =>
-                        void run("Could not accept the version", () =>
-                          accept({ projectId: scope, key: policy.key, version: version.version }),
-                        )
-                      }
-                    >
-                      Accept
-                    </Button>
-                  )}
+                <TableCell>
+                  <div className="flex justify-end">
+                    {version.state === "accepted" ? null : (
+                      <Button
+                        size="xs"
+                        variant="outline"
+                        disabled={!canWrite || busy}
+                        onClick={() =>
+                          void run("Could not accept the version", () =>
+                            accept({ projectId: scope, key: policy.key, version: version.version }),
+                          )
+                        }
+                      >
+                        Accept
+                      </Button>
+                    )}
+                  </div>
                 </TableCell>
               </TableRow>
             );
