@@ -52,7 +52,7 @@ const onlyLearning = Effect.gen(function* () {
 });
 
 it.effect(
-  "both sweeps run on the supervisor tick and turn a verdict into an item and a record",
+  "the sweeps run on the supervisor tick and turn a verdict into an item and a record",
   () =>
     Effect.scoped(
       Effect.gen(function* () {
@@ -63,6 +63,7 @@ it.effect(
           assert.deepEqual((yield* supervisor.status).sweeps, [
             { plugin: "learning", name: "classify" },
             { plugin: "learning", name: "promote" },
+            { plugin: "learning", name: "regressions" },
           ]);
           const sql = host.databases.get("learning")!;
           yield* CorrectionStore.insert({
@@ -81,6 +82,8 @@ it.effect(
             [
               ["classify", "ok", 1, 1, 0],
               ["promote", "ok", 1, 1, 0],
+              // Telemetry is off, so there is nothing to compare.
+              ["regressions", "ok", 0, 0, 0],
             ],
           );
           const items = yield* PluginHost.handlers[PLUGIN_GATEWAY_WS_METHODS.read]({

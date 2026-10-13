@@ -121,7 +121,11 @@ them half-evaluated. The host hands `toolkitRegistration` to `ServerPlugin.mcp` 
   them over MCP. Two sweeps turn corrections with a declared failure mode into learning items, one
   per mode per project, routed by fixed rules on the mode to an owner kind, and hand each item
   over through one promotion record, at least once, keyed by the record's id so a promoter can
-  drop a repeat; no promoter is registered yet, so records wait. Server:
+  drop a repeat; no promoter is registered yet, so records wait. A third sweep compares each
+  project's telemetry measures over the last seven whole UTC days with the seven before, once a
+  day, and opens or strengthens an `efficiency_regression:<measure>` item, with no owner kind, for
+  each measure worse by its threshold in `regressions/thresholds.ts`; with telemetry off it does
+  nothing. Server:
   `apps/server/src/plugins/learning/`. Contracts:
   `packages/contracts/src/plugins/learning.ts`. No screen yet.
 - **policy**: reviewed working rules per project (`*` is the whole environment), versioned in the
