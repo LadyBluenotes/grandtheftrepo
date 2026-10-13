@@ -114,6 +114,15 @@ export class KnowledgeStore extends Context.Service<
       source: KnowledgeSource,
     ) => Effect.Effect<KnowledgeEntry, KnowledgeError>;
     /**
+     * `propose` for a learning promotion, once per `promotionId`. Looking for a page that names the
+     * promotion and saving the draft are one transaction, so calls that overlap save one draft, and
+     * a repeat answers with the page already saved, in whatever state it is now.
+     */
+    readonly proposeForPromotion: (
+      input: KnowledgeProposeInput,
+      promotion: { readonly itemId: number; readonly promotionId: number },
+    ) => Effect.Effect<KnowledgeEntry, KnowledgeError>;
+    /**
      * Accepts a draft, with the edits given, then installs the project. The move from draft is one
      * statement, so of two requests for one draft the second is refused.
      */
@@ -685,8 +694,16 @@ const make = Effect.gen(function* () {
     }),
   );
 
-  const propose = Effect.fn("KnowledgeStore.propose")(
-    function* (input: KnowledgeProposeInput, source: KnowledgeSource) {
+  /**
+   * Saves a draft. With `promotionId`, a page that already names that promotion is answered
+   * instead, found in the transaction that would insert, so no overlapping call can slip between.
+   */
+  const saveDraft = Effect.fn("KnowledgeStore.saveDraft")(
+    function* (
+      input: KnowledgeProposeInput,
+      source: KnowledgeSource,
+      promotionId: number | undefined,
+    ) {
       if (!isKey(input.key)) {
         return yield* invalid(`Key "${input.key}" must match [a-z0-9][a-z0-9-]{0,63}.`);
       }
@@ -697,6 +714,15 @@ const make = Effect.gen(function* () {
       const at = yield* nowIso;
       const id = yield* sql.withTransaction(
         Effect.gen(function* () {
+          if (promotionId !== undefined) {
+            const [named] = yield* sql<{ readonly id: number }>`
+              SELECT id FROM knowledge_entry
+              WHERE project_id = ${input.projectId} AND json_extract(source, '$.kind') = 'item'
+                AND json_extract(source, '$.promotionId') = ${promotionId}
+              ORDER BY id LIMIT 1
+            `;
+            if (named !== undefined) return named.id;
+          }
           const taken = yield* sql<{ readonly state: string }>`
             SELECT state FROM knowledge_entry
             WHERE project_id = ${input.projectId} AND "key" = ${input.key} AND state <> 'retired'
@@ -730,6 +756,14 @@ const make = Effect.gen(function* () {
       ProjectOperationError: io("Could not read the project."),
     }),
   );
+
+  const propose: KnowledgeStore["Service"]["propose"] = (input, source) =>
+    saveDraft(input, source, undefined);
+
+  const proposeForPromotion: KnowledgeStore["Service"]["proposeForPromotion"] = (
+    input,
+    { itemId, promotionId },
+  ) => saveDraft(input, { kind: "item", itemId, promotionId }, promotionId);
 
   const accept = Effect.fn("KnowledgeStore.accept")(
     function* ({ id, title, body }: KnowledgeAcceptInput) {
@@ -777,6 +811,7 @@ const make = Effect.gen(function* () {
   return KnowledgeStore.of({
     list,
     propose,
+    proposeForPromotion,
     accept,
     retire,
     discard,

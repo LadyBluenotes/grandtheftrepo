@@ -17,6 +17,10 @@ project, so it travels with the repository and reaches your teammates' agents to
    to read the page matching their task. The rest of each file is left exactly as it was, and a
    file that does not exist is created with the index alone.
 
+The learning plugin proposes drafts too: when a recurring failure mode is handed over to project
+knowledge, a draft titled `Learned: <failure mode>` waits here with the reason and the latest
+evidence. You edit and accept it like any other, or discard it.
+
 Agents list the accepted pages with the `knowledge_list` tool.
 
 ## Changing or removing a page
