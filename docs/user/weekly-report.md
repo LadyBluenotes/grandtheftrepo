@@ -15,7 +15,7 @@ server's time zone, an agent posts a page there covering the last seven whole da
 
 Each section lists up to 20 entries with the full count. A section whose plugin is turned off says
 so instead of showing data. An archived thread's pull requests appear only when the thread settled
-or one of them merged that week.
+that week or its latest merge was that week.
 
 The report is an ordinary scheduled task, created when the server starts. Change its time, prompt
 or model, or turn it off, like any other scheduled task; T3 Code does not change it again. A

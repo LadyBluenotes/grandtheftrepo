@@ -97,8 +97,12 @@ const unavailable = (missingReason: string) => ({
 
 const notRunning = (plugin: string) => `The ${plugin} plugin is not running.`;
 
-/** Archived threads are loaded only when the plugin's rows say they settled or merged in the range. */
-const ARCHIVED_LIMIT = "Archived threads count only when settled or merged in the range.";
+/**
+ * Archived threads are loaded only when the plugin's rows say they settled in the range or their
+ * latest merge falls in it: the rows keep a thread's latest merge, not every one.
+ */
+const ARCHIVED_LIMIT =
+  "Archived threads count only when they settled in the range or their latest merge falls in it.";
 
 /** Orders by each key in turn. Strings compare by code unit, so the order is the same everywhere. */
 const byKeys =
@@ -172,11 +176,14 @@ export const foldReport = (input: ReportInput): TelemetryReport => {
     ];
   });
 
-  // A pull request linked from two threads is listed once.
+  // A pull request linked from two threads is listed once, as linked since its earliest link.
   const pullRequests = new Map<string, ReportPullRequest>();
   for (const thread of threads) {
     for (const pr of thread.pullRequests) {
-      if (!pullRequests.has(pr.key)) pullRequests.set(pr.key, pr);
+      const seen = pullRequests.get(pr.key);
+      if (seen === undefined) pullRequests.set(pr.key, pr);
+      else if (pr.linkedAt < seen.linkedAt)
+        pullRequests.set(pr.key, { ...seen, linkedAt: pr.linkedAt });
     }
   }
   const linked = [...pullRequests.values()].toSorted(

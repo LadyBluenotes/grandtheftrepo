@@ -126,8 +126,9 @@ export const make = Effect.fn("ReportService.make")(function* (
         .pipe(readThreads);
       const loaded = new Set<string>(active.map((thread) => thread.id));
       // Archived threads are not in the active list. Listing them with their pull requests means
-      // reading every project's archive, so only those the plugin's rows say settled or merged in
-      // the range are loaded; the fold says so on the sections that miss the rest.
+      // reading every project's archive, so only those the plugin's rows say settled in the range,
+      // or whose latest merge (the only one the rows keep) falls in it, are loaded; the fold says
+      // so on the sections that miss the rest.
       const touched =
         unready === null
           ? yield* sql<{ readonly thread_id: ThreadId }>`

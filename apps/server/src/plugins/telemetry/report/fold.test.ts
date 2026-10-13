@@ -258,8 +258,29 @@ it("pull requests: open now or closed in the range, once each, by state", () => 
   // Archived threads with an open pull request, or one only closed, are not loaded.
   assert.strictEqual(
     report.pullRequests.missingReason,
-    "Archived threads count only when settled or merged in the range.",
+    "Archived threads count only when they settled in the range or their latest merge falls in it.",
   );
+});
+
+it("pull requests: one linked from two threads counts from its earliest link, in either order", () => {
+  const before = pullRequest(10, { linkedAt: INSIDE });
+  const after = pullRequest(10, { linkedAt: TO });
+  for (const [first, second] of [
+    [before, after],
+    [after, before],
+  ] as const) {
+    const report = foldReport({
+      ...fullInput(),
+      threads: [
+        thread("thread:a", { pullRequests: [first] }),
+        thread("thread:b", { pullRequests: [second] }),
+      ],
+    });
+    assert.deepEqual(
+      report.pullRequests.items.map((pr) => pr.number),
+      [10],
+    );
+  }
 });
 
 it("while telemetry replays, the sections built from its thread rows are unavailable, and the rest answer", () => {

@@ -5,6 +5,7 @@ import {
   ProjectId,
   ProviderInstanceId,
   type ScheduledTask,
+  ScheduledTaskError,
   ScheduledTaskId,
 } from "@t3tools/contracts";
 import * as Deferred from "effect/Deferred";
@@ -62,14 +63,17 @@ export const existingTask = (id: string, projectId: ProjectId): ScheduledTask =>
 /**
  * Projects, a scheduled task service and thread management that keep what they are given in
  * memory, so a test can read back the tasks and threads seeding made. `upserted` completes on the
- * first save. The thread service lists no threads, so a report sees only the plugin's own rows.
+ * first save; the first `failingSaves` saves fail. `threads` are those created and not deleted.
+ * The thread service lists no threads, so a report sees only the plugin's own rows.
  */
 export const fakeCore = (input: {
   readonly projects: ReadonlyArray<OrchestrationProjectShell>;
   readonly tasks?: ReadonlyArray<ScheduledTask>;
+  readonly failingSaves?: number;
 }) =>
   Effect.gen(function* () {
     const tasks = yield* Ref.make<ReadonlyArray<ScheduledTask>>(input.tasks ?? []);
+    const failures = yield* Ref.make(input.failingSaves ?? 0);
     const commands = yield* Ref.make<ReadonlyArray<OrchestrationV2ServerCommand>>([]);
     const upserted = yield* Deferred.make<void>();
     const layer = Layer.mergeAll(
@@ -83,6 +87,9 @@ export const fakeCore = (input: {
         upsert: ({ schedule, ...saved }) =>
           Effect.gen(function* () {
             if (schedule.type === "webhook") return yield* Effect.die("No webhook tasks here.");
+            if ((yield* Ref.getAndUpdate(failures, (left) => left - 1)) > 0) {
+              return yield* new ScheduledTaskError({ message: "Could not save schedule task." });
+            }
             const task: ScheduledTask = {
               ...existingTask(saved.id ?? "scheduled-task:new", saved.projectId),
               title: saved.title,
@@ -115,6 +122,14 @@ export const fakeCore = (input: {
       layer,
       tasks: Ref.get(tasks),
       commands: Ref.get(commands),
+      threads: Effect.map(Ref.get(commands), (all) => {
+        const deleted = new Set(
+          all.flatMap((c) => (c.type === "thread.delete" ? [c.threadId] : [])),
+        );
+        return all.flatMap((c) =>
+          c.type === "thread.create" && !deleted.has(c.threadId) ? [c.threadId] : [],
+        );
+      }),
       upserted: Deferred.await(upserted),
     };
   });

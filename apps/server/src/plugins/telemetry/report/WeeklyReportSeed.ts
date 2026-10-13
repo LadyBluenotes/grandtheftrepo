@@ -26,8 +26,9 @@ const promptFor = (projectId: ProjectId) =>
  * it that posts the report there every Monday at 09:00 in the server's time zone. A project that
  * already has the task is left alone, so a person's edits stay and disabling it stops it; a
  * project created later is seeded at the next start. The task runs Supervised, the lowest mode in
- * which the read-only `telemetry_report` and `html_render` tools run without asking. One project
- * failing does not stop the others. Answers with how many projects it seeded.
+ * which the read-only `telemetry_report` and `html_render` tools run without asking. When the task
+ * cannot be saved, the thread made for it is deleted again. One project failing does not stop the
+ * others. Answers with how many projects it seeded.
  */
 export const seed = Effect.gen(function* () {
   const projects = yield* ProjectService.ProjectService;
@@ -68,21 +69,41 @@ export const seed = Effect.gen(function* () {
           createdBy: "system",
           creationSource: "server",
         });
-        yield* scheduledTasks.upsert({
-          id,
-          title: TITLE,
-          prompt: promptFor(project.id),
-          enabled: true,
-          schedule: { type: "fixed_time", timeOfDay: "09:00", weekdays: [1] },
-          projectId: project.id,
-          threadId,
-          workspaceStrategy: { type: "root" },
-          modelSelection,
-          runtimeMode: "approval-required",
-          interactionMode: "default",
-          createdBy: "system",
-          creationSource: "server",
-        });
+        yield* scheduledTasks
+          .upsert({
+            id,
+            title: TITLE,
+            prompt: promptFor(project.id),
+            enabled: true,
+            schedule: { type: "fixed_time", timeOfDay: "09:00", weekdays: [1] },
+            projectId: project.id,
+            threadId,
+            workspaceStrategy: { type: "root" },
+            modelSelection,
+            runtimeMode: "approval-required",
+            interactionMode: "default",
+            createdBy: "system",
+            creationSource: "server",
+          })
+          .pipe(
+            // Nothing references the new thread yet; left behind, every start would add another.
+            Effect.tapError(() =>
+              threads
+                .dispatch({
+                  type: "thread.delete",
+                  commandId: CommandId.make(`command:${key}:delete`),
+                  threadId,
+                })
+                .pipe(
+                  Effect.catch((cause) =>
+                    Effect.logWarning("telemetry: an unbound weekly report thread was left", {
+                      threadId,
+                      cause,
+                    }),
+                  ),
+                ),
+            ),
+          );
       }),
     );
     if (Result.isFailure(created)) {

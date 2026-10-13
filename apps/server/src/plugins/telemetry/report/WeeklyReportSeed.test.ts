@@ -2,6 +2,7 @@ import { assert, it } from "@effect/vitest";
 import { ProjectId } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as TestClock from "effect/testing/TestClock";
 
 import * as ThreadManagementService from "../../../orchestration-v2/ThreadManagementService.ts";
 import * as ProjectService from "../../../project/ProjectService.ts";
@@ -62,6 +63,31 @@ it.effect("leaves a project's existing task as the person left it", () =>
     assert.deepEqual(yield* core.tasks, [mine]);
     assert.deepEqual(yield* core.commands, []);
   }),
+);
+
+it.effect(
+  "a task that cannot be saved takes its new thread with it, and the next start seeds",
+  () =>
+    Effect.gen(function* () {
+      const core = yield* fakeCore({ projects: [project("project:a")], failingSaves: 1 });
+      const seed = WeeklyReportSeed.seed.pipe(Effect.provide(core.layer));
+
+      assert.strictEqual(yield* seed, 0);
+      assert.deepEqual(yield* core.tasks, []);
+      assert.deepEqual(yield* core.threads, []);
+      assert.deepEqual(
+        (yield* core.commands).map((command) => command.type),
+        ["thread.create", "thread.delete"],
+      );
+
+      // A later start.
+      yield* TestClock.adjust("1 second");
+      assert.strictEqual(yield* seed, 1);
+      const [task, ...otherTasks] = yield* core.tasks;
+      const [thread, ...otherThreads] = yield* core.threads;
+      assert.deepEqual([otherTasks.length, otherThreads.length], [0, 0]);
+      assert.strictEqual(task?.threadId, thread);
+    }),
 );
 
 it.effect("without a scheduled task service, seeding reads nothing and creates nothing", () =>
