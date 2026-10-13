@@ -45,6 +45,35 @@ const failureCode = <A>(effect: Effect.Effect<A, KanbanError>) =>
     Effect.catch((error) => Effect.succeed(error.code)),
   );
 
+describe("hashSource", () => {
+  const issue = { createdAt: "2026-10-12T00:00:00.000Z", title: "A", description: "B\nC" };
+
+  it("is the same for the same issue and differs when any field does", () => {
+    assert.strictEqual(KanbanStore.hashSource(issue), KanbanStore.hashSource({ ...issue }));
+    for (const changed of [
+      { createdAt: "2026-10-12T00:00:01.000Z" },
+      { title: "A2" },
+      { description: "B\nC2" },
+    ])
+      assert.notStrictEqual(
+        KanbanStore.hashSource(issue),
+        KanbanStore.hashSource({ ...issue, ...changed }),
+      );
+  });
+
+  it("does not move text across a field boundary", () => {
+    // Joined with newlines, both of these would be "A\nB\nC".
+    assert.notStrictEqual(
+      KanbanStore.hashSource({ ...issue, title: "A", description: "B\nC" }),
+      KanbanStore.hashSource({ ...issue, title: "A\nB", description: "C" }),
+    );
+    assert.notStrictEqual(
+      KanbanStore.hashSource({ ...issue, title: "A", description: "" }),
+      KanbanStore.hashSource({ ...issue, title: "", description: "A" }),
+    );
+  });
+});
+
 it.layer(layerTest)("KanbanStore", (it) => {
   describe("issues", () => {
     it.effect("creates a user issue in Todo as a markdown file and lists it without its body", () =>
