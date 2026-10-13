@@ -1,7 +1,14 @@
-import { ProjectId, type KnowledgeEntry } from "@t3tools/contracts";
+import { ProjectId, ThreadId, type KnowledgeEntry } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
-import { acceptInput, canRestore, draftProblem, groupKnowledge, needsInstall } from "./state";
+import {
+  acceptInput,
+  canRestore,
+  draftProblem,
+  draftSourceLabel,
+  groupKnowledge,
+  needsInstall,
+} from "./state";
 
 const projectId = ProjectId.make("project-1");
 
@@ -109,5 +116,17 @@ describe("canRestore", () => {
     }
     const other = entry(3, "db", "accepted", { created: "2026-10-03T00:00:00.000Z" });
     expect(canRestore(retired, groupKnowledge([retired, other]))).toBe(true);
+  });
+});
+
+describe("draftSourceLabel", () => {
+  it("says an agent, a person or a learning item proposed the draft", () => {
+    expect(draftSourceLabel({ kind: "agent", threadId: ThreadId.make("thread-1") })).toBe(
+      "Proposed by an agent",
+    );
+    expect(draftSourceLabel({ kind: "person" })).toBe("Proposed by a person");
+    expect(draftSourceLabel({ kind: "item", itemId: 42, promotionId: 7 })).toBe(
+      "Learned from item #42",
+    );
   });
 });
