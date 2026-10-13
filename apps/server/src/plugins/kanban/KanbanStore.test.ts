@@ -1,17 +1,21 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, describe, it } from "@effect/vitest";
 import { ProjectId, ThreadId, type KanbanError, type Project } from "@t3tools/contracts";
+import * as Context from "effect/Context";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
+import * as Queue from "effect/Queue";
 import * as Ref from "effect/Ref";
 import * as Stream from "effect/Stream";
 
 import * as ServerConfig from "../../config.ts";
 import * as ProjectService from "../../project/ProjectService.ts";
-import { serializeIssue } from "./KanbanFiles.ts";
+import { ISSUE_EXTENSION, serializeIssue } from "./KanbanFiles.ts";
 import * as KanbanStore from "./KanbanStore.ts";
 
 const projectId = ProjectId.make("project-1");
@@ -43,6 +47,78 @@ const failureCode = <A>(effect: Effect.Effect<A, KanbanError>) =>
   effect.pipe(
     Effect.map(() => "ok"),
     Effect.catch((error) => Effect.succeed(error.code)),
+  );
+
+/**
+ * What a test holds of a store whose issues-folder watcher it drives: `events` are the watcher's
+ * events, `held` is set when a refresh has read an issue file and `release` lets it go on, and
+ * `drained` is set when the watcher takes the event named `sentinel`, which it only does once the
+ * refresh in hand has finished. `removing` says the store has started removing an issue file.
+ */
+const driveWatcher = Effect.gen(function* () {
+  return {
+    events: yield* Queue.unbounded<FileSystem.WatchEvent>(),
+    held: yield* Deferred.make<void>(),
+    release: yield* Deferred.make<void>(),
+    drained: yield* Deferred.make<void>(),
+    removing: false,
+  };
+});
+
+const sentinel = "sentinel";
+
+/**
+ * The real file system, except that the issues folder's watcher delivers only what the test
+ * offers, the first read of an issue file waits for the test once it has the file's text, and the
+ * store's removal of an issue file is noted. (A write also removes its temp folder; that is not it.)
+ */
+const drivenFileSystem = (control: Effect.Success<typeof driveWatcher>) =>
+  Layer.effect(
+    FileSystem.FileSystem,
+    Effect.map(FileSystem.FileSystem, (real) => {
+      let holding = true;
+      return {
+        ...real,
+        watch: (dir) =>
+          dir.endsWith("issues")
+            ? Stream.fromQueue(control.events).pipe(
+                Stream.tap((event) =>
+                  event.path === sentinel
+                    ? Deferred.succeed(control.drained, undefined)
+                    : Effect.void,
+                ),
+              )
+            : Stream.never,
+        readFileString: (file, encoding) =>
+          Effect.tap(real.readFileString(file, encoding), () => {
+            if (!holding || !file.endsWith(ISSUE_EXTENSION)) return Effect.void;
+            holding = false;
+            return Effect.andThen(
+              Deferred.succeed(control.held, undefined),
+              Deferred.await(control.release),
+            );
+          }),
+        remove: (file, options) =>
+          Effect.suspend(() => {
+            if (file.endsWith(ISSUE_EXTENSION)) control.removing = true;
+            return real.remove(file, options);
+          }),
+      } satisfies FileSystem.FileSystem;
+    }),
+  );
+
+const layerDriven = (control: Effect.Success<typeof driveWatcher>) =>
+  KanbanStore.layer.pipe(
+    Layer.provide(drivenFileSystem(control)),
+    Layer.provideMerge(
+      Layer.mock(ProjectService.ProjectService)({
+        getById: (id) => Effect.succeed(id === projectId ? Option.some(project) : Option.none()),
+      }),
+    ),
+    Layer.provideMerge(
+      Layer.fresh(ServerConfig.layerTest(process.cwd(), { prefix: "t3code-kanban-test-" })),
+    ),
+    Layer.provideMerge(NodeServices.layer),
   );
 
 describe("hashSource", () => {
@@ -453,4 +529,55 @@ it.layer(layerTest)("KanbanStore", (it) => {
       }),
     );
   });
+});
+
+describe("watcher refresh", () => {
+  it.effect("does not bring back an issue deleted after the refresh read it", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const control = yield* driveWatcher;
+        const store = Context.get(
+          yield* Layer.build(layerDriven(control)),
+          KanbanStore.KanbanStore,
+        );
+        // Loads the board folder, which is empty, and starts the watcher.
+        yield* store.board(projectId);
+        const { id } = yield* store.write(projectId, "user", {
+          action: "issue.create",
+          title: "Login loops",
+        });
+        yield* store.write(projectId, "user", { action: "issue.archive", id });
+
+        // The archive write's event: the refresh reads the archived file, then waits to index it.
+        yield* Queue.offer(control.events, { _tag: "Update", path: `${id}${ISSUE_EXTENSION}` });
+        yield* Deferred.await(control.held);
+
+        // The delete starts while the refresh waits. Without the lock it runs to its end under the
+        // refresh; with it, the delete waits for the refresh, which waits for the test.
+        const deleting = yield* Effect.forkChild(
+          store.write(projectId, "user", { action: "issue.delete", id }),
+          { startImmediately: true },
+        );
+        if (control.removing) yield* Fiber.join(deleting);
+        yield* Deferred.succeed(control.release, undefined);
+
+        // The delete's own event has not been handled yet; the next one is taken after the refresh.
+        yield* Queue.offer(control.events, { _tag: "Update", path: sentinel });
+        yield* Deferred.await(control.drained);
+        yield* Fiber.join(deleting);
+
+        const again = yield* store.write(projectId, "user", {
+          action: "issue.create",
+          title: "Login loops",
+        });
+        assert.strictEqual(again.id, id);
+        const board = yield* store.board(projectId);
+        assert.deepStrictEqual(
+          board.issues.map((issue) => issue.id),
+          [id],
+        );
+        assert.isNull(board.issues[0]?.archivedAt);
+      }),
+    ),
+  );
 });
