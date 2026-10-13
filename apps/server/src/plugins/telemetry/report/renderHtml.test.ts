@@ -98,3 +98,52 @@ it("renders no sub-table for a measure without largest results, or with an empty
   );
   assert.notInclude(html, "Largest result");
 });
+
+const candidate = (steps: ReadonlyArray<string>, estimatedTokens: number, index: number) => ({
+  id: `candidate:${index}`,
+  kind: steps.length === 1 ? ("step" as const) : ("procedure" as const),
+  steps,
+  threads: 3 + index,
+  occurrences: 4 + index,
+  deterministicRatio: 1,
+  estimatedTokens,
+  form: "script" as const,
+  example: { threadId: `thread:${index}`, runId: `run:${index}`, itemIds: [`item:${index}`] },
+});
+
+it("renders the five costliest extraction candidates as a sub-table of the efficiency section", () => {
+  const measure: TelemetryMeasure = {
+    measure: "extraction_candidates",
+    state: "ok",
+    value: 6,
+    unit: "count",
+    direction: "lower_is_better",
+    sampleSize: 9,
+    missingReason: null,
+    provenance: [],
+    detail: {
+      candidates: [
+        candidate(["command:pnpm lint", "command:pnpm test"], 9000, 1),
+        candidate(["Read <b>AGENTS.md</b>"], 8000, 2),
+        candidate(["Grep <pattern> <path>"], 7000, 3),
+        candidate(["command:git status"], 6000, 4),
+        candidate(["file_search:TODO"], 5000, 5),
+        candidate(["command:pnpm audit"], 4000, 6),
+      ],
+    },
+  };
+  const html = renderHtml(foldReport({ ...fullInput(), measures: [measure] }));
+  const start = html.indexOf("<th>Repeated steps</th>");
+  assert.isAbove(start, html.indexOf("Efficiency"));
+  const table = html.slice(start, html.indexOf("</table>", start));
+  assert.strictEqual(table.match(/<tr><td>/g)?.length, 5);
+  assert.include(
+    table,
+    "<td>command:pnpm lint &rarr; command:pnpm test</td><td>4</td><td>~9000</td><td>script</td>",
+  );
+  assert.notInclude(table, "pnpm audit");
+  // Steps are text: a path that looks like markup, and the slots, are escaped.
+  assert.include(table, "Read &lt;b&gt;AGENTS.md&lt;/b&gt;");
+  assert.include(table, "Grep &lt;pattern&gt; &lt;path&gt;");
+  assert.notInclude(html, "<b>AGENTS");
+});

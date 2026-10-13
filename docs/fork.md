@@ -123,7 +123,7 @@ them half-evaluated. The host hands `toolkitRegistration` to `ServerPlugin.mcp` 
   client. Server: `apps/server/src/plugins/kanban/`. Contracts:
   `packages/contracts/src/plugins/kanban.ts`. Web: `apps/web/src/plugins/kanban/`. Mobile:
   `apps/mobile/src/features/kanban/`. User guide: [Kanban board](./user/kanban.md).
-- **telemetry**: the sixteen efficiency measures of #1 and #35 over a project's window, from the
+- **telemetry**: the eighteen efficiency measures of #1, #35 and #36 over a project's window, from the
   `telemetry.measures` gateway method and the `telemetry_measures` MCP tool. Its reactor keeps
   runs, tool calls, threads and provider turn token usage from the event log in the plugin's own
   tables, and pure functions in `measures/` compute each measure from those rows; cost is priced
@@ -151,6 +151,18 @@ them half-evaluated. The host hands `toolkitRegistration` to `ServerPlugin.mcp` 
   reads the knowledge plugin's `KnowledgeStore` where it runs only to count the project's accepted
   pages, so the measure answers `unavailable` while that plugin is off or the project has none. It
   is a rate, so the learning regression sweep compares it.
+  `deterministic_work_share` and `extraction_candidates` (`measures/repeatedWork.ts`) find work a
+  project's runs repeat in at least three threads: one tool call's shape, or up to six in a row,
+  ranked by estimated tokens with the form it suits (a script, hook, MCP tool, scheduled task,
+  context file or skill). The `telemetry_extraction_candidates` MCP tool lists the twenty costliest
+  and the report five; nothing writes to the repo. A shape needs more than the earlier columns, so
+  migration 5 adds each call's provider turn, which groups a subagent's calls with no run, its
+  search pattern, a dynamic tool's input keys, and the input's size and sha256, never the input,
+  and replays the log; a call a compaction removed before then has no shape, and neither does a
+  command line as long as the 512 characters kept of it. Absolute paths that resolve under the
+  project's directory, which `MeasureService` reads from `ProjectService` when it is built, are
+  made relative to it. Neither measure reads a tier; the share is a rate the regression sweep
+  compares, the count a volume it does not.
   `telemetry.report` and the `telemetry_report` MCP tool fold a project's range
   into ten sections, from the thread records, the learning and review plugins and the host's
   attention flags, with the same report as one self-contained HTML page; at start the plugin gives

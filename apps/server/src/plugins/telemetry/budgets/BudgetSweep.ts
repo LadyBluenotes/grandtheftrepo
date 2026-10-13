@@ -16,12 +16,8 @@ import * as ThreadManagementService from "../../../orchestration-v2/ThreadManage
 import * as ProjectService from "../../../project/ProjectService.ts";
 import * as Attention from "../../Attention.ts";
 import * as TierMapService from "../../routing/TierMapService.ts";
-import { unmeasured } from "../measures/index.ts";
-import {
-  MAX_PER_CALL,
-  TIER_INDEPENDENT_MEASURES,
-  toolOutputFlagText,
-} from "../measures/toolOutput.ts";
+import { TIER_INDEPENDENT_MEASURES, unmeasured } from "../measures/index.ts";
+import { MAX_PER_CALL, toolOutputFlagText } from "../measures/toolOutput.ts";
 import type * as Telemetry from "../Telemetry.ts";
 import * as BudgetStore from "./BudgetStore.ts";
 

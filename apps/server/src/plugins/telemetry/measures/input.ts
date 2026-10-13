@@ -48,6 +48,8 @@ export interface ToolCallRow {
   readonly item_id: string;
   /** Null for a call a provider's subagent made, which belongs to no run. */
   readonly run_id: string | null;
+  /** The provider turn that groups a call with no run with the rest of its turn, when known. */
+  readonly provider_turn_id: string | null;
   readonly thread_id: string;
   readonly ordinal: number;
   readonly item_type: string;
@@ -55,6 +57,14 @@ export interface ToolCallRow {
   readonly path: string | null;
   /** A command's command line, cut short. Null for any other item, and until the replay after migration 4. */
   readonly command: string | null;
+  /** A search's pattern: a file search's, or a dynamic tool's `pattern`, else its `glob`. */
+  readonly pattern: string | null;
+  /** A dynamic tool's input keys, sorted and joined with commas. Null for any other item. */
+  readonly input_keys: string | null;
+  /** The estimated tokens of the input. Null for a file change, and until the replay after migration 5. */
+  readonly input_tokens: number | null;
+  /** The input's sha256, equal for equal inputs. Null as `input_tokens` is. */
+  readonly input_digest: string | null;
   /** The estimated tokens of the output; null for an item with none to size, and until the same replay. */
   readonly output_tokens: number | null;
   /** When the item started, else when it last changed; places a call with no run. Null until the replay after migration 4. */
@@ -91,6 +101,8 @@ export interface MeasureInput {
    * calls and turn usage; threads are all the project's either way.
    */
   readonly tier: RoutingTier | undefined;
+  /** The project's directory, which paths under it are made relative to; null when unknown. */
+  readonly projectDirectory: string | null;
   readonly threads: ReadonlyArray<ThreadRow>;
   readonly runs: ReadonlyArray<RunRow>;
   readonly toolCalls: ReadonlyArray<ToolCallRow>;
@@ -184,6 +196,18 @@ export const acceptedOutcomes = (input: MeasureInput) =>
 /** Runs that started in the window. */
 export const windowRuns = (input: MeasureInput) =>
   input.runs.filter((run) => inWindow(input, run.started_at));
+
+/**
+ * The window's tool calls. A call of a run is in the window when its run started in it, as for
+ * every per-run measure. A call with no run, which a provider's subagent makes, is in it when the
+ * item itself started or last changed in it.
+ */
+export const windowCalls = (input: MeasureInput) => {
+  const runs = new Set(windowRuns(input).map((run) => run.run_id));
+  return input.toolCalls.filter((call) =>
+    call.run_id === null ? inWindow(input, call.item_at) : runs.has(call.run_id),
+  );
+};
 
 /** The fields the tool call helpers read. */
 export const TOOL_CALL_PROVENANCE = [

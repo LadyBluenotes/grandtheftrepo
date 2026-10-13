@@ -10,6 +10,7 @@ import {
   TelemetryBudget,
   TelemetryBudgetsResult,
   TelemetryError,
+  TelemetryExtractionCandidatesResult,
   type TelemetryMeasure,
   TelemetryMeasuresResult,
   TelemetryReportResult,
@@ -78,6 +79,9 @@ const decodeBudget = Schema.decodeUnknownEffect(TelemetryBudget);
 const decodeMeasuresJson = Schema.decodeUnknownSync(Schema.fromJsonString(TelemetryMeasuresResult));
 const decodeToolOutputJson = Schema.decodeUnknownSync(
   Schema.fromJsonString(TelemetryToolOutputResult),
+);
+const decodeCandidatesJson = Schema.decodeUnknownSync(
+  Schema.fromJsonString(TelemetryExtractionCandidatesResult),
 );
 const decodeTelemetryError = Schema.decodeUnknownEffect(TelemetryError);
 
@@ -395,7 +399,7 @@ it.effect(
           yield* seed(host.databases.get("telemetry")!);
           const fromHandler = yield* measures().pipe(Effect.flatMap(decodeMeasures));
           const byName = new Map(fromHandler.map((measure) => [measure.measure, measure]));
-          assert.strictEqual(fromHandler.length, 16);
+          assert.strictEqual(fromHandler.length, 18);
           assert.deepEqual(
             ["time_to_accepted_outcome", "repeated_reads", "material_correction_burden"].map(
               (name) => [byName.get(name)?.state, byName.get(name)?.value],
@@ -478,7 +482,7 @@ it.effect(
           assert.deepEqual(decodeReportJson(reported.content?.[0]?.text ?? ""), fromGateway);
           assert.deepEqual(
             [fromGateway.report.projectTitle, fromGateway.report.efficiency.count],
-            [`Project ${measuresInput.projectId}`, 16],
+            [`Project ${measuresInput.projectId}`, 18],
           );
           assert.deepEqual(
             [fromGateway.report.failures.state, fromGateway.report.findings.missingReason],
@@ -624,6 +628,77 @@ it.effect(
 
           yield* seedKnowledgeRuns(telemetryDb);
           assert.deepEqual(pick(yield* answered), ["ok", 0.5, 4, null]);
+        }).pipe(Effect.provide(layerHost(fakes.layer)));
+      }),
+    ).pipe(Effect.provide(layerTest)),
+);
+
+/**
+ * Three threads whose one run each reads the same file under the project's directory, which the
+ * fake project service puts at `/work/<project id>`.
+ */
+const seedRepeatedReads = (sql: SqlClient.SqlClient) =>
+  Effect.forEach([1, 2, 3], (n) =>
+    Effect.gen(function* () {
+      yield* sql`INSERT INTO telemetry_threads (thread_id, project_id, created_at)
+        VALUES (${`thread:r${n}`}, ${measuresInput.projectId}, '2026-10-02T00:00:00.000Z')`;
+      yield* sql`INSERT INTO telemetry_runs
+          (run_id, thread_id, turn_id, ordinal, status, model, started_at, event_sequence)
+        VALUES (${`run:r${n}`}, ${`thread:r${n}`}, ${`message:r${n}`}, 1, 'completed',
+          'test-model', '2026-10-02T00:00:00.000Z', 1)`;
+      yield* sql`INSERT INTO telemetry_tool_calls
+          (item_id, run_id, thread_id, ordinal, item_type, tool_name, path, input_keys,
+           input_tokens, input_digest, output_tokens, status, event_sequence)
+        VALUES (${`item:r${n}`}, ${`run:r${n}`}, ${`thread:r${n}`}, 1, 'dynamic_tool', 'Read',
+          ${`/work/${measuresInput.projectId}/AGENTS.md`}, 'file_path', 10, 'same', 90,
+          'completed', 1)`;
+    }),
+  );
+
+it.effect(
+  "extraction candidates: the tool lists the measure's candidates, with paths relative to the project",
+  () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        yield* writeStateFile("plugins.json", onlyPlugins(["telemetry"]));
+        const fakes = yield* core;
+        yield* Effect.gen(function* () {
+          const host = yield* PluginHost.PluginHost;
+          const call = yield* mcp;
+          const candidates = (limit?: number) =>
+            call("tools/call", {
+              name: "telemetry_extraction_candidates",
+              arguments: limit === undefined ? measuresInput : { ...measuresInput, limit },
+            }).pipe(Effect.map((result) => decodeCandidatesJson(result.content?.[0]?.text ?? "")));
+
+          assert.deepEqual(yield* candidates(), {
+            candidates: [],
+            missingReason: "Fewer than three threads in window.",
+          });
+
+          yield* seedRepeatedReads(host.databases.get("telemetry")!);
+          const listed = yield* candidates(5);
+          const byName = yield* answersWith(call);
+          assert.deepEqual(listed, {
+            candidates: byName.get("extraction_candidates")?.detail?.candidates ?? [],
+            missingReason: null,
+          });
+          assert.deepEqual(
+            listed.candidates.map((candidate) => [
+              candidate.steps,
+              candidate.threads,
+              candidate.estimatedTokens,
+              candidate.form,
+            ]),
+            [[["Read AGENTS.md"], 3, 300, "context_file"]],
+          );
+          assert.deepEqual(
+            [
+              byName.get("deterministic_work_share")?.value,
+              byName.get("extraction_candidates")?.value,
+            ],
+            [1, 1],
+          );
         }).pipe(Effect.provide(layerHost(fakes.layer)));
       }),
     ).pipe(Effect.provide(layerTest)),

@@ -89,12 +89,14 @@ it("reads a call with no output as zero rather than leaving it out", () => {
 });
 
 it("cites the event fields it reads, and sits with the other measures", () => {
-  const measures = computeMeasures(input());
+  const measures = computeMeasures(input()).filter((measure) =>
+    measure.measure.startsWith("tool_output_"),
+  );
   assert.deepEqual(
-    measures.slice(-2).map((measure) => measure.measure),
+    measures.map((measure) => measure.measure),
     ["tool_output_total", "tool_output_max_per_call"],
   );
-  for (const measure of measures.slice(-2)) {
+  for (const measure of measures) {
     assert.includeMembers(
       [...measure.provenance],
       ["turnItem.output", "turnItem.results", "turnItem.toolName", "turnItem.input"],

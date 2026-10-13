@@ -1,6 +1,6 @@
 import { assert, it } from "@effect/vitest";
 
-import { programName } from "./commandProgram.ts";
+import { programName, unwrapShell } from "./commandProgram.ts";
 
 /** Cases taken from the client's `commandProgramName` tests, for the rules this file copies. */
 const named = (cases: ReadonlyArray<readonly [string, string | null]>) => {
@@ -122,5 +122,30 @@ it("groups what the client parser follows beyond POSIX under the wrapper or the 
       "> out.txt echo hi",
     ].map((command) => programName(command)),
     ["cmd", "pwsh", "powershell", "ll", "cat", "npm", null],
+  );
+});
+
+it("unwraps the script inside shell -c wrappers, and leaves any other command line as it is", () => {
+  assert.deepEqual(
+    [
+      "/bin/bash -lc 'cd app && /usr/bin/git status'",
+      "/bin/bash --noprofile --norc -l -c 'sed -n 1,270p file.ts'",
+      "bash -lc \"zsh -c 'git status'\"",
+      "bash -lc 'git commit -m \"fix: it\"'",
+      "pnpm test apps/web",
+      "bash run.sh",
+      "bash -c 'git status'; ls",
+      "env FOO=1 bash -c 'git status'",
+    ].map((command) => unwrapShell(command)),
+    [
+      "cd app && /usr/bin/git status",
+      "sed -n 1,270p file.ts",
+      "git status",
+      'git commit -m "fix: it"',
+      "pnpm test apps/web",
+      "bash run.sh",
+      "bash -c 'git status'; ls",
+      "env FOO=1 bash -c 'git status'",
+    ],
   );
 });

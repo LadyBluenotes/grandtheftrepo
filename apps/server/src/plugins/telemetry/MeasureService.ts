@@ -13,6 +13,7 @@ import * as SqlClient from "effect/sql/SqlClient";
 
 import * as ServerConfig from "../../config.ts";
 import type * as EventSink from "../../orchestration-v2/EventSink.ts";
+import * as ProjectService from "../../project/ProjectService.ts";
 import * as ServerSettings from "../../serverSettings.ts";
 import { resolveModelAliases } from "../../usage/usageAggregation.ts";
 import { createOverrideRateTable, type RateTable } from "../../usage/usagePricing.ts";
@@ -69,6 +70,20 @@ export const make = Effect.fn("MeasureService.make")(function* (
   const path = yield* Path.Path;
   const { stateDir } = yield* ServerConfig.ServerConfig;
   const settings = yield* ServerSettings.ServerSettingsService;
+  // Optional so a test can build the service without it; the plugin's layer always has it.
+  const projects = yield* Effect.serviceOption(ProjectService.ProjectService);
+
+  /**
+   * The project's directory, which the repeated work measures make paths relative to; null when
+   * the project is gone or cannot be read, and the paths then stay as recorded.
+   */
+  const directoryOf = (projectId: ProjectId) =>
+    Option.isNone(projects)
+      ? Effect.succeed(null)
+      : projects.value.getShell(projectId).pipe(
+          Effect.map(Option.match({ onNone: () => null, onSome: (p) => p.workspaceRoot })),
+          Effect.orElseSucceed(() => null),
+        );
 
   // Without a snapshot nothing prices, as on the Usage page.
   const rates = rateSnapshot({ fs, path, stateDir }).read.pipe(
@@ -145,6 +160,7 @@ export const make = Effect.fn("MeasureService.make")(function* (
       return computeMeasures({
         ...window,
         tier,
+        projectDirectory: yield* directoryOf(projectId),
         threads,
         runs,
         toolCalls,
