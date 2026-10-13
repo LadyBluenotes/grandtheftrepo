@@ -1,7 +1,7 @@
 import * as Schema from "effect/Schema";
 import { IsoDateTime, NonNegativeInt, ProjectId } from "../baseSchemas.ts";
 import { definePluginMethods } from "./method.ts";
-import { RoutingTier } from "./routing.ts";
+import { RoutingTier } from "./tier.ts";
 
 /**
  * A project's window: `from` inclusive, `to` exclusive, both instants in UTC. With `tier`, only
