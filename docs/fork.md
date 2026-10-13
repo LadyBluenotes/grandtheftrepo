@@ -188,6 +188,19 @@ them half-evaluated. The host hands `toolkitRegistration` to `ServerPlugin.mcp` 
   the panel on the Plugins page uses `caveman.status`, `caveman.setRoute`, `caveman.learnPlan` and
   `caveman.learnRefresh`. Server: `apps/server/src/plugins/caveman/`. Contracts:
   `packages/contracts/src/plugins/caveman.ts`. Web: `apps/web/src/plugins/caveman/`.
+- **knowledge**: short markdown pages per project that a person accepted, each written to
+  `<project>/.knowledge/<key>.md` and listed in one index block in the project's `CLAUDE.md`,
+  `AGENTS.md` and `.github/copilot-instructions.md`, for the agents in use as the policy plugin
+  resolves them. The block helpers both plugins use are in
+  `apps/server/src/plugins/InstructionBlocks.ts`. Agents propose drafts with the
+  `knowledge_propose` MCP tool, from a thread only, and read accepted pages with `knowledge_list`. `knowledge.accept` and `.retire` install at once; an
+  install failure is their error, though the change stands. `knowledge.install` and `.verify` are
+  gateway methods too. The `knowledge/delivery` sweep installs a project whose recorded delivery
+  differs from what its accepted pages render to, only while no thread in the project has a run,
+  and never over a hand edit, which `verify` reports as `drifted`. Server:
+  `apps/server/src/plugins/knowledge/`. Contracts: `packages/contracts/src/plugins/knowledge.ts`.
+  Web: `apps/web/src/plugins/knowledge/`, the first screen at `/plugins/<id>`. User guide:
+  [Project knowledge](./user/knowledge.md).
 
 `apps/web/src/routeTree.gen.ts` is generated and committed. A conflict there is resolved by running
 the web dev server or build once, which regenerates it.

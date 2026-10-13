@@ -29,6 +29,7 @@ import { type PluginMcpRequirements, type PluginRequirements, registry } from ".
 import type { toolkitRegistration } from "../mcp/McpHttpServer.ts";
 import * as CavemanHandlers from "./caveman/handlers.ts";
 import * as KanbanHandlers from "./kanban/handlers.ts";
+import * as KnowledgeHandlers from "./knowledge/handlers.ts";
 import * as LearningHandlers from "./learning/handlers.ts";
 import * as PolicyHandlers from "./policy/handlers.ts";
 import * as ReviewHandlers from "./review/handlers.ts";
@@ -279,6 +280,7 @@ const table: PluginRpc.DispatchTable<PluginHost | PluginSupervisor.PluginSupervi
   }),
   ...CavemanHandlers.table,
   ...KanbanHandlers.table,
+  ...KnowledgeHandlers.table,
   ...LearningHandlers.table,
   ...PolicyHandlers.table,
   ...ReviewHandlers.table,

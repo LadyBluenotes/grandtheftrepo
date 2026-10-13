@@ -12,10 +12,10 @@ import * as SqlClient from "effect/sql/SqlClient";
 
 import * as ThreadManagementService from "../../orchestration-v2/ThreadManagementService.ts";
 import * as ServerSettings from "../../serverSettings.ts";
+import * as Blocks from "../InstructionBlocks.ts";
 import * as Files from "./InstructionFiles.ts";
 import { needsDelivery } from "./needsDelivery.ts";
 import * as PolicyService from "./PolicyService.ts";
-import { sha256 } from "./Render.ts";
 
 interface AcceptedRow {
   readonly project_id: ProjectId;
@@ -104,7 +104,7 @@ export const make = Effect.gen(function* () {
 
   const run = Effect.fn("DeliverySweep.run")(
     function* ({ dryRun }: { readonly dryRun: boolean }) {
-      const rulesHash = sha256((yield* Files.read(rulesPath)) ?? "");
+      const rulesHash = Blocks.sha256((yield* Blocks.read(rulesPath)) ?? "");
       const accepted = yield* sql<AcceptedRow>`
         SELECT project_id, "key", version FROM policies
         WHERE state = 'accepted' ORDER BY project_id, "key"
@@ -114,7 +114,7 @@ export const make = Effect.gen(function* () {
       let flags = 0;
       if (accepted.length === 0) return { examined, acted, flags };
 
-      const targets = yield* Files.targets();
+      const targets = yield* Blocks.targets();
       const agents = yield* Effect.filter(POLICY_AGENTS, (agent) =>
         fs.exists(path.dirname(targets[agent])),
       );

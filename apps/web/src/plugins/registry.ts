@@ -1,12 +1,13 @@
 import type { PluginStatus } from "@t3tools/contracts";
 import {
   ActivityIcon,
+  BookOpenTextIcon,
   RouteIcon,
   ShrinkIcon,
   SquareKanbanIcon,
   type LucideIcon,
 } from "lucide-react";
-import type { ComponentType, LazyExoticComponent } from "react";
+import { lazy, type ComponentType, type LazyExoticComponent } from "react";
 
 import { SettingsPanel as CavemanSettingsPanel } from "./caveman/SettingsPanel";
 import { SettingsPanel as RoutingSettingsPanel } from "./routing/SettingsPanel";
@@ -36,4 +37,10 @@ export const pluginRegistry: ReadonlyArray<PluginEntry> = [
   },
   { id: "routing", title: "Routing", icon: RouteIcon, SettingsPanel: RoutingSettingsPanel },
   { id: "caveman", title: "Caveman", icon: ShrinkIcon, SettingsPanel: CavemanSettingsPanel },
+  {
+    id: "knowledge",
+    title: "Knowledge",
+    icon: BookOpenTextIcon,
+    Screen: lazy(() => import("./knowledge/KnowledgePage")),
+  },
 ];
