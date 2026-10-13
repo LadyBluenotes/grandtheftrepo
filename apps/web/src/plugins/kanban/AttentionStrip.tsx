@@ -22,6 +22,7 @@ const KIND_LABEL: Record<KanbanAttentionKind, string> = {
   stale_review: "Stale review",
   security_hold: "Security hold",
   unowned_finding: "Unowned finding",
+  delivery_drift: "Delivery drift",
 };
 
 /**
