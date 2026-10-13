@@ -10,6 +10,7 @@
 - [Source control](./user/source-control.md)
 - [Project settings](./user/project-settings.md)
 - [Kanban board](./user/kanban.md)
+- [Policies and reviews](./user/policies-and-reviews.md)
 - [Weekly report](./user/weekly-report.md)
 - [Appearance and themes](./user/appearance.md)
 - [Keyboard shortcuts](./user/keybindings.md)

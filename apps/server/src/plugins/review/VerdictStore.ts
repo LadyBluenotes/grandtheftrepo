@@ -1,4 +1,6 @@
 import {
+  PONYTAIL_RUNG_IDS,
+  PonytailRungId,
   type CheckpointId,
   type LearningDeclaredMode,
   type LearningError,
@@ -15,6 +17,7 @@ import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";
 import * as SqlClient from "effect/sql/SqlClient";
 import type * as SqlError from "effect/sql/SqlError";
@@ -60,6 +63,14 @@ const verdictIdOf = (reviewerThreadId: ThreadId, checkpointId: CheckpointId) =>
   `${encodeURIComponent(reviewerThreadId)}:${encodeURIComponent(checkpointId)}`;
 
 const invalid = (message: string) => new ReviewVerdictError({ code: "invalid", message });
+
+const isRungId = Schema.is(PonytailRungId);
+
+/**
+ * What a summary names after `rung:`: the text up to the first space, without the `:`, `,`, `;` or
+ * `.` a reviewer may put after it. Undefined when the summary does not start with `rung:`.
+ */
+const rungNamed = (summary: string) => /^rung:(\S*)/.exec(summary)?.[1]?.replace(/[:;,.]+$/, "");
 
 const alreadyReviewed = () =>
   new ReviewVerdictError({
@@ -167,7 +178,6 @@ const make = Effect.gen(function* () {
       if (reviewerThreadId === input.threadId) {
         return yield* invalid("A thread cannot review its own work");
       }
-
       const id = verdictIdOf(reviewerThreadId, input.checkpointId);
       /** The stored verdict is the answer to the same payload, and a conflict for any other. */
       const settle = (row: Row) =>
@@ -180,6 +190,13 @@ const make = Effect.gen(function* () {
 
       const existing = yield* find(id);
       if (existing !== undefined) return yield* settle(existing);
+
+      // Only new writes are held to the ladder's shape: a verdict stored before it existed still
+      // answers its own retry. The reviewer judges the rung; code checks only that it is named.
+      const rung = failureMode === "convention" ? rungNamed(input.summary) : undefined;
+      if (rung !== undefined && !isRungId(rung)) {
+        return yield* invalid(`Unknown rung "${rung}". Rungs: ${PONYTAIL_RUNG_IDS.join(", ")}.`);
+      }
 
       const projectId = yield* readCheckpoint(input.threadId, input.checkpointId);
       const corrections = yield* CorrectionStore.CorrectionStore;
