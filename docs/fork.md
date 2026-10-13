@@ -61,7 +61,7 @@ resolved by keeping the line.
 | `apps/web/src/components/sidebar/SidebarChrome.tsx`          | the board's `SidebarUtilityItem`, gated on `kanbanSupportedAtom`, and `<PluginSidebarEntries />` after the Usage entry, plus imports; `SidebarUtilityItem` is exported |
 | `apps/web/src/components/CommandPalette.tsx`                 | the board's `actionItems.push` block, gated the same way, plus imports                                                                                                 |
 | `third-party-licenses.config.json`                           | the `Caveman reply rules` and `Ponytail ladder` entries at the end of `customNotices`, so the adapted policy text is credited in the app's license list                |
-| `scripts/build-desktop-artifact.ts`                          | `{ identity: "-", hardenedRuntime: false }` for unsigned builds in `createBuildConfig`'s mac config, so Mac nightlies open on Apple silicon, plus its test             |
+| `scripts/build-desktop-artifact.ts`                          | in `createBuildConfig`, unsigned Mac builds get `identity: "-"`, `hardenedRuntime: false` and no GitHub update feed, plus their tests                                  |
 
 ## Plugin services and the type system
 
@@ -233,7 +233,6 @@ From then on the app updates itself from this fork's releases on the nightly cha
 On a Mac, open the `arm64` DMG and drag the app to Applications. Gatekeeper blocks the first launch
 because the app has no Developer ID. On macOS 14 and earlier, Control-click the app and choose Open.
 On macOS 15 and later, try to open it once, then choose Open Anyway under System Settings > Privacy
-& Security. The Mac app cannot update itself: macOS updates go through Squirrel.Mac, which only
-installs an update signed to match the running app, and an ad hoc signature matches only its own
-build. The app still offers each new nightly, but the update fails, so install every nightly by
-hand from its DMG the same way.
+& Security. The Mac app does not look for updates at all: macOS updates go through Squirrel.Mac,
+which only installs an update signed to match the running app, and an ad hoc signature matches only
+its own build. Install every nightly by hand from its DMG the same way.

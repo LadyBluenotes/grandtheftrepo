@@ -2800,7 +2800,12 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
   };
   const updateChannel = resolveDesktopUpdateChannel(version);
   if (!isDesktopPreviewVersion(version)) {
-    const publishConfig = yield* resolveGitHubPublishConfig(updateChannel);
+    // Squirrel.Mac only installs an update signed to match the running app,
+    // which a later ad hoc signed build never is. An unsigned Mac build gets
+    // no release feed, so it ships without app-update.yml and never polls.
+    // An explicit mock-updates build still gets its local feed.
+    const publishConfig =
+      platform === "mac" && !signed ? undefined : yield* resolveGitHubPublishConfig(updateChannel);
     if (publishConfig) {
       buildConfig.publish = [publishConfig];
     } else if (mockUpdates) {

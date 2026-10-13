@@ -16,10 +16,11 @@ name: Fork nightly release
 # least six hours have passed, the same gate upstream uses. Runs after the
 # nightly upstream sync. Builds are unsigned: Windows shows a SmartScreen
 # prompt on first install, and updates after that need no prompt. The macOS
-# app is signed ad hoc, so Gatekeeper asks once to open it, and it cannot
-# update itself: Squirrel.Mac only installs an update that satisfies the
-# running app's code signing requirement, and an ad hoc requirement is the
-# hash of that one build. Each macOS nightly is installed from the DMG.
+# app is signed ad hoc, so Gatekeeper asks once to open it. It cannot update
+# itself: Squirrel.Mac only installs an update that satisfies the running
+# app's code signing requirement, and an ad hoc requirement is the hash of
+# that one build. So it is built without an update feed and never checks;
+# each macOS nightly is installed from the DMG.
 
 on:
   schedule:
@@ -220,16 +221,16 @@ jobs:
           path: release-assets
 
       # The Windows build writes a per-arch updater manifest; with one arch the
-      # updater expects the plain channel name. The macOS build only suffixes
-      # non-arm64 manifests, so arm64 already writes the nightly-mac.yml that
-      # electron-updater reads, listing the arm64 zip. Linux manifests need no
-      # rename.
+      # updater expects the plain channel name. Linux manifests need no rename.
+      # The macOS app is unsigned here and cannot apply updates, so it is built
+      # without a feed; any Mac manifest or blockmap is dropped so no installed
+      # copy is ever offered an update it would fail to install.
       - name: Finish release assets
         shell: bash
         run: |
           set -euo pipefail
           cd release-assets
-          rm -f builder-debug.yml
+          rm -f builder-debug.yml *-mac.yml *.dmg.blockmap *.zip.blockmap
           shopt -s nullglob
           for manifest in *-win-x64.yml; do
             mv "$manifest" "${manifest%-win-x64.yml}.yml"

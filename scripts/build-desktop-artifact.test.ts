@@ -352,7 +352,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
         "mac",
         "dmg",
         "0.0.33",
-        false,
+        true,
         false,
         undefined,
         undefined,
@@ -382,6 +382,80 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
       Effect.provide(
         ConfigProvider.layer(
           ConfigProvider.fromEnv({ env: { GITHUB_REPOSITORY: "pingdotgg/t3code" } }),
+        ),
+      ),
+    ),
+  );
+
+  it.effect("omits the release feed only from unsigned macOS builds", () =>
+    Effect.gen(function* () {
+      const version = "0.0.33-nightly.20260815.1";
+      const nightlyFeed = [
+        {
+          provider: "github",
+          owner: "LadyBluenotes",
+          repo: "t3code",
+          releaseType: "prerelease",
+          channel: "nightly",
+        },
+      ];
+      const unsignedMac = yield* createBuildConfig(
+        "mac",
+        "dmg",
+        version,
+        false,
+        false,
+        undefined,
+        undefined,
+      );
+      const unsignedMacWithMockUpdates = yield* createBuildConfig(
+        "mac",
+        "dmg",
+        version,
+        false,
+        true,
+        4123,
+        undefined,
+      );
+      const signedMac = yield* createBuildConfig(
+        "mac",
+        "dmg",
+        version,
+        true,
+        false,
+        undefined,
+        undefined,
+      );
+      const unsignedWindows = yield* createBuildConfig(
+        "win",
+        "nsis",
+        version,
+        false,
+        false,
+        undefined,
+        undefined,
+      );
+      const unsignedLinux = yield* createBuildConfig(
+        "linux",
+        "AppImage",
+        version,
+        false,
+        false,
+        undefined,
+        undefined,
+      );
+
+      assert.notProperty(unsignedMac, "publish");
+      assert.deepStrictEqual(unsignedMacWithMockUpdates.publish, [
+        { provider: "generic", url: "http://localhost:4123" },
+      ]);
+      assert.deepStrictEqual(signedMac.publish, nightlyFeed);
+      assert.deepStrictEqual(unsignedWindows.publish, nightlyFeed);
+      assert.deepStrictEqual(unsignedLinux.publish, nightlyFeed);
+    }).pipe(
+      Effect.provide(
+        ConfigProvider.layer(
+          ConfigProvider.fromEnv({ env: { GITHUB_REPOSITORY: "LadyBluenotes/t3code" } }),
         ),
       ),
     ),
