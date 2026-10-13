@@ -13,7 +13,6 @@ import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 
-import * as CheckpointDiffQuery from "../../checkpointing/CheckpointDiffQuery.ts";
 import * as ServerConfig from "../../config.ts";
 import * as ThreadManagementService from "../../orchestration-v2/ThreadManagementService.ts";
 import * as SqlitePersistence from "../../persistence/Sqlite.ts";
@@ -52,7 +51,6 @@ const layerHost = PluginHost.layerAll.pipe(
       Layer.mock(ProjectService.ProjectService)({}),
       // Inactive routing still types its catalog and settings reads through `layerAll`.
       Layer.mock(ProviderRegistry.ProviderRegistry)({}),
-      Layer.mock(CheckpointDiffQuery.CheckpointDiffQuery)({}),
       ServerSettings.layerTest(),
     ),
   ),

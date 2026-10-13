@@ -93,16 +93,17 @@ const refFrom = (turnCount: number, checkpoint: "from" | "to") =>
 /**
  * The review harness with the scan's reactor over the real event sink and a turn diff per
  * `from->to` pair from `diffs` (an empty diff for any other), plus the security sweep with the
- * learning plugin's corrections.
+ * learning plugin's corrections. Without `diffs` the reactor's context has no diff query.
  */
-const boot = (diffs: Readonly<Record<string, string | CheckpointRefUnavailableError>>) =>
+const boot = (diffs?: Readonly<Record<string, string | CheckpointRefUnavailableError>>) =>
   Effect.gen(function* () {
     const kit = yield* harness;
     const asked = yield* Ref.make<ReadonlyArray<string>>([]);
-    const layerDiffs = Layer.mock(CheckpointDiffQuery.CheckpointDiffQuery)({
+    const diffQuery = CheckpointDiffQuery.CheckpointDiffQuery.of({
+      getFullThreadDiff: () => Effect.die("unused"),
       getTurnDiff: ({ threadId, fromTurnCount, toTurnCount }) => {
         const key = `${fromTurnCount}->${toTurnCount}`;
-        const diff = diffs[key] ?? "";
+        const diff = diffs?.[key] ?? "";
         return Ref.update(asked, (all) => [...all, key]).pipe(
           Effect.andThen(
             typeof diff === "string"
@@ -117,11 +118,16 @@ const boot = (diffs: Readonly<Record<string, string | CheckpointRefUnavailableEr
       Layer.succeed(Attention.Attention, kit.attention),
     );
     const handlers = yield* SecurityScanReactor.handlers.pipe(
-      Effect.provide(Layer.mergeAll(layerDeps, kit.layerThreads, layerDiffs)),
+      Effect.provide(Layer.mergeAll(layerDeps, kit.layerThreads)),
     );
-    const startReactor = PluginReactor.start({ plugin: "review", from: "start", handlers }).pipe(
+    // The handler reads the diff query from the context the reactor's fiber starts in.
+    const started = PluginReactor.start({ plugin: "review", from: "start", handlers }).pipe(
       Effect.provideService(SqlClient.SqlClient, kit.review),
     );
+    const startReactor =
+      diffs === undefined
+        ? started
+        : started.pipe(Effect.provideService(CheckpointDiffQuery.CheckpointDiffQuery, diffQuery));
     const reactor = yield* startReactor;
     const sweep = yield* SecurityScanReactor.sweep.pipe(Effect.provide(layerDeps));
     const publish = (...events: ReadonlyArray<OrchestrationV2DomainEvent>) =>
@@ -299,6 +305,17 @@ it.effect("after a stopped turn the diff starts at the last turn it can diff fro
         ]),
         [[turnCheckpoint(2).id, "secret.token"]],
       );
+    }),
+  ).pipe(Effect.provide(layerSink)),
+);
+
+it.effect("without a diff query the scan skips the event and records no failure", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const kit = yield* boot();
+      yield* kit.publish(captured(turnCheckpoint(1)));
+      assert.deepEqual(yield* kit.security.findings({ threadId: reviewed }), []);
+      assert.deepEqual(yield* kit.review`SELECT sequence FROM host_reactor_failure`, []);
     }),
   ).pipe(Effect.provide(layerSink)),
 );

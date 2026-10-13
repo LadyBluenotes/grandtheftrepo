@@ -27,6 +27,33 @@ import {
 const BATCH_SIZE = 100;
 
 /**
+ * The diff of the turn ending at `ordinal`, from the turn before it. A stopped turn has no
+ * checkpoint to diff from, so the diff starts at the last one before it that has; empty when this
+ * turn has none to diff to, as when it was stopped itself or rolled back since.
+ */
+const turnDiff = Effect.fn("SecurityScanReactor.turnDiff")(function* (
+  diffs: CheckpointDiffQuery.CheckpointDiffQuery["Service"],
+  threadId: ThreadId,
+  ordinal: number,
+) {
+  for (let from = ordinal - 1; from >= 0; from--) {
+    const diff = yield* diffs
+      .getTurnDiff({ threadId, fromTurnCount: from, toTurnCount: ordinal })
+      .pipe(
+        Effect.map((turn) => turn.diff),
+        Effect.catchTags({
+          CheckpointRefUnavailableError: (error) =>
+            Effect.succeed(error.checkpoint === "from" ? null : ""),
+          CheckpointTurnRangeUnavailableError: () => Effect.succeed(""),
+          CheckpointThreadNotFoundError: () => Effect.succeed(""),
+        }),
+      );
+    if (diff !== null) return diff;
+  }
+  return "";
+});
+
+/**
  * Scans each root-run checkpoint's turn: the lines its diff adds, against the fixed patterns, unless
  * the project's mode is `off`. A match is stored once per checkpoint, pattern, file and line, so a
  * replayed event adds nothing. In `block` the thread's hold is open and its flag raised here; the
@@ -35,34 +62,7 @@ const BATCH_SIZE = 100;
 export const handlers = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
   const threads = yield* ThreadManagementService.ThreadManagementService;
-  const diffs = yield* CheckpointDiffQuery.CheckpointDiffQuery;
   const attention = yield* Attention.Attention;
-
-  /**
-   * The diff of the turn ending at `ordinal`, from the turn before it. A stopped turn has no
-   * checkpoint to diff from, so the diff starts at the last one before it that has; empty when this
-   * turn has none to diff to, as when it was stopped itself or rolled back since.
-   */
-  const turnDiff = Effect.fn("SecurityScanReactor.turnDiff")(function* (
-    threadId: ThreadId,
-    ordinal: number,
-  ) {
-    for (let from = ordinal - 1; from >= 0; from--) {
-      const diff = yield* diffs
-        .getTurnDiff({ threadId, fromTurnCount: from, toTurnCount: ordinal })
-        .pipe(
-          Effect.map((turn) => turn.diff),
-          Effect.catchTags({
-            CheckpointRefUnavailableError: (error) =>
-              Effect.succeed(error.checkpoint === "from" ? null : ""),
-            CheckpointTurnRangeUnavailableError: () => Effect.succeed(""),
-            CheckpointThreadNotFoundError: () => Effect.succeed(""),
-          }),
-        );
-      if (diff !== null) return diff;
-    }
-    return "";
-  });
 
   const result: PluginReactor.Handlers<
     SqlError.SqlError | Orchestrator.OrchestratorV2Error | CheckpointServiceError
@@ -85,7 +85,15 @@ export const handlers = Effect.gen(function* () {
           (scope) => scope.id === checkpoint.scopeId && scope.kind === "root_run",
         );
         if (!root) return;
-        const matches = scan(yield* turnDiff(threadId, ordinal));
+        // Read from the reactor fiber's context, which the server's chain gives it, rather than
+        // required of the layer: that would put it in every plugin's requirements for this alone.
+        const diffs = yield* Effect.serviceOption(CheckpointDiffQuery.CheckpointDiffQuery);
+        if (Option.isNone(diffs)) {
+          return yield* Effect.logWarning(
+            "review: security scan skipped, no checkpoint diff query",
+          );
+        }
+        const matches = scan(yield* turnDiff(diffs.value, threadId, ordinal));
         if (matches.length === 0) return;
 
         const createdAt = DateTime.formatIso(event.occurredAt);
