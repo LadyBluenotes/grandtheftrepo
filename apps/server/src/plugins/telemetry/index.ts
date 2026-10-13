@@ -4,6 +4,8 @@ import * as Layer from "effect/Layer";
 import type { ServerPlugin } from "../Plugin.ts";
 import * as PluginReactor from "../PluginReactor.ts";
 import * as PluginSupervisor from "../PluginSupervisor.ts";
+import * as BudgetStore from "./budgets/BudgetStore.ts";
+import * as BudgetSweep from "./budgets/BudgetSweep.ts";
 import * as Mcp from "./mcp.ts";
 import { migrations } from "./migrations.ts";
 import * as Reactor from "./reactor.ts";
@@ -18,21 +20,24 @@ const make = Effect.gen(function* () {
     from: "start",
     handlers: Reactor.handlers,
   });
-  yield* (yield* PluginSupervisor.PluginSupervisor).register(heartbeat);
+  const supervisor = yield* PluginSupervisor.PluginSupervisor;
+  yield* supervisor.register(heartbeat);
   // The measures read the reactor's tables, so each request waits for it to catch up.
-  return yield* Telemetry.make(reactor.drain);
+  const telemetry = yield* Telemetry.make(reactor.drain);
+  yield* supervisor.register(yield* BudgetSweep.sweep(telemetry.measures));
+  return telemetry;
 }).pipe(Effect.orDie);
 
 /**
  * Efficiency measures over a project's window, computed from the plugin's own
- * tables, which its reactor fills from the event log. The template plugin: it
- * uses each host seam once (database, reactor, sweep, RPC, MCP tool, settings
- * panel).
+ * tables, which its reactor fills from the event log, and budgets on them that
+ * a sweep checks. The template plugin: it uses each host seam once (database,
+ * reactor, sweep, RPC, MCP tool, settings panel).
  */
 export const plugin = {
   id: "telemetry",
   dependsOn: [],
   migrations,
-  layer: Layer.effect(Telemetry.Telemetry, make),
+  layer: Layer.effect(Telemetry.Telemetry, make).pipe(Layer.provideMerge(BudgetStore.layer)),
   mcp: (register) => register(Mcp.TelemetryToolkit, Mcp.handlers),
 } satisfies ServerPlugin<unknown>;
