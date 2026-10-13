@@ -11,6 +11,7 @@ import { promoter } from "./promoter.ts";
 import { onHost, projectId, world } from "./testkit.ts";
 
 const at = "2026-10-01T00:00:00.000Z";
+const isKey = Schema.is(KnowledgeKey);
 
 /** An item with `evidence` pieces of evidence, numbered from one. */
 const detail = (
@@ -133,7 +134,7 @@ it.effect("a failure mode is cut so the key stays valid, and the item id keeps i
     const failureMode = `efficiency_regression:${Array(4).fill("tool_output_max_per_call").join("_")}`;
     yield* promoter.promote(detail(1, { id: 123456, failureMode }), keyFor(1, 123456));
     const [page] = yield* store.list({ projectId });
-    assert.isTrue(Schema.is(KnowledgeKey)(page?.key));
+    assert.isTrue(isKey(page?.key));
     assert.strictEqual(page?.key.length, 64);
     assert.match(page?.key ?? "", /^learned-efficiency-regression-tool-output-.*-123456$/);
     assert.strictEqual(page?.title, `Learned: ${failureMode.replaceAll("_", " ")}`);

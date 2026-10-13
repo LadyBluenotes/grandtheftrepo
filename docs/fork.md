@@ -158,7 +158,15 @@ them half-evaluated. The host hands `toolkitRegistration` to `ServerPlugin.mcp` 
   them over MCP. Two sweeps turn corrections with a declared failure mode into learning items, one
   per mode per project, routed by fixed rules on the mode to an owner kind, and hand each item
   over through one promotion record, at least once, keyed by the record's id so a promoter can
-  drop a repeat; no promoter is registered yet, so records wait. A third sweep compares each
+  drop a repeat. The plugin registers the promoters for `project_knowledge`, `policy` and `prompt`
+  itself, from `knowledge/promoter.ts` and `policy/promoter.ts`, because a plugin's layer cannot
+  see the registry of one it does not depend on. Each reaches its plugin's service with
+  `Effect.serviceOption` when the sweep runs and hands over a draft: a knowledge page keyed
+  `learned-<mode>-<item id>`, or a policy version keyed `learned-<mode>`, `prompt-learned-<mode>`
+  for a prompt, until briefs read prompt policies. A promoter has an `available` check, false while
+  its plugin is off, and the registry's `ownerKinds` leaves such a kind out, so its records wait
+  without counting an attempt, as a kind with no promoter does; the report's `promoters` is the
+  same list. A third sweep compares each
   project's telemetry measures over the last seven whole UTC days with the seven before, once a
   day, and opens or strengthens an `efficiency_regression:<measure>` item, with no owner kind, for
   each measure worse by its threshold in `regressions/thresholds.ts`, except a volume measure
@@ -176,7 +184,9 @@ them half-evaluated. The host hands `toolkitRegistration` to `ServerPlugin.mcp` 
   run, for `*`). The first start seeds `*` / `ponytail`, the six-question ladder, and `*` /
   `caveman`, the terse reply rules, each unless a policy of that key exists in any state; the
   review plugin refuses a `convention` summary that starts with `rung:` and names none of the six
-  rung ids. Server: `apps/server/src/plugins/policy/`. Contracts:
+  rung ids. `PolicyService.createForPromotion` is `create` for a learning promotion: the draft and
+  a `policy_promotion` row naming it commit together, so a second delivery of the promotion adds
+  no version. Server: `apps/server/src/plugins/policy/`. Contracts:
   `packages/contracts/src/plugins/policy.ts`. Web: `apps/web/src/plugins/policy/`, the Policies
   screen at `/plugins/policy`. User guide:
   [Policies and reviews](./user/policies-and-reviews.md#policies).
@@ -234,7 +244,9 @@ them half-evaluated. The host hands `toolkitRegistration` to `ServerPlugin.mcp` 
   index block, the hash of what it wrote. The `knowledge/delivery` sweep writes only a component
   whose record differs from what the accepted pages render to and whose file still holds what was
   recorded, even with no agent in use, and only while no thread in the project has a run; a file
-  edited by hand stays `drifted` in `verify` until a person installs. Server:
+  edited by hand stays `drifted` in `verify` until a person installs. The learning plugin's
+  promoter proposes a draft with source `item`, and a page whose source names a promotion is never
+  proposed again for it, whatever became of the draft. Server:
   `apps/server/src/plugins/knowledge/`. Contracts: `packages/contracts/src/plugins/knowledge.ts`.
   Web: `apps/web/src/plugins/knowledge/`, at `/plugins/knowledge`. User guide:
   [Project knowledge](./user/knowledge.md).

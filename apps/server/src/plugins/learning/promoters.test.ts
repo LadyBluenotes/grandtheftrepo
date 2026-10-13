@@ -80,8 +80,7 @@ const withPlugins = <A, E, R>(plugins: ReadonlyArray<string>, body: Effect.Effec
       const home = yield* fs.makeTempDirectoryScoped({ prefix: "t3code-promoters-home-" });
       // The server's own tick has the host's services; a test's has only what is provided here.
       return yield* body.pipe(
-        Effect.provide(layerHost),
-        Effect.provide(layerProjects),
+        Effect.provide(Layer.merge(layerHost, layerProjects)),
         Effect.provideService(HostProcess.HomeDirectory, home),
         Effect.provideService(HostProcess.Environment, {}),
       );
@@ -239,9 +238,9 @@ it.effect(
         );
 
         // A person hands the convention to the prompt instead.
-        const [convention] = (yield* readCall(LEARNING_METHODS.items.method, { projectId }).pipe(
+        const convention = (yield* readCall(LEARNING_METHODS.items.method, { projectId }).pipe(
           Effect.flatMap(decodeItems),
-        )).filter((item) => item.failureMode === "convention");
+        )).find((item) => item.failureMode === "convention");
         yield* operateCall(LEARNING_METHODS.itemsSetDisposition.method, {
           id: convention!.id,
           ownerKind: "prompt",
