@@ -4,18 +4,30 @@ import * as DateTime from "effect/DateTime";
 import { flagFor, flagKind, judge, latestComplete, respondedTo, windows } from "./compare.ts";
 
 describe("judge", () => {
-  it("is ineffective when the mode still recurs three or more times after the handover", () => {
+  it("is ineffective when three or more recurred and that is more than half of before", () => {
     assert.strictEqual(judge({ before: 5, after: 4 }), "ineffective");
     assert.strictEqual(judge({ before: 5, after: 5 }), "ineffective");
+    assert.strictEqual(judge({ before: 5, after: 3 }), "ineffective");
     assert.strictEqual(judge({ before: 3, after: 3 }), "ineffective");
     assert.strictEqual(judge({ before: 5, after: 9 }), "ineffective");
   });
 
-  it("is settled when nothing recurred, and improved when one or two did", () => {
+  it("is settled when nothing recurred", () => {
     assert.strictEqual(judge({ before: 5, after: 0 }), "settled");
+    assert.strictEqual(judge({ before: 3, after: 0 }), "settled");
+  });
+
+  it("is improved when after is at most half of before, however many are left", () => {
     assert.strictEqual(judge({ before: 5, after: 1 }), "improved");
     assert.strictEqual(judge({ before: 5, after: 2 }), "improved");
-    assert.strictEqual(judge({ before: 3, after: 2 }), "improved");
+    assert.strictEqual(judge({ before: 20, after: 3 }), "improved");
+    assert.strictEqual(judge({ before: 6, after: 3 }), "improved");
+    assert.strictEqual(judge({ before: 20, after: 10 }), "improved");
+    assert.strictEqual(judge({ before: 20, after: 11 }), "ineffective");
+  });
+
+  it("is inconclusive for two after from three before: too little change to call", () => {
+    assert.strictEqual(judge({ before: 3, after: 2 }), "inconclusive");
   });
 
   it("has nothing to compare under three recurrences before, whatever came after", () => {

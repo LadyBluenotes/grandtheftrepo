@@ -40,11 +40,12 @@ while the policy plugin is off. They are handed over once it is on again.
 
 Four weeks after an item was handed over, the plugin compares the four weeks before with the four
 weeks after, counting the project's corrections with the item's failure mode. If the mode came
-back at least three times, the strip above the project's board flags it: the fix did not take. If
-it did not come back at all, the strip flags that too, so you can close the item. A mode that came
-back once or twice, or that recurred fewer than three times beforehand, raises nothing. Nothing is
-closed or moved for you. Closing the item or setting another owner kind answers the flag, and it
-clears on the next sweep. See [Waiting on you](./kanban.md#waiting-on-you) for the strip.
+back at least three times, and more than half as often as before, the strip above the project's
+board flags it: the fix did not take. If it did not come back at all, the strip flags that too, so
+you can close the item. Anything else raises nothing: a mode that fell by half or more, or that
+recurred fewer than three times beforehand, leaves too little to judge. Nothing is closed or moved
+for you. Closing the item or setting another owner kind answers the flag, and it clears on the
+next sweep. See [Waiting on you](./kanban.md#waiting-on-you) for the strip.
 
 ## Corrections
 

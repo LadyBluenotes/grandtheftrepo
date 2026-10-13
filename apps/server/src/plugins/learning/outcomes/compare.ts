@@ -4,7 +4,7 @@ import * as DateTime from "effect/DateTime";
 /** How long a handover is watched on each side of its delivery. */
 const WINDOW_DAYS = 28;
 
-/** The fewest recurrences either window needs before it counts as a pattern. */
+/** The fewest recurrences the before window needs to be a pattern, and the after window to still be one. */
 const MIN_RECURRENCES = 3;
 
 export type Verdict = "ineffective" | "settled" | "improved" | "inconclusive";
@@ -21,18 +21,30 @@ export const flagKind = (verdict: Verdict) =>
 
 /**
  * What a handover did to its failure mode, from the corrections with that mode in the 28 days
- * before its delivery and in the 28 days after. Under three before there is nothing to compare.
- * Three or more after means the mode is still a pattern, however many came before; none after
- * means it went quiet; one or two is better, and not yet quiet.
+ * before its delivery and in the 28 days after. The first rule that fits decides:
+ *
+ * 1. Under three before, there is nothing to compare: `inconclusive`, whatever came after.
+ * 2. None after: `settled`.
+ * 3. After at most half of before: `improved`, however many are left. Three after from twenty
+ *    before is a fix that mostly took.
+ * 4. Three or more after: `ineffective`. The mode is still a pattern and fell by less than half.
+ * 5. Otherwise, two after from three before: too little change to call either way, so
+ *    `inconclusive`.
+ *
+ * Issue #88's prose for `ineffective` was "after at least before and at least 3", which contradicts
+ * its own fixture of 5 before and 4 after raising one. The fixtures stand, and rule 3 keeps a large
+ * drop from reading as "did not take".
  */
 export const judge = ({ before, after }: { readonly before: number; readonly after: number }) =>
   before < MIN_RECURRENCES
     ? "inconclusive"
-    : after >= MIN_RECURRENCES
-      ? "ineffective"
-      : after === 0
-        ? "settled"
-        : "improved";
+    : after === 0
+      ? "settled"
+      : after * 2 <= before
+        ? "improved"
+        : after >= MIN_RECURRENCES
+          ? "ineffective"
+          : "inconclusive";
 
 /**
  * The two windows around a delivery, as half-open ISO ranges: the before window ends where the

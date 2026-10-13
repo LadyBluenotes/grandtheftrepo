@@ -31,7 +31,7 @@ export const handlers = {
 // None fails in a state the plugin can run in: the reactor's cursor tables go in the database
 // the host just migrated, and a second sweep or promoter under this plugin's own name is a defect.
 const start = Effect.gen(function* () {
-  yield* PluginReactor.start({ plugin: "learning", from: "start", handlers });
+  const reactor = yield* PluginReactor.start({ plugin: "learning", from: "start", handlers });
   // The knowledge and policy plugins are reached when a sweep runs, so each promoter says whether
   // its plugin is there; learning depends on neither, and a plugin that is off costs nothing.
   const promoters = yield* Promoter.PromoterRegistry;
@@ -43,7 +43,8 @@ const start = Effect.gen(function* () {
   yield* supervisor.register(yield* ClassifySweep.sweep);
   yield* supervisor.register(yield* PromoteSweep.sweep);
   yield* supervisor.register(yield* RegressionSweep.sweep);
-  yield* supervisor.register(yield* OutcomeSweep.sweep);
+  // A verdict is permanent, so the outcome sweep waits for the reactor that records corrections.
+  yield* supervisor.register(yield* OutcomeSweep.sweep(reactor.drain));
 }).pipe(Effect.orDie);
 
 /**

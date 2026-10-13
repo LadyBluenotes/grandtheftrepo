@@ -2,14 +2,22 @@ import { assert, it } from "@effect/vitest";
 import { ProjectId, ThreadId } from "@t3tools/contracts";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
+import type * as Scope from "effect/Scope";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as TestClock from "effect/testing/TestClock";
 
+import * as EventSink from "../../../orchestration-v2/EventSink.ts";
+import * as EventStore from "../../../orchestration-v2/EventStore.ts";
+import * as ProjectionStore from "../../../orchestration-v2/ProjectionStore.ts";
+import * as SqlitePersistence from "../../../persistence/Sqlite.ts";
 import * as Attention from "../../Attention.ts";
 import * as HostDatabase from "../../HostDatabase.ts";
 import * as PluginDatabase from "../../PluginDatabase.ts";
+import * as PluginReactor from "../../PluginReactor.ts";
 import * as CorrectionStore from "../CorrectionStore.ts";
 import * as ItemStore from "../items/ItemStore.ts";
 import { migrations } from "../migrations.ts";
@@ -25,92 +33,122 @@ const DELIVERED = Date.UTC(2026, 9, 1, 12, 0);
 const COMPLETE = DELIVERED + 28 * DAY;
 const iso = (ms: number) => DateTime.formatIso(DateTime.makeUnsafe(ms));
 
+// A real event sink on an in-memory core database, as producers.test does, for the reactor.
+const layerCore = SqlitePersistence.layerMemory;
+const layerSink = EventSink.layer.pipe(
+  Layer.provide(
+    Layer.mergeAll(
+      layerCore,
+      EventStore.layer.pipe(Layer.provideMerge(layerCore)),
+      ProjectionStore.layer.pipe(Layer.provideMerge(layerCore)),
+    ),
+  ),
+);
+const scoped = <A, E>(body: Effect.Effect<A, E, Scope.Scope | EventSink.EventSinkV2>) =>
+  Effect.scoped(body).pipe(Effect.provide(layerSink));
+
 /**
  * Real stores and the sweep over a fresh learning database and an in-memory host database, as the
  * plugin's layer builds them, with the clock at `DELIVERED`.
  */
-const setup = Effect.gen(function* () {
-  yield* TestClock.setTime(DELIVERED);
-  const { sql } = yield* PluginDatabase.open({ id: "learning", filename: ":memory:", migrations });
-  const host = yield* PluginDatabase.open({
-    id: "_host",
-    filename: ":memory:",
-    migrations: HostDatabase.migrations,
-  });
-  const attention = yield* Attention.Attention.pipe(
-    Effect.provide(
-      Attention.layer.pipe(Layer.provide(Layer.succeed(HostDatabase.HostDatabase, host.sql))),
-    ),
-  );
-  const context = yield* Layer.build(
-    ItemStore.layer.pipe(Layer.provide(Layer.succeed(SqlClient.SqlClient, sql))),
-  );
-  const items = Context.get(context, ItemStore.ItemStore);
-  const sweep = yield* OutcomeSweep.sweep.pipe(
-    Effect.provideService(SqlClient.SqlClient, sql),
-    Effect.provideService(Attention.Attention, attention),
-  );
+const setup = (
+  options: { readonly caughtUp?: Effect.Effect<void, EventSink.EventSinkV2Error> } = {},
+) =>
+  Effect.gen(function* () {
+    yield* TestClock.setTime(DELIVERED);
+    const { sql } = yield* PluginDatabase.open({
+      id: "learning",
+      filename: ":memory:",
+      migrations,
+    });
+    const host = yield* PluginDatabase.open({
+      id: "_host",
+      filename: ":memory:",
+      migrations: HostDatabase.migrations,
+    });
+    const attention = yield* Attention.Attention.pipe(
+      Effect.provide(
+        Attention.layer.pipe(Layer.provide(Layer.succeed(HostDatabase.HostDatabase, host.sql))),
+      ),
+    );
+    const context = yield* Layer.build(
+      ItemStore.layer.pipe(Layer.provide(Layer.succeed(SqlClient.SqlClient, sql))),
+    );
+    const items = Context.get(context, ItemStore.ItemStore);
+    // The reactor that records the plugin's corrections, which the sweep waits for. It has no
+    // handlers here: the tests write corrections themselves. Its drain is the sweep's, unless a
+    // test holds the sweep behind a drain of its own.
+    const reactor = yield* PluginReactor.start({
+      plugin: "learning",
+      from: "start",
+      handlers: {},
+    }).pipe(Effect.provideService(SqlClient.SqlClient, sql));
+    const sweep = yield* OutcomeSweep.sweep(options.caughtUp ?? reactor.drain).pipe(
+      Effect.provideService(SqlClient.SqlClient, sql),
+      Effect.provideService(Attention.Attention, attention),
+    );
 
-  let sourceKey = 0;
-  return {
-    items,
-    attention,
-    /** Hands the project's item for `mode` over to its rule's owner kind, delivered at `at`. */
-    deliver: (mode: string, at = DELIVERED) =>
-      Effect.gen(function* () {
-        const item = yield* items.strengthen(projectId, mode, `seed:${mode}`, "Seeded.");
-        const when = DateTime.makeUnsafe(at);
-        yield* PromotionStore.open(
-          {
-            id: item.id,
-            project_id: item.projectId,
-            failure_mode: item.failureMode,
-            owner_kind: item.ownerKind!,
-          },
-          when,
-        );
-        const [promotion] = yield* PromotionStore.forItem(item.id);
-        yield* PromotionStore.deliver(promotion!, when);
-        return { item, promotion: promotion! };
-      }).pipe(Effect.provideService(SqlClient.SqlClient, sql)),
-    /** One correction declaring `mode`, made at each of `times`. */
-    correct: (
-      mode: "convention" | "scope_drift" | "defect",
-      times: ReadonlyArray<number>,
-      project = projectId,
-    ) =>
-      Effect.forEach(times, (at) =>
-        CorrectionStore.insert({
-          projectId: project,
-          threadId: ThreadId.make("thread:outcomes"),
-          failureKind: "review_verdict",
-          declaredMode: mode,
-          description: "Seeded.",
-          sourceEventIds: [],
-          sourceKey: `seed:${++sourceKey}`,
-          occurredAt: DateTime.makeUnsafe(at),
-        }),
-      ).pipe(Effect.provideService(SqlClient.SqlClient, sql)),
-    /** One supervisor tick of the sweep. */
-    tick: (dryRun = false) => sweep.run({ dryRun }),
-    outcomes: sql<{
-      readonly promotion_id: number;
-      readonly judged_at: string;
-      readonly verdict: string;
-    }>`SELECT promotion_id, judged_at, verdict FROM promotion_outcome ORDER BY promotion_id`,
-    /** Every flag ever raised, open or cleared, oldest first. */
-    flagRows: host.sql<{
-      readonly plugin_id: string;
-      readonly thread_id: string;
-      readonly kind: string;
-      readonly text: string;
-      readonly resume_action: string;
-      readonly raised_at: string;
-      readonly cleared_at: string | null;
-    }>`SELECT plugin_id, thread_id, kind, text, resume_action, raised_at, cleared_at
+    let sourceKey = 0;
+    return {
+      sql,
+      items,
+      attention,
+      /** Hands the project's item for `mode` over to its rule's owner kind, delivered at `at`. */
+      deliver: (mode: string, at = DELIVERED) =>
+        Effect.gen(function* () {
+          const item = yield* items.strengthen(projectId, mode, `seed:${mode}`, "Seeded.");
+          const when = DateTime.makeUnsafe(at);
+          yield* PromotionStore.open(
+            {
+              id: item.id,
+              project_id: item.projectId,
+              failure_mode: item.failureMode,
+              owner_kind: item.ownerKind!,
+            },
+            when,
+          );
+          const [promotion] = yield* PromotionStore.forItem(item.id);
+          yield* PromotionStore.deliver(promotion!, when);
+          return { item, promotion: promotion! };
+        }).pipe(Effect.provideService(SqlClient.SqlClient, sql)),
+      /** One correction declaring `mode`, made at each of `times`. */
+      correct: (
+        mode: "convention" | "scope_drift" | "defect",
+        times: ReadonlyArray<number>,
+        project = projectId,
+      ) =>
+        Effect.forEach(times, (at) =>
+          CorrectionStore.insert({
+            projectId: project,
+            threadId: ThreadId.make("thread:outcomes"),
+            failureKind: "review_verdict",
+            declaredMode: mode,
+            description: "Seeded.",
+            sourceEventIds: [],
+            sourceKey: `seed:${++sourceKey}`,
+            occurredAt: DateTime.makeUnsafe(at),
+          }),
+        ).pipe(Effect.provideService(SqlClient.SqlClient, sql)),
+      /** One supervisor tick of the sweep. */
+      tick: (dryRun = false) => sweep.run({ dryRun }),
+      outcomes: sql<{
+        readonly promotion_id: number;
+        readonly judged_at: string;
+        readonly verdict: string;
+      }>`SELECT promotion_id, judged_at, verdict FROM promotion_outcome ORDER BY promotion_id`,
+      /** Every flag ever raised, open or cleared, oldest first. */
+      flagRows: host.sql<{
+        readonly plugin_id: string;
+        readonly thread_id: string;
+        readonly kind: string;
+        readonly text: string;
+        readonly resume_action: string;
+        readonly raised_at: string;
+        readonly cleared_at: string | null;
+      }>`SELECT plugin_id, thread_id, kind, text, resume_action, raised_at, cleared_at
       FROM attention ORDER BY id`,
-  };
-});
+    };
+  });
 
 /** `count` days before `at`, one correction a day, the nearest first. */
 const daysBefore = (at: number, count: number) =>
@@ -121,9 +159,9 @@ const daysAfter = (at: number, count: number) =>
 const OPEN_LEARNING = JSON.stringify({ label: "Open learning", target: "settings" });
 
 it.effect("5 before and 4 after raises one ineffective flag on the item's project", () =>
-  Effect.scoped(
+  scoped(
     Effect.gen(function* () {
-      const world = yield* setup;
+      const world = yield* setup();
       const { promotion } = yield* world.deliver("scope_drift");
       yield* world.correct("scope_drift", [
         ...daysBefore(DELIVERED, 5),
@@ -161,9 +199,9 @@ it.effect("5 before and 4 after raises one ineffective flag on the item's projec
 );
 
 it.effect("5 before and 0 after raises a settled flag", () =>
-  Effect.scoped(
+  scoped(
     Effect.gen(function* () {
-      const world = yield* setup;
+      const world = yield* setup();
       const { promotion } = yield* world.deliver("convention");
       yield* world.correct("convention", daysBefore(DELIVERED, 5));
 
@@ -188,9 +226,9 @@ it.effect("5 before and 0 after raises a settled flag", () =>
 );
 
 it.effect("5 before and 1 after is recorded as improved and raises nothing", () =>
-  Effect.scoped(
+  scoped(
     Effect.gen(function* () {
-      const world = yield* setup;
+      const world = yield* setup();
       yield* world.deliver("scope_drift");
       yield* world.correct("scope_drift", [
         ...daysBefore(DELIVERED, 5),
@@ -209,9 +247,9 @@ it.effect("5 before and 1 after is recorded as improved and raises nothing", () 
 );
 
 it.effect("2 before is inconclusive and raises nothing, even with many after", () =>
-  Effect.scoped(
+  scoped(
     Effect.gen(function* () {
-      const world = yield* setup;
+      const world = yield* setup();
       yield* world.deliver("scope_drift");
       yield* world.correct("scope_drift", [
         ...daysBefore(DELIVERED, 2),
@@ -232,9 +270,9 @@ it.effect("2 before is inconclusive and raises nothing, even with many after", (
 it.effect(
   "counts the project's corrections with the item's mode inside the half-open windows",
   () =>
-    Effect.scoped(
+    scoped(
       Effect.gen(function* () {
-        const world = yield* setup;
+        const world = yield* setup();
         yield* world.deliver("scope_drift");
         yield* world.correct("scope_drift", [
           // Before: the first instant of the window counts, the one ahead of it does not.
@@ -270,9 +308,9 @@ it.effect(
 );
 
 it.effect("skips a promotion whose after window is not complete, and judges it later", () =>
-  Effect.scoped(
+  scoped(
     Effect.gen(function* () {
-      const world = yield* setup;
+      const world = yield* setup();
       yield* world.deliver("scope_drift");
       yield* world.correct("scope_drift", daysBefore(DELIVERED, 5));
 
@@ -292,9 +330,9 @@ it.effect("skips a promotion whose after window is not complete, and judges it l
 );
 
 it.effect("never judges a promotion to local_only: there is no handover", () =>
-  Effect.scoped(
+  scoped(
     Effect.gen(function* () {
-      const world = yield* setup;
+      const world = yield* setup();
       // The rules send a defect to local_only, so this record is delivered by hand.
       const { promotion } = yield* world.deliver("defect");
       assert.strictEqual(promotion.ownerKind, "local_only");
@@ -308,9 +346,9 @@ it.effect("never judges a promotion to local_only: there is no handover", () =>
 );
 
 it.effect("a second tick with nothing new writes nothing", () =>
-  Effect.scoped(
+  scoped(
     Effect.gen(function* () {
-      const world = yield* setup;
+      const world = yield* setup();
       yield* world.deliver("scope_drift");
       yield* world.correct("scope_drift", [
         ...daysBefore(DELIVERED, 5),
@@ -331,9 +369,9 @@ it.effect("a second tick with nothing new writes nothing", () =>
 );
 
 it.effect("a dry run counts what it would do and writes nothing", () =>
-  Effect.scoped(
+  scoped(
     Effect.gen(function* () {
-      const world = yield* setup;
+      const world = yield* setup();
       yield* world.deliver("scope_drift");
       yield* world.correct("scope_drift", [
         ...daysBefore(DELIVERED, 5),
@@ -357,9 +395,9 @@ const RESPONSES = { close: { state: "closed" }, reroute: { ownerKind: "prompt" }
 it.effect.each(["close", "reroute"] as const)(
   "a person's %s of the item clears its flag on the next tick",
   (response) =>
-    Effect.scoped(
+    scoped(
       Effect.gen(function* () {
-        const world = yield* setup;
+        const world = yield* setup();
         const { item } = yield* world.deliver("scope_drift");
         yield* world.correct("scope_drift", [
           ...daysBefore(DELIVERED, 5),
@@ -391,9 +429,9 @@ it.effect.each(["close", "reroute"] as const)(
 );
 
 it.effect("a person who closed the item before the judgment gets a verdict and no flag", () =>
-  Effect.scoped(
+  scoped(
     Effect.gen(function* () {
-      const world = yield* setup;
+      const world = yield* setup();
       const { item } = yield* world.deliver("scope_drift");
       yield* world.correct("scope_drift", [
         ...daysBefore(DELIVERED, 5),
@@ -414,9 +452,9 @@ it.effect("a person who closed the item before the judgment gets a verdict and n
 );
 
 it.effect("clears an open flag that names no judged promotion", () =>
-  Effect.scoped(
+  scoped(
     Effect.gen(function* () {
-      const world = yield* setup;
+      const world = yield* setup();
       const resumeAction = { label: "Open learning", target: "settings" } as const;
       yield* world.attention.raise({
         pluginId: "learning",
@@ -437,4 +475,58 @@ it.effect("clears an open flag that names no judged promotion", () =>
       assert.deepStrictEqual(yield* world.attention.listAllOpen, []);
     }),
   ),
+);
+
+it.effect(
+  "judges nothing while the reactor is behind the event log, and judges once it is not",
+  () =>
+    scoped(
+      Effect.gen(function* () {
+        // The reactor's drain completes when it holds every committed event; this one is let go by hand.
+        const caught = yield* Deferred.make<void>();
+        const world = yield* setup({ caughtUp: Deferred.await(caught) });
+        yield* world.deliver("scope_drift");
+        yield* world.correct("scope_drift", daysBefore(DELIVERED, 5));
+
+        yield* TestClock.setTime(COMPLETE);
+        // The corrections may be missing some, so the due promotion is counted, not judged, and no
+        // flag is raised.
+        const waiting = yield* Effect.forkChild(world.tick());
+        yield* TestClock.adjust("3 seconds");
+        assert.deepStrictEqual(yield* Fiber.join(waiting), { examined: 1, acted: 0, flags: 0 });
+        assert.deepStrictEqual(yield* world.outcomes, []);
+        assert.deepStrictEqual(yield* world.flagRows, []);
+
+        yield* Deferred.succeed(caught, undefined);
+        assert.deepStrictEqual(yield* world.tick(), { examined: 1, acted: 1, flags: 1 });
+        assert.deepStrictEqual(
+          (yield* world.outcomes).map((row) => row.verdict),
+          ["settled"],
+        );
+      }),
+    ),
+);
+
+it.effect(
+  "judges nothing while the reactor has a failed event, and judges once it is cleared",
+  () =>
+    scoped(
+      Effect.gen(function* () {
+        const world = yield* setup();
+        yield* world.deliver("scope_drift");
+        yield* world.correct("scope_drift", daysBefore(DELIVERED, 5));
+        // The reactor's own shape for an event it moved past; it retries only rows under five
+        // attempts, so nothing clears this one mid-test.
+        yield* world.sql`INSERT INTO host_reactor_failure (sequence, type, attempts, last_error, failed_at)
+        VALUES (1, 'thread.created', 5, 'database is locked', '2026-10-02T12:00:00.000Z')`;
+
+        yield* TestClock.setTime(COMPLETE);
+        assert.deepStrictEqual(yield* world.tick(), { examined: 1, acted: 0, flags: 0 });
+        assert.deepStrictEqual(yield* world.outcomes, []);
+
+        yield* world.sql`DELETE FROM host_reactor_failure`;
+        assert.deepStrictEqual(yield* world.tick(), { examined: 1, acted: 1, flags: 1 });
+        assert.lengthOf(yield* world.outcomes, 1);
+      }),
+    ),
 );
