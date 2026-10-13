@@ -103,8 +103,13 @@ them half-evaluated. The host hands `toolkitRegistration` to `ServerPlugin.mcp` 
   for the reactor to catch up, and past that every measure answers `unavailable`. Where
   compaction before the upgrade kept a later thread event in place of a `thread.settled`, who
   settled is lost, and a thread settled by hand that way counts as an accepted outcome only if a
-  pull request merged. The template plugin: it uses every host seam once (database, reactor,
-  sweep, gateway method, MCP tool, settings panel) and is the one to copy. Server:
+  pull request merged. With a `tier`, only the runs on that routing tier's provider instance and
+  model count, and `context_efficiency` (output tokens per turn) answers only then; migration 3
+  replays the log to record each run's instance. The `telemetry/budgets` sweep judges each budget,
+  one measure for one tier, over the last seven whole UTC days per project, writes a
+  `budget_events` row only when its state changes, and raises or clears a `budget_breach`
+  attention flag. The template plugin: it uses every host seam once (database, reactor, sweep,
+  gateway method, MCP tool, settings panel) and is the one to copy. Server:
   `apps/server/src/plugins/telemetry/`. Contracts: `packages/contracts/src/plugins/telemetry.ts`.
   Web: `apps/web/src/plugins/telemetry/`.
 - **routing**: which model does which work. Three tiers, `cheap`, `standard` and `strong`, each map
