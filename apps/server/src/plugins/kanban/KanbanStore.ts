@@ -1,9 +1,11 @@
+// @effect-diagnostics nodeBuiltinImport:off - a plain sha256 of text; Effect's Crypto has no digest.
 import {
   KANBAN_STATUSES,
   KanbanError,
   KanbanSlug,
   type KanbanActor,
   type KanbanBoard,
+  type KanbanCriterion,
   type KanbanDecision,
   type KanbanGetIssueInput,
   type KanbanIssue,
@@ -32,10 +34,27 @@ import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
+import * as NodeCrypto from "node:crypto";
 
 import * as ServerConfig from "../../config.ts";
 import * as ProjectService from "../../project/ProjectService.ts";
 import * as Files from "./KanbanFiles.ts";
+
+/**
+ * What `admit` compares: the hash of the issue a spec was checked or drafted from, which is the
+ * title and description the drafting prompt is built from. The creation time is in it because a
+ * card deleted and recreated under its title has the same slug and, if filed with the same text,
+ * the same title and description; `createdAt` is set once and never rewritten.
+ */
+export const hashSource = (issue: Pick<KanbanIssue, "createdAt" | "title" | "description">) =>
+  NodeCrypto.createHash("sha256")
+    // Length-prefixed, so no text can move across a field boundary and hash the same.
+    .update(
+      [issue.createdAt, issue.title, issue.description]
+        .map((field) => `${field.length}:${field}`)
+        .join(""),
+    )
+    .digest("hex");
 
 /** Done issues wait this long before the sweep archives them. */
 const ARCHIVE_AFTER = Duration.days(7);
@@ -78,6 +97,24 @@ export class KanbanStore extends Context.Service<
       write: KanbanWrite,
     ) => Effect.Effect<KanbanWriteResult, KanbanError>;
     readonly setDirectory: (input: KanbanSetDirectoryInput) => Effect.Effect<void, KanbanError>;
+    /**
+     * Admits an issue from Triage or Inbox to Todo as `by`, in one write, with `criteria` as its
+     * acceptance criteria in that order: one already there with the same text keeps its id and
+     * state, and every other change is logged. The description is never touched.
+     *
+     * `sourceHash` is the `hashSource` of the issue the criteria came from: its creation time,
+     * title and description. The check is inside the write, so an issue edited, or deleted and
+     * recreated under the same id, since then is `changed`, in whatever column it is now. One
+     * unchanged but already out of Triage and Inbox is `left` as it is. Either way nothing is
+     * written.
+     */
+    readonly admit: (
+      projectId: ProjectId,
+      id: string,
+      by: KanbanActor,
+      criteria: ReadonlyArray<string>,
+      sourceHash: string,
+    ) => Effect.Effect<"admitted" | "left" | "changed", KanbanError>;
     /** Moves every issue linking `threadId` forward to `status`. Never leaves Triage or Inbox. */
     readonly advance: (
       projectId: ProjectId,
@@ -93,6 +130,9 @@ export class KanbanStore extends Context.Service<
 >()("t3/plugins/kanban/KanbanStore") {}
 
 const invalid = (message: string) => new KanbanError({ code: "invalid", message });
+/** The number the next server-made criterion id (`c<n>`) takes. */
+const nextCriterionNumber = (criteria: ReadonlyArray<KanbanCriterion>) =>
+  1 + criteria.reduce((max, c) => Math.max(max, Number(c.id.slice(1)) || 0), 0);
 const notFound = (message: string) => new KanbanError({ code: "not_found", message });
 
 const make = Effect.gen(function* () {
@@ -425,8 +465,7 @@ const make = Effect.gen(function* () {
       case "criterion.add": {
         const current = yield* issue();
         const text = yield* need(w.text, "text");
-        const next =
-          1 + current.criteria.reduce((max, c) => Math.max(max, Number(c.id.slice(1)) || 0), 0);
+        const next = nextCriterionNumber(current.criteria);
         yield* saveIssue(
           state,
           touch(logged(current, "criterion", `added: ${text}`), {
@@ -646,6 +685,55 @@ const make = Effect.gen(function* () {
     },
   );
 
+  const admit: KanbanStore["Service"]["admit"] = Effect.fn("KanbanStore.admit")(
+    function* (projectId, id, by, texts, sourceHash) {
+      const state = yield* load(projectId);
+      const outcome = yield* state.lock.withPermits(1)(
+        Effect.gen(function* () {
+          const current = state.issues.get(id);
+          if (current === undefined) return yield* notFound(`No issue "${id}".`);
+          // Before the column check: an issue edited and moved on meanwhile is `changed`, not `left`.
+          if (hashSource(current) !== sourceHash) return "changed" as const;
+          if (!HOLDING.has(current.status)) return "left" as const;
+          const at = yield* nowIso;
+          // In the given order; an existing criterion with the same text keeps its id and state.
+          const unused = [...current.criteria];
+          let next = nextCriterionNumber(current.criteria);
+          const criteria = texts.map((text) => {
+            const index = unused.findIndex((c) => c.text === text);
+            return index === -1
+              ? { id: `c${next++}`, text, checked: false }
+              : unused.splice(index, 1)[0]!;
+          });
+          const added = criteria.filter((c) => !current.criteria.includes(c));
+          const amended: KanbanIssue = {
+            ...current,
+            criteria,
+            log: [
+              ...current.log,
+              ...unused.map((c) => ({
+                at,
+                by,
+                kind: "criterion" as const,
+                text: `removed: ${c.text}`,
+              })),
+              ...added.map((c) => ({
+                at,
+                by,
+                kind: "criterion" as const,
+                text: `added: ${c.text}`,
+              })),
+            ],
+          };
+          yield* saveIssue(state, moved(amended, "todo", by, at));
+          return "admitted" as const;
+        }),
+      );
+      if (outcome === "admitted") yield* publish(projectId);
+      return outcome;
+    },
+  );
+
   const setDirectory: KanbanStore["Service"]["setDirectory"] = Effect.fn(
     "KanbanStore.setDirectory",
   )(function* ({ projectId, directory }) {
@@ -697,6 +785,7 @@ const make = Effect.gen(function* () {
       ),
     write,
     setDirectory,
+    admit,
     advance,
     sweepArchive: Effect.forEach(loaded, ([projectId, state]) => sweepProject(projectId, state), {
       discard: true,

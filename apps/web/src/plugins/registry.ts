@@ -1,6 +1,7 @@
 import type { PluginStatus } from "@t3tools/contracts";
 import {
   ActivityIcon,
+  GraduationCapIcon,
   RouteIcon,
   ScrollTextIcon,
   ShrinkIcon,
@@ -12,6 +13,10 @@ import { lazy, type ComponentType, type LazyExoticComponent } from "react";
 import { SettingsPanel as CavemanSettingsPanel } from "./caveman/SettingsPanel";
 import { SettingsPanel as RoutingSettingsPanel } from "./routing/SettingsPanel";
 import { TelemetrySettingsPanel } from "./telemetry/SettingsPanel";
+
+const LearningScreen = lazy(() =>
+  import("./learning/LearningScreen").then((module) => ({ default: module.LearningScreen })),
+);
 
 /**
  * What the web knows about a plugin. The server's `plugins.list` says whether it runs.
@@ -36,6 +41,7 @@ export const pluginRegistry: ReadonlyArray<PluginEntry> = [
     SettingsPanel: TelemetrySettingsPanel,
   },
   { id: "routing", title: "Routing", icon: RouteIcon, SettingsPanel: RoutingSettingsPanel },
+  { id: "learning", title: "Learning", icon: GraduationCapIcon, Screen: LearningScreen },
   { id: "caveman", title: "Caveman", icon: ShrinkIcon, SettingsPanel: CavemanSettingsPanel },
   {
     id: "policy",
