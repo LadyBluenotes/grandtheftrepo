@@ -1,7 +1,10 @@
 import { assert, it } from "@effect/vitest";
 import { ProjectId } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
 
+import * as ThreadManagementService from "../../../orchestration-v2/ThreadManagementService.ts";
+import * as ProjectService from "../../../project/ProjectService.ts";
 import { existingTask, fakeCore, MODEL, project } from "./testkit.ts";
 import * as WeeklyReportSeed from "./WeeklyReportSeed.ts";
 
@@ -58,5 +61,20 @@ it.effect("leaves a project's existing task as the person left it", () =>
     assert.strictEqual(yield* WeeklyReportSeed.seed.pipe(Effect.provide(core.layer)), 0);
     assert.deepEqual(yield* core.tasks, [mine]);
     assert.deepEqual(yield* core.commands, []);
+  }),
+);
+
+it.effect("without a scheduled task service, seeding reads nothing and creates nothing", () =>
+  Effect.gen(function* () {
+    // Any call on these dies, so reaching projects or threads fails the test.
+    const seeded = yield* WeeklyReportSeed.seed.pipe(
+      Effect.provide(
+        Layer.merge(
+          Layer.mock(ProjectService.ProjectService)({}),
+          Layer.mock(ThreadManagementService.ThreadManagementService)({}),
+        ),
+      ),
+    );
+    assert.strictEqual(seeded, 0);
   }),
 );

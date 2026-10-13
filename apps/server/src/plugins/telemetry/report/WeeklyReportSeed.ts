@@ -1,6 +1,7 @@
 import { CommandId, type ProjectId, ScheduledTaskId, ThreadId } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
 import * as Result from "effect/Result";
 
 import * as ThreadManagementService from "../../../orchestration-v2/ThreadManagementService.ts";
@@ -30,8 +31,15 @@ const promptFor = (projectId: ProjectId) =>
  */
 export const seed = Effect.gen(function* () {
   const projects = yield* ProjectService.ProjectService;
-  const scheduledTasks = yield* ScheduledTaskService.ScheduledTaskService;
   const threads = yield* ThreadManagementService.ThreadManagementService;
+  // Read, not required: naming it would make every plugin's host tests provide a service only
+  // this seed uses. The real server always has it.
+  const taskService = yield* Effect.serviceOption(ScheduledTaskService.ScheduledTaskService);
+  if (Option.isNone(taskService)) {
+    yield* Effect.logWarning("telemetry: weekly report seeding skipped, no scheduled task service");
+    return 0;
+  }
+  const scheduledTasks = taskService.value;
 
   const existing = new Set<string>((yield* scheduledTasks.list()).tasks.map((task) => task.id));
   // Fresh ids per start: a project whose task and thread were both deleted gets new ones, not a

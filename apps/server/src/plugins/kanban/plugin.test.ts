@@ -18,7 +18,6 @@ import * as ThreadManagementService from "../../orchestration-v2/ThreadManagemen
 import * as SqlitePersistence from "../../persistence/Sqlite.ts";
 import * as ProjectService from "../../project/ProjectService.ts";
 import * as ProviderRegistry from "../../provider/ProviderRegistry.ts";
-import * as ScheduledTaskService from "../../scheduledTasks/ScheduledTaskService.ts";
 import * as ServerSettings from "../../serverSettings.ts";
 import * as Attention from "../Attention.ts";
 import * as PluginHost from "../PluginHost.ts";
@@ -50,7 +49,6 @@ const layerHost = PluginHost.layerAll.pipe(
           }),
       }),
       Layer.mock(ProjectService.ProjectService)({}),
-      Layer.mock(ScheduledTaskService.ScheduledTaskService)({}),
       // Inactive routing still types its catalog and settings reads through `layerAll`.
       Layer.mock(ProviderRegistry.ProviderRegistry)({}),
       ServerSettings.layerTest(),

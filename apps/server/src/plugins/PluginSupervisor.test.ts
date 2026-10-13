@@ -28,7 +28,6 @@ import * as ThreadManagementService from "../orchestration-v2/ThreadManagementSe
 import * as SqlitePersistence from "../persistence/Sqlite.ts";
 import * as ProjectService from "../project/ProjectService.ts";
 import * as ProviderRegistry from "../provider/ProviderRegistry.ts";
-import * as ScheduledTaskService from "../scheduledTasks/ScheduledTaskService.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as ServerActivation from "../serverActivation.ts";
 import * as HostDatabase from "./HostDatabase.ts";
@@ -89,7 +88,6 @@ const layerProbeHost = (seen: Deferred.Deferred<Option.Option<Probe["Service"]>>
         // The test plugins need none of these; the registry's requirements still type through.
         Layer.mock(ThreadManagementService.ThreadManagementService)({}),
         Layer.mock(ProjectService.ProjectService)({}),
-        Layer.mock(ScheduledTaskService.ScheduledTaskService)({}),
         Layer.mock(ProviderRegistry.ProviderRegistry)({}),
         ServerSettings.layerTest(),
       ),
