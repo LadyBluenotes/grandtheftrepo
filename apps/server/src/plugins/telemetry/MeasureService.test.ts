@@ -23,6 +23,8 @@ import * as SqlitePersistence from "../../persistence/Sqlite.ts";
 import * as ServerSettings from "../../serverSettings.ts";
 import * as PluginDatabase from "../PluginDatabase.ts";
 import * as PluginReactor from "../PluginReactor.ts";
+import * as KnowledgeStore from "../knowledge/KnowledgeStore.ts";
+import { migrations as knowledgeMigrations } from "../knowledge/migrations.ts";
 import * as TierMapService from "../routing/TierMapService.ts";
 import * as Fixtures from "./eventFixtures.ts";
 import * as MeasureService from "./MeasureService.ts";
@@ -265,4 +267,96 @@ it.effect("with a tier, only the runs on the tier's provider instance and model 
       );
     }),
   ).pipe(Effect.provide(layerTest)),
+);
+
+/**
+ * One thread with three runs in the window: one read a knowledge page and then edited a file, one
+ * only edited, and one only read the page.
+ */
+const seedEditingRuns = (sql: SqlClient.SqlClient) =>
+  Effect.gen(function* () {
+    yield* sql`INSERT INTO telemetry_threads (thread_id, project_id, created_at)
+      VALUES ('thread:1', ${window.projectId}, '2026-10-02T00:00:00.000Z')`;
+    yield* sql`INSERT INTO telemetry_runs
+        (run_id, thread_id, turn_id, ordinal, status, provider_instance_id, model, started_at,
+         completed_at, event_sequence)
+      VALUES
+        ('run:reuses', 'thread:1', 'message:1', 1, 'completed', 'codex', 'test-model',
+          '2026-10-02T00:00:00.000Z', '2026-10-02T00:10:00.000Z', 1),
+        ('run:edits', 'thread:1', 'message:2', 2, 'completed', 'codex', 'test-model',
+          '2026-10-03T00:00:00.000Z', '2026-10-03T00:10:00.000Z', 2),
+        ('run:reads', 'thread:1', 'message:3', 3, 'completed', 'codex', 'test-model',
+          '2026-10-04T00:00:00.000Z', '2026-10-04T00:10:00.000Z', 3)`;
+    yield* sql`INSERT INTO telemetry_tool_calls
+        (item_id, run_id, thread_id, ordinal, item_type, tool_name, path, status, event_sequence)
+      VALUES
+        ('item:1', 'run:reuses', 'thread:1', 1, 'dynamic_tool', 'Read', '.knowledge/testing.md',
+          'completed', 1),
+        ('item:2', 'run:reuses', 'thread:1', 2, 'file_change', NULL, 'src/a.ts', 'completed', 1),
+        ('item:3', 'run:edits', 'thread:1', 3, 'file_change', NULL, 'src/a.ts', 'completed', 2),
+        ('item:4', 'run:reads', 'thread:1', 4, 'dynamic_tool', 'Read', '.knowledge/testing.md',
+          'completed', 3)`;
+  });
+
+const givePage = (sql: SqlClient.SqlClient, projectId: string, key: string, state: string) =>
+  sql`INSERT INTO knowledge_entry
+      (project_id, "key", title, body, state, source, created_at, accepted_at, retired_at)
+    VALUES (${projectId}, ${key}, 'Page', 'Body.', ${state}, '{"kind":"person"}',
+      '2026-10-01T00:00:00.000Z', NULL, NULL)`;
+
+it.effect(
+  "knowledge reuse needs the knowledge plugin and an accepted page of the project, then counts the runs that edited",
+  () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { sql } = yield* PluginDatabase.open({
+          id: "telemetry",
+          filename: ":memory:",
+          migrations,
+        });
+        const pages = yield* PluginDatabase.open({
+          id: "knowledge",
+          filename: ":memory:",
+          migrations: knowledgeMigrations,
+        });
+        const reactor = yield* PluginReactor.start({
+          plugin: "telemetry",
+          from: "start",
+          handlers: Reactor.handlers,
+        }).pipe(Effect.provideService(SqlClient.SqlClient, sql));
+        yield* seedEditingRuns(sql);
+        const measures = yield* MeasureService.make(reactor.drain).pipe(
+          Effect.provideService(SqlClient.SqlClient, sql),
+        );
+        // The knowledge plugin's own store over its own database, as the host would provide it.
+        const knowledgeOn = Effect.provide(
+          KnowledgeStore.layer.pipe(Layer.provide(Layer.succeed(SqlClient.SqlClient, pages.sql))),
+        );
+        const reuse = (result: TelemetryMeasuresResult) => {
+          const measure = result.find((candidate) => candidate.measure === "knowledge_reuse");
+          return [measure?.state, measure?.value, measure?.sampleSize, measure?.missingReason];
+        };
+
+        assert.deepEqual(reuse(yield* measures(window)), [
+          "unavailable",
+          null,
+          0,
+          "Knowledge pages come from the knowledge plugin, which is not running.",
+        ]);
+
+        // A draft, a retired page and another project's accepted page are not this project's.
+        yield* givePage(pages.sql, window.projectId, "draft", "draft");
+        yield* givePage(pages.sql, window.projectId, "gone", "retired");
+        yield* givePage(pages.sql, "project:elsewhere", "testing", "accepted");
+        assert.deepEqual(reuse(yield* measures(window).pipe(knowledgeOn)), [
+          "unavailable",
+          null,
+          0,
+          "The project has no knowledge page yet.",
+        ]);
+
+        yield* givePage(pages.sql, window.projectId, "testing", "accepted");
+        assert.deepEqual(reuse(yield* measures(window).pipe(knowledgeOn)), ["ok", 0.5, 2, null]);
+      }),
+    ).pipe(Effect.provide(layerTest)),
 );

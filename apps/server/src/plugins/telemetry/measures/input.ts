@@ -107,6 +107,11 @@ export interface MeasureInput {
    * verdict can predate the window. Undefined while the review plugin is not running.
    */
   readonly verdicts: ReadonlyArray<ReviewVerdict> | undefined;
+  /**
+   * How many accepted knowledge pages the project has now. Undefined while the knowledge plugin is
+   * not running.
+   */
+  readonly knowledgePages: number | undefined;
   readonly pricing: Pricing;
 }
 

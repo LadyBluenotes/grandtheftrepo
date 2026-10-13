@@ -152,6 +152,12 @@ wrapper (`command:cmd`, `command:pwsh`), and a heredoc or an alias under its fir
 Edit each budget's threshold, minimum sample and on/off switch under **Plugins → Telemetry**.
 Turn a budget off to pause it; **Remove** deletes it and its history.
 
+Knowledge reuse, one of the telemetry measures, is the share of a project's runs that edited a file
+and first read a page under `.knowledge/`. It tells you whether the index in the instruction files
+is getting agents to read the pages, so it needs the knowledge plugin and at least one accepted
+page. Reads of the instruction files themselves do not count, since an agent loads those without a
+tool call.
+
 ## Subscription usage widget
 
 Add **Subscription usage** from your iOS or Android widget gallery to see remaining Codex and

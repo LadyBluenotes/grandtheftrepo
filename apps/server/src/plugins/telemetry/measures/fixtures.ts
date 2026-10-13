@@ -133,6 +133,7 @@ export const input = (overrides: Partial<MeasureInput> = {}): MeasureInput => ({
   corrections: [],
   deliveries: [],
   verdicts: [],
+  knowledgePages: 0,
   pricing: { rates: new Map(), overrides: new Map(), aliases: new Map() },
   ...overrides,
 });
