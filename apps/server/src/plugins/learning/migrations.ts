@@ -104,10 +104,22 @@ const dispositionAt: PluginMigration[2] = Effect.gen(function* () {
   yield* sql`ALTER TABLE learning_items ADD COLUMN disposition_at TEXT`;
 });
 
+// The outcome sweep judges a delivered promotion once, when its after window is complete, and
+// writes the verdict here. A row means the promotion was judged, whether or not it raised a flag.
+const promotionOutcome: PluginMigration[2] = Effect.gen(function* () {
+  const sql = yield* SqlClient.SqlClient;
+  yield* sql`CREATE TABLE promotion_outcome (
+    promotion_id INTEGER PRIMARY KEY REFERENCES learning_promotions (id),
+    judged_at TEXT NOT NULL,
+    verdict TEXT NOT NULL
+  )`;
+});
+
 export const migrations = [
   [1, "Corrections", corrections],
   [2, "LearningItems", learningItems],
   [3, "PromoteIndexes", promoteIndexes],
   [4, "RegressionRuns", regressionRuns],
   [5, "DispositionAt", dispositionAt],
+  [6, "PromotionOutcome", promotionOutcome],
 ] as const satisfies ReadonlyArray<PluginMigration>;

@@ -12,6 +12,7 @@ import * as CorrectionStore from "./CorrectionStore.ts";
 import * as ItemStore from "./items/ItemStore.ts";
 import * as Mcp from "./mcp.ts";
 import { migrations } from "./migrations.ts";
+import * as OutcomeSweep from "./outcomes/OutcomeSweep.ts";
 import * as ChangesRequested from "./producers/changesRequested.ts";
 import * as Reopened from "./producers/reopened.ts";
 import * as TurnFailures from "./producers/turnFailures.ts";
@@ -42,6 +43,7 @@ const start = Effect.gen(function* () {
   yield* supervisor.register(yield* ClassifySweep.sweep);
   yield* supervisor.register(yield* PromoteSweep.sweep);
   yield* supervisor.register(yield* RegressionSweep.sweep);
+  yield* supervisor.register(yield* OutcomeSweep.sweep);
 }).pipe(Effect.orDie);
 
 /**
@@ -51,7 +53,9 @@ const start = Effect.gen(function* () {
  * Two sweeps turn them into learning items, one per recurring failure mode per
  * project, and hand each item once to the owner kind the rules or a person
  * picked; a third opens an item for each efficiency measure that worsened from
- * one week to the next. MCP tools expose corrections and items to agents.
+ * one week to the next, and a fourth flags a handover whose failure mode kept
+ * recurring, or went quiet, in the four weeks after it. MCP tools expose
+ * corrections and items to agents.
  */
 export const plugin = {
   id: "learning",

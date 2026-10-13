@@ -6,11 +6,11 @@ const sweeps = (...names: ReadonlyArray<string>) =>
   names.map((name) => ({ plugin: "learning", name }));
 
 describe("sweepsCheck", () => {
-  it("is ready when the three sweeps run for real", () => {
+  it("is ready when the four sweeps run for real", () => {
     const check = sweepsCheck({
       dryRun: false,
       sweeps: [
-        ...sweeps("classify", "promote", "regressions"),
+        ...sweeps("classify", "promote", "regressions", "outcomes"),
         { plugin: "kanban", name: "writers" },
       ],
     });
@@ -18,13 +18,19 @@ describe("sweepsCheck", () => {
   });
 
   it("names a missing sweep, and a dry run that keeps them from acting", () => {
-    const missing = sweepsCheck({ dryRun: false, sweeps: sweeps("classify", "promote") });
+    const missing = sweepsCheck({
+      dryRun: false,
+      sweeps: sweeps("classify", "promote", "regressions"),
+    });
     assert.strictEqual(missing.status, "attention");
     assert.strictEqual(
       missing.sentence,
-      "The regressions sweep is not registered, so corrections are not turned into items; restart the server.",
+      "The outcomes sweep is not registered; restart the server.",
     );
-    const dry = sweepsCheck({ dryRun: true, sweeps: sweeps("classify", "promote", "regressions") });
+    const dry = sweepsCheck({
+      dryRun: true,
+      sweeps: sweeps("classify", "promote", "regressions", "outcomes"),
+    });
     assert.strictEqual(dry.status, "attention");
   });
 });
