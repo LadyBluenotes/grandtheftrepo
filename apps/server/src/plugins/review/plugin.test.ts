@@ -1,30 +1,47 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
+import {
+  PLUGIN_GATEWAY_WS_METHODS,
+  REVIEW_METHODS,
+  ReviewRequest,
+  ReviewVerdictError,
+} from "@t3tools/contracts";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
+import * as Schema from "effect/Schema";
 import { McpServer } from "effect/ai";
 
 import * as ServerConfig from "../../config.ts";
 import * as McpHttpServer from "../../mcp/McpHttpServer.ts";
 import * as ThreadManagementService from "../../orchestration-v2/ThreadManagementService.ts";
+import * as SqlitePersistence from "../../persistence/Sqlite.ts";
 import * as ProjectService from "../../project/ProjectService.ts";
 import * as ProviderRegistry from "../../provider/ProviderRegistry.ts";
 import * as ServerSettings from "../../serverSettings.ts";
+import * as Attention from "../Attention.ts";
 import * as PluginHost from "../PluginHost.ts";
 import * as PluginSupervisor from "../PluginSupervisor.ts";
 import { registry } from "../registry.ts";
+import { later, readModel, ready, reviewed } from "./testkit.ts";
 
-/** The tools `/mcp` offers over `learning` and `review` alone, with `plugins.json` as given. */
-const toolsWith = (plugins: string) =>
+const REVIEW_TOOLS = ["review_verdict", "review_verdicts", "review_request", "review_requests"];
+
+const writePluginsJson = (plugins: string) =>
   Effect.gen(function* () {
     const { stateDir } = yield* ServerConfig.ServerConfig;
     const fs = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
     yield* fs.makeDirectory(stateDir, { recursive: true });
     yield* fs.writeFileString(path.join(stateDir, "plugins.json"), plugins);
+  });
+
+/** The tools `/mcp` offers over `learning` and `review` alone, with `plugins.json` as given. */
+const toolsWith = (plugins: string) =>
+  Effect.gen(function* () {
+    yield* writePluginsJson(plugins);
     const host = yield* PluginHost.make(
       registry.filter((plugin) => plugin.id === "learning" || plugin.id === "review"),
     );
@@ -51,15 +68,127 @@ it.layer(NodeServices.layer)("review plugin gating", (it) => {
   it.effect("registers the review tools while learning runs", () =>
     Effect.gen(function* () {
       const tools = yield* toolsWith("{}");
-      assert.includeMembers(tools, ["review_verdict", "review_verdicts"]);
+      assert.includeMembers(tools, REVIEW_TOOLS);
     }).pipe(Effect.scoped, Effect.provide(layerConfig)),
   );
 
-  it.effect("registers neither once learning is turned off", () =>
+  it.effect("registers none once review or learning is turned off", () =>
     Effect.gen(function* () {
-      const tools = yield* toolsWith('{"learning":false}');
-      assert.notInclude(tools, "review_verdict");
-      assert.notInclude(tools, "review_verdicts");
+      for (const plugins of ['{"review":false}', '{"learning":false}']) {
+        const tools = yield* toolsWith(plugins);
+        for (const tool of REVIEW_TOOLS) assert.notInclude(tools, tool);
+      }
     }).pipe(Effect.scoped, Effect.provide(layerConfig)),
   );
 });
+
+/** Every registered plugin off but those named. */
+const only = (ids: ReadonlyArray<string>) =>
+  `{ ${registry
+    .filter((plugin) => !ids.includes(plugin.id))
+    .map((plugin) => `"${plugin.id}": false`)
+    .join(", ")} }`;
+
+/** The real host and supervisor over a fresh state directory and the review read model. */
+const withHost = <A, E, R>(
+  plugins: string,
+  body: (model: Effect.Success<typeof readModel>) => Effect.Effect<A, E, R>,
+) =>
+  Effect.gen(function* () {
+    yield* writePluginsJson(plugins);
+    const model = yield* readModel;
+    return yield* body(model).pipe(
+      Effect.provide(
+        PluginHost.layerAll.pipe(
+          Layer.provide(
+            Layer.mergeAll(
+              SqlitePersistence.layerMemory,
+              model.layer,
+              Layer.mock(ProjectService.ProjectService)({}),
+              Layer.mock(ProviderRegistry.ProviderRegistry)({}),
+              ServerSettings.layerTest(),
+            ),
+          ),
+        ),
+      ),
+    );
+  }).pipe(
+    Effect.scoped,
+    Effect.provide(
+      Layer.mergeAll(layerConfig.pipe(Layer.provide(NodeServices.layer)), NodeServices.layer),
+    ),
+  );
+
+const call = (gateway: "read" | "operate", method: string, input: unknown) =>
+  PluginHost.handlers[PLUGIN_GATEWAY_WS_METHODS[gateway]]({ method, input });
+const decodeRequest = Schema.decodeUnknownEffect(ReviewRequest);
+const decodeRequests = Schema.decodeUnknownEffect(Schema.Array(ReviewRequest));
+const decodeError = Schema.decodeUnknownEffect(ReviewVerdictError);
+
+it.effect("enabled: a request over the gateway goes stale on the supervisor's tick", () =>
+  withHost(only(["learning", "review"]), (model) =>
+    Effect.gen(function* () {
+      const supervisor = yield* PluginSupervisor.PluginSupervisor;
+      assert.deepInclude((yield* supervisor.status).sweeps, {
+        plugin: "review",
+        name: "invalidation",
+      });
+
+      const asked = yield* call("operate", REVIEW_METHODS.request.method, {
+        threadId: reviewed,
+      }).pipe(Effect.flatMap(decodeRequest));
+      assert.strictEqual(asked.checkpointId, ready);
+      assert.strictEqual(asked.requestedBy, "user");
+
+      yield* model.captureLater;
+      const tick = yield* supervisor.tick;
+      assert.deepEqual(
+        tick.sweeps
+          .filter((sweep) => sweep.plugin === "review")
+          .map((s) => [s.name, s.status, s.examined, s.acted, s.flags]),
+        [["invalidation", "ok", 1, 2, 1]],
+      );
+      const listed = yield* call("read", REVIEW_METHODS.requestsList.method, {
+        threadId: reviewed,
+      }).pipe(Effect.flatMap(decodeRequests));
+      assert.deepEqual(
+        listed.map((request) => [request.checkpointId, request.status]),
+        [
+          [later, "open"],
+          [ready, "stale"],
+        ],
+      );
+      const flags = yield* (yield* Attention.Attention).listOpen({
+        pluginId: "review",
+        kind: "stale_review",
+      });
+      assert.deepEqual(flags, [
+        { threadId: reviewed, text: `Review of checkpoint ${ready} is out of date` },
+      ]);
+    }),
+  ),
+);
+
+it.effect("disabled: no sweep, and the request methods say the plugin is not running", () =>
+  withHost(only(["learning"]), () =>
+    Effect.gen(function* () {
+      const supervisor = yield* PluginSupervisor.PluginSupervisor;
+      assert.notDeepInclude((yield* supervisor.status).sweeps, {
+        plugin: "review",
+        name: "invalidation",
+      });
+      for (const [gateway, method] of [
+        ["operate", REVIEW_METHODS.request.method],
+        ["read", REVIEW_METHODS.requestsList.method],
+      ] as const) {
+        const refused = yield* call(gateway, method, { threadId: reviewed }).pipe(
+          Effect.andThen(Effect.die("expected a failure")),
+          Effect.flip,
+        );
+        if (refused._tag !== "PluginMethodError") return assert.fail(refused.message);
+        const error = yield* decodeError(refused.error);
+        assert.strictEqual(error.code, "inactive");
+      }
+    }),
+  ),
+);

@@ -36,3 +36,15 @@ the ponytail questions is a `convention` verdict whose summary starts with `rung
 id, such as `rung:dependency`. When several questions fail, the summary names the earliest, unless
 another reason is more severe and is given instead. A summary that starts with `rung:` and names none
 of the six ids is refused.
+
+### Requesting a review
+
+Ask the agent working in a thread to request a review when it finishes; it uses the
+`review_request` tool. The request names the thread's latest checkpoint and stays open until a
+reviewer gives a verdict on that checkpoint. Asking again before the thread changes returns the
+same request. `review_requests` lists a thread's requests and where each stands.
+
+A review describes the work as it was at its checkpoint. Once the thread changes after that, the
+review is out of date: T3 Code marks the request stale, opens a new request at the latest
+checkpoint, and that one needs its own verdict. An out-of-date review stays out of date, even if
+you roll the thread back to the checkpoint it reviewed.

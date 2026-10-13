@@ -30,6 +30,7 @@ export const run = (overrides: Partial<RunRow> = {}): RunRow => ({
   turn_id: "message:1",
   ordinal: 1,
   status: "completed",
+  provider_instance_id: "codex",
   model: "test-model",
   started_at: INSIDE,
   completed_at: INSIDE,
@@ -74,6 +75,7 @@ export const usage = (overrides: Partial<TurnUsageRow> = {}): TurnUsageRow => {
 export const input = (overrides: Partial<MeasureInput> = {}): MeasureInput => ({
   from: FROM,
   to: TO,
+  tier: undefined,
   threads: [],
   runs: [],
   toolCalls: [],
