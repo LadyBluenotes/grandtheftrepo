@@ -56,9 +56,13 @@ const inputPattern = (input: unknown) =>
 
 const encodeJson = Schema.encodeUnknownOption(Schema.fromJsonString(Schema.Unknown));
 
-/** A tool input as one text: a string as it is, anything else as its JSON. */
+/** A tool input as one text: a string as it is, nothing as empty, anything else as its JSON. */
 const inputText = (input: unknown) =>
-  typeof input === "string" ? input : Option.getOrElse(encodeJson(input ?? null), () => "");
+  input === undefined || input === null
+    ? ""
+    : typeof input === "string"
+      ? input
+      : Option.getOrElse(encodeJson(input), () => "");
 
 /** The latest merge among the thread's pull requests, normalized like every stored instant. */
 const latestMerge = (thread: OrchestrationV2AppThread) =>
@@ -127,7 +131,7 @@ export const toolCallFields = (item: OrchestrationV2TurnItem) => ({
  * How much of a command line is kept. A tool key needs only the program, which comes first, even
  * behind a shell wrapper.
  */
-const COMMAND_CHARS = 512;
+export const COMMAND_CHARS = 512;
 
 /**
  * What the tool output measures read of a tool call besides its name. `turnItem.input` is read
@@ -180,11 +184,13 @@ const inputKeys = (input: unknown) =>
 /**
  * What the repeated work measures read of a tool call's input to shape it and to compare two
  * calls. The input itself is not kept: `turnItem.input` holds a dynamic tool's input keys (null
- * for other items), the input's size in estimated tokens, sized as `outputTokens` sizes an
- * output, and its sha256, which tells two equal inputs apart.
+ * for other items), the input text's size in estimated tokens, its characters over four with no
+ * allowance for images, and its sha256, which tells two equal inputs apart. A file change has no
+ * recorded input, so all of it is null.
  */
 export const toolInputFields = (item: OrchestrationV2TurnItem) => {
   const tool = toolInput(item);
+  const text = tool === null ? "" : inputText(tool.input);
   return {
     /** A file search's pattern, or the `pattern`, else the `glob`, in a dynamic tool's input. */
     "turnItem.pattern":
@@ -198,8 +204,8 @@ export const toolInputFields = (item: OrchestrationV2TurnItem) => {
         ? null
         : {
             keys: item.type === "dynamic_tool" ? inputKeys(item.input) : null,
-            tokens: outputTokens(tool.input),
-            digest: digest(inputText(tool.input)),
+            tokens: Math.ceil(text.length / 4),
+            digest: digest(text),
           },
   };
 };

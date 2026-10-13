@@ -1,7 +1,9 @@
 import { assert, it } from "@effect/vitest";
 import type { TelemetryExtractionCandidate } from "@t3tools/contracts";
 
-import { call, INSIDE, input, run } from "./fixtures.ts";
+import * as Fixtures from "../eventFixtures.ts";
+import { COMMAND_CHARS } from "../fields.ts";
+import { call, INSIDE, input, rowOf, run } from "./fixtures.ts";
 import type { MeasureInput, ToolCallRow } from "./input.ts";
 import {
   deterministicWorkShare,
@@ -115,6 +117,50 @@ it("shapes a command out of its wrapper, with paths relative to the project, <n>
     exact: "command:ls /tmp/out . /work/acme2/x",
     slot: "command:ls <path> <path> <path>",
   });
+});
+
+it("keeps a path that climbs out of the project with `..` as recorded, and resolves one that stays", () => {
+  const shape = (command: string) => shapeOf(recorded(sh(command)), DIRECTORY)?.exact;
+  assert.strictEqual(
+    shape("cat /work/acme/../outside/a.ts"),
+    "command:cat /work/acme/../outside/a.ts",
+  );
+  assert.strictEqual(
+    shapeOf(recorded(readOf("/work/acme/../outside/a.ts")), DIRECTORY)?.exact,
+    "Read /work/acme/../outside/a.ts",
+  );
+  // A `..` that stays inside resolves to the path it names.
+  assert.strictEqual(shape("cat /work/acme/src/../lib/a.ts"), "command:cat lib/a.ts");
+  // A relative path has no directory to resolve against, and stays too.
+  assert.strictEqual(shape("cat ../outside/a.ts"), "command:cat ../outside/a.ts");
+});
+
+it("keeps a path in a sibling directory whose name starts with the project's as recorded", () => {
+  assert.strictEqual(
+    shapeOf(recorded(readOf("/work/acme2/src/a.ts")), DIRECTORY)?.exact,
+    "Read /work/acme2/src/a.ts",
+  );
+  assert.strictEqual(
+    shapeOf(recorded(sh("ls /work/acme2 /work/acme")), DIRECTORY)?.exact,
+    "command:ls /work/acme2 .",
+  );
+  // A trailing separator on the project's directory changes nothing.
+  assert.strictEqual(
+    shapeOf(recorded(readOf("/work/acme/src/a.ts")), `${DIRECTORY}/`)?.exact,
+    "Read src/a.ts",
+  );
+});
+
+it("leaves a command longer than the stored head unshaped", () => {
+  const long = `pnpm test ${"apps/web/src/components/".repeat(30)}`;
+  assert.isAbove(long.length, COMMAND_CHARS);
+  // The row the reactor stores for it, with the head cut at the cap.
+  const row = rowOf({ ...Fixtures.commandItem, input: long });
+  assert.strictEqual(row.command?.length, COMMAND_CHARS);
+  assert.isNull(shapeOf(row, DIRECTORY));
+  // One a character shorter than the cap is shaped.
+  const short = rowOf({ ...Fixtures.commandItem, input: long.slice(0, COMMAND_CHARS - 1) });
+  assert.isNotNull(shapeOf(short, DIRECTORY));
 });
 
 it("shapes a dynamic tool by its pattern and relative path, or else by its input's keys", () => {

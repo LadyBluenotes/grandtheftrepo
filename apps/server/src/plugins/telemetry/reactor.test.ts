@@ -388,11 +388,18 @@ it.effect("keeps what the repeated work measures shape a call by, and no input i
         input: { file_path: "src/b.ts" },
       };
       const sameRead = { ...Fixtures.readItem, id: TurnItemId.make("item:read-same") };
+      // An input carrying an image is sized as its text, not as an image the way an output is.
+      const imageInput = {
+        ...Fixtures.mcpItem,
+        id: TurnItemId.make("item:image-input"),
+        input: { image: { type: "image", data: "A".repeat(400) } },
+      };
       yield* write(
         [
           Fixtures.readItem,
           sameRead,
           otherRead,
+          imageInput,
           Fixtures.editItem,
           Fixtures.commandItem,
           Fixtures.subagentGrepItem,
@@ -414,13 +421,15 @@ it.effect("keeps what the repeated work measures shape a call by, and no input i
         input_digest FROM telemetry_tool_calls ORDER BY item_id`;
       const byId = new Map(rows.map((row) => [row.item_id, row]));
       // Characters over four: a command line as it is, a tool's input as its JSON, a search's
-      // pattern(s). A file change has no input to size.
+      // pattern(s). A file change has no recorded input, so its size is NULL.
       assert.deepEqual(
         rows.map((row) => [row.item_id, row.input_tokens, row.pattern, row.input_keys]),
         [
           ["item:command", Math.ceil(Fixtures.commandItem.input.length / 4), null, null],
           ["item:edit", null, null, null],
           ["item:file-search", 1, "TODO", null],
+          // 436 characters of JSON over four, where an output's estimate would be 1,500 or more.
+          ["item:image-input", 109, null, "image"],
           ["item:read", 6, null, "file_path"],
           ["item:read-other", 6, null, "file_path"],
           ["item:read-same", 6, null, "file_path"],

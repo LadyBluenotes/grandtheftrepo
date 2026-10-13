@@ -1,12 +1,14 @@
+// @effect-diagnostics nodeBuiltinImport:off - a pure measure resolves paths with the host's rules.
 import type {
   TelemetryExtractionCandidate,
   TelemetryExtractionCandidatesResult,
   TelemetryExtractionForm,
   TelemetryMeasuresResult,
 } from "@t3tools/contracts";
+import * as NodePath from "node:path";
 
 import { digest } from "../digest.ts";
-import type { FieldPath } from "../fields.ts";
+import { COMMAND_CHARS, type FieldPath } from "../fields.ts";
 import { unwrapShell } from "./commandProgram.ts";
 import {
   type Measure,
@@ -55,13 +57,19 @@ const INTEGER = /^\d+$/;
 /** A path token: a word with a slash or a backslash in it. */
 const isPath = (token: string) => token.includes("/") || token.includes("\\");
 
-/** A path under `directory` relative to it, `.` for the directory itself; any other as it is. */
+/**
+ * An absolute path that resolves under `directory`, itself resolved, as relative to it (`.` for
+ * the directory itself). A path that resolves outside it, such as `/work/acme/../outside` or
+ * `/work/acme2/x` under `/work/acme`, and a relative path, which the measure has no directory to
+ * resolve against, stay as recorded.
+ */
 const relative = (path: string, directory: string | null) => {
-  if (directory === null || !path.startsWith(directory)) return path;
-  const rest = path.slice(directory.length);
-  if (rest === "") return ".";
-  if (rest[0] !== "/" && rest[0] !== "\\") return path;
-  return rest.length === 1 ? "." : rest.slice(1);
+  if (directory === null || !NodePath.isAbsolute(path)) return path;
+  const inside = NodePath.relative(directory, NodePath.resolve(path));
+  if (inside === "") return ".";
+  return NodePath.isAbsolute(inside) || inside === ".." || inside.startsWith(`..${NodePath.sep}`)
+    ? path
+    : inside;
 };
 
 /** A call's exact shape, with paths and patterns kept, and its slot shape, with them as slots. */
@@ -72,8 +80,8 @@ export interface Shape {
 
 /**
  * A tool call's shape, or null for a call that is none: a file change, a web search, a file
- * search with no pattern, or a call whose input is not recorded (an event a compaction removed
- * before migration 5 left no `input_digest`).
+ * search with no pattern, a command whose stored head may be cut short, or a call whose input is
+ * not recorded (an event a compaction removed before migration 5 left no `input_digest`).
  *
  * A command is its command line out of its shell wrapper, split on whitespace, with quoted
  * strings as `<str>`, integers as `<n>` and paths under the project's directory made relative.
@@ -84,7 +92,11 @@ export const shapeOf = (call: ToolCallRow, directory: string | null): Shape | nu
   if (call.input_digest === null) return null;
   switch (call.item_type) {
     case "command_execution": {
-      if (call.command === null) return null;
+      // The reactor keeps only a command line's first `COMMAND_CHARS` characters. A head at that
+      // length may be cut short, and shaping it could merge different commands into a step no
+      // script could run, so such a command is no shape. A command line that long is rarely the
+      // repeated work a script would take over.
+      if (call.command === null || call.command.length >= COMMAND_CHARS) return null;
       const tokens = unwrapShell(call.command)
         .replace(QUOTED, "<str>")
         .split(/\s+/)
@@ -366,8 +378,11 @@ const repeatedWork = (input: MeasureInput): RepeatedWork => {
   const calls = windowCalls(input);
   const threads = new Set(calls.map((call) => call.thread_id)).size;
   const total = calls.reduce((sum, call) => sum + tokensOf(call), 0);
-  const trimmed = input.projectDirectory?.replace(/[/\\]+$/, "") ?? "";
-  const runs = threads < MIN_THREADS ? [] : runsOf(calls, trimmed === "" ? null : trimmed);
+  const directory =
+    input.projectDirectory !== null && NodePath.isAbsolute(input.projectDirectory)
+      ? NodePath.resolve(input.projectDirectory)
+      : null;
+  const runs = threads < MIN_THREADS ? [] : runsOf(calls, directory);
   const windows = [
     ...longest(mine(runs, "exact")).map((window) => ({ window, fixed: true })),
     ...longest(mine(runs, "slot")).flatMap((window) =>
