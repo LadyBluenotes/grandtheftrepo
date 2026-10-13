@@ -714,15 +714,17 @@ describe("SpecService", () => {
         const { id } = yield* file("Login loops", validSpec);
 
         editBeforeAdmit(
-          store
-            .write(projectId, "user", { action: "issue.archive", id })
-            .pipe(Effect.andThen(store.write(projectId, "user", { action: "issue.delete", id }))),
+          TestClock.adjust("1 second").pipe(
+            Effect.andThen(store.write(projectId, "user", { action: "issue.archive", id })),
+            Effect.andThen(store.write(projectId, "user", { action: "issue.delete", id })),
+          ),
         );
         const attempt = yield* specify({ projectId, id, useExisting: true });
         assert.strictEqual(attempt.status, "malformed");
         assert.strictEqual(attempt.reason, "The issue was deleted while the spec was drafted.");
         assert.deepEqual(yield* attempts, [{ status: "malformed", reason: attempt.reason }]);
         assert.deepEqual((yield* spec.latest({ projectId, id }))?.attempt, attempt);
+        assert.notStrictEqual(attempt.completedAt, attempt.createdAt);
       }),
     ).pipe(Effect.provide(layerTest)),
   );
