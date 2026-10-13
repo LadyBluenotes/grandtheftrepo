@@ -26,7 +26,9 @@ every agent is told to ask these questions, in this order, before adding anythin
 
 `ponytail` is edited like any other policy: add a new version with your own wording and accept it.
 Once a `ponytail` policy exists, in any state, the server leaves it alone, so your version is never
-replaced. The wording comes from [ponytail](https://github.com/DietrichGebert/ponytail).
+replaced. The questions are adapted from [ponytail](https://github.com/DietrichGebert/ponytail) by
+DietrichGebert, used under the MIT license; its notice is listed under
+[Open source licenses](./open-source-licenses.md).
 
 ### The caveman policy
 
