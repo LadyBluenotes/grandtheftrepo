@@ -229,19 +229,27 @@ export const make = Effect.gen(function* () {
       `;
       const judged = new Map<string, string | undefined>();
       const unread = new Set<string>();
+      /** What each file read, so a file several projects have blocks in is read once. */
+      const files = new Map<string, Result.Result<string | undefined, unknown>>();
       for (const [flag, rows] of Map.groupBy(
         recorded,
         (row) => `policy:${row.project_id}:${row.agent}:${row.targetPath}`,
       )) {
         const [first] = rows;
         if (first === undefined) continue;
-        const read = yield* Effect.result(Blocks.read(first.targetPath));
+        let read = files.get(first.targetPath);
+        if (read === undefined) {
+          read = yield* Effect.result(Blocks.read(first.targetPath));
+          files.set(first.targetPath, read);
+          if (Result.isFailure(read)) {
+            yield* Effect.logWarning("policy delivery: could not read an instruction file", {
+              path: first.targetPath,
+              cause: read.failure,
+            });
+          }
+        }
         if (Result.isFailure(read)) {
           unread.add(flag);
-          yield* Effect.logWarning("policy delivery: could not read an instruction file", {
-            path: first.targetPath,
-            cause: read.failure,
-          });
           continue;
         }
         const text = read.success;

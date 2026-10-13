@@ -150,8 +150,9 @@ export const make = Effect.gen(function* () {
   /**
    * One flag per recorded page file and agent index block, keyed
    * `knowledge:<project>:<delivery>:<path>`, with the delivery as the store names it (`page:<key>`,
-   * or the agent). A project the server no longer knows has nothing to judge, so its flags clear;
-   * one whose files could not be read keeps the flags it had.
+   * or the agent). A project the server no longer knows has nothing to judge, so its flags clear.
+   * A file that cannot be read keeps its own flag while the project's other files are still
+   * judged; a project whose targets cannot be listed keeps all its flags.
    */
   const flagDrift = Effect.fn("KnowledgeDeliverySweep.flagDrift")(function* ({
     dryRun,
@@ -159,7 +160,9 @@ export const make = Effect.gen(function* () {
     readonly dryRun: boolean;
   }) {
     const judged = new Map<string, string | undefined>();
-    const unread: Array<string> = [];
+    /** Flags of files that could not be read, and prefixes of projects that could not be listed. */
+    const unreadable = new Set<string>();
+    const unlisted: Array<string> = [];
     for (const { project_id: projectId } of yield* projectsToTend) {
       const prefix = `knowledge:${projectId}:`;
       const targets = yield* store.drift(projectId).pipe(
@@ -177,12 +180,17 @@ export const make = Effect.gen(function* () {
         }),
       );
       if (targets === undefined) {
-        unread.push(prefix);
+        unlisted.push(prefix);
         continue;
       }
       for (const target of targets) {
+        const flag = `${prefix}${target.id}:${target.path}`;
+        if (target.status === "unreadable") {
+          unreadable.add(flag);
+          continue;
+        }
         judged.set(
-          `${prefix}${target.id}:${target.path}`,
+          flag,
           target.status === "ok"
             ? undefined
             : DeliveryDrift.flagText({
@@ -200,7 +208,7 @@ export const make = Effect.gen(function* () {
       pluginId: "knowledge",
       dryRun,
       judged,
-      leave: (flag) => unread.some((prefix) => flag.startsWith(prefix)),
+      leave: (flag) => unreadable.has(flag) || unlisted.some((prefix) => flag.startsWith(prefix)),
     });
   });
 

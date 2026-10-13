@@ -247,7 +247,8 @@ them half-evaluated. The host hands `toolkitRegistration` to `ServerPlugin.mcp` 
   keeps a `delivery_drift` flag, `knowledge:<project>:<delivery>:<path>` (the delivery being
   `page:<key>` or the agent), for each recorded page file and index block of an agent in use that
   `KnowledgeStore.drift` finds edited or deleted against its recorded hash, whether or not a run
-  is active; it writes nothing, and an install makes the next tick clear the flag. Server:
+  is active; it writes nothing, a file it cannot read keeps its own flag while the rest are still
+  judged, and an install makes the next tick clear the flag. Server:
   `apps/server/src/plugins/knowledge/`. Contracts: `packages/contracts/src/plugins/knowledge.ts`.
   Web: `apps/web/src/plugins/knowledge/`, at `/plugins/knowledge`. User guide:
   [Project knowledge](./user/knowledge.md).

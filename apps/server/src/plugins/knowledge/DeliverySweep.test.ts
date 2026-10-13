@@ -375,7 +375,47 @@ it.effect("a page file that cannot be read keeps the flag it had", () =>
     );
     // The catch-up cannot compare the page either, which counts as a flag of its own.
     assert.deepStrictEqual(unread, { examined: 1, acted: 0, flags: 2 });
-    assert.include(messages, "knowledge delivery: could not check for edits");
+    assert.include(messages, "knowledge delivery: could not read a delivered file");
     assert.deepStrictEqual(yield* flags, before);
   }).pipe(Effect.provide(layerTest)),
+);
+
+it.effect(
+  "a page that cannot be read leaves only its own flag, and the rest are still judged",
+  () =>
+    Effect.gen(function* () {
+      const sweep = yield* Sweep;
+      const w = yield* world;
+      const tick = () => sweep.run({ dryRun: false });
+      yield* accepted("tests", "Running the tests");
+      yield* accepted("db", "The database");
+      yield* w.fs.remove(w.page("tests"));
+      assert.deepStrictEqual(yield* tick(), { examined: 1, acted: 1, flags: 1 });
+
+      // A directory where "tests" was cannot be read, and "db" is deleted: "db" is flagged, and the
+      // flag "tests" already had stays as it was.
+      yield* w.fs.makeDirectory(w.page("tests"));
+      yield* w.fs.remove(w.page("db"));
+      // The unreadable page also fails the catch-up's comparison, which counts as a flag of its own.
+      assert.deepStrictEqual(yield* tick(), { examined: 1, acted: 1, flags: 3 });
+      assert.deepStrictEqual(
+        (yield* openFlags).map(([key]) => key),
+        [
+          `knowledge:${projectId}:page:tests:${w.page("tests")}`,
+          `knowledge:${projectId}:page:db:${w.page("db")}`,
+        ],
+      );
+      assert.strictEqual(
+        (yield* openFlags)[1]?.[1],
+        `The knowledge page "db" in ${w.page("db")} was removed outside T3 Code; reinstall to restore it.`,
+      );
+
+      // "db" is put back by hand: its flag clears while "tests" is still unreadable.
+      yield* w.fs.writeFileString(w.page("db"), "# The database\n\nBody.\n");
+      assert.deepStrictEqual(yield* tick(), { examined: 1, acted: 1, flags: 2 });
+      assert.deepStrictEqual(
+        (yield* openFlags).map(([key]) => key),
+        [`knowledge:${projectId}:page:tests:${w.page("tests")}`],
+      );
+    }).pipe(Effect.provide(layerTest)),
 );

@@ -28,6 +28,7 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import type * as PlatformError from "effect/PlatformError";
+import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";
 import * as SqlClient from "effect/sql/SqlClient";
@@ -85,7 +86,8 @@ interface Component {
 
 /**
  * One recorded delivery against the hash its install recorded. `removed` is a file, or an index
- * block, that is gone; `edited` one that holds something else, a damaged block included.
+ * block, that is gone; `edited` one that holds something else, a damaged block included;
+ * `unreadable` one whose file could not be read, which says nothing about the others.
  */
 export interface KnowledgeDrift {
   /** The delivery row's `agent`: `page:<key>`, or the agent whose index block it is. */
@@ -93,7 +95,7 @@ export interface KnowledgeDrift {
   /** The page's key; undefined for an agent's index block. */
   readonly page: string | undefined;
   readonly path: string;
-  readonly status: "ok" | "edited" | "removed";
+  readonly status: "ok" | "edited" | "removed" | "unreadable";
 }
 
 export class KnowledgeStore extends Context.Service<
@@ -139,7 +141,8 @@ export class KnowledgeStore extends Context.Service<
      * Each delivery an install keeps current, a page file or an index block of an agent in use,
      * against the hash that install recorded, so a file still waiting for the sweep to catch up is
      * intact and only a file changed outside T3 Code is not. Nothing is written or marked verified.
-     * A page that was never delivered has no entry.
+     * A page that was never delivered has no entry. A file that cannot be read is `unreadable` and
+     * the rest are still judged; the call fails only when the project's targets cannot be listed.
      */
     readonly drift: (
       projectId: ProjectId,
@@ -487,29 +490,50 @@ const make = Effect.gen(function* () {
       const plan = yield* planOf(projectId);
       const delivered = yield* deliveriesOf(projectId);
       const results: Array<KnowledgeDrift> = [];
+      /** The file's text, or undefined once for a file that is gone; failure when it cannot be read. */
+      const readTarget = (filePath: string) =>
+        Effect.result(Blocks.read(filePath)).pipe(
+          Effect.tap((read) =>
+            Result.isFailure(read)
+              ? Effect.logWarning("knowledge delivery: could not read a delivered file", {
+                  path: filePath,
+                  cause: read.failure,
+                })
+              : Effect.void,
+          ),
+        );
       for (const page of plan.rendered.pages) {
         const row = delivered.get(pageDelivery(page.key));
         if (row === undefined) continue;
-        const current = fileHash(yield* Blocks.read(row.path));
+        const read = yield* readTarget(row.path);
+        const current = Result.isSuccess(read) ? fileHash(read.success) : undefined;
         results.push({
           id: row.agent,
           page: page.key,
           path: row.path,
-          status: current === undefined ? "removed" : current === row.hash ? "ok" : "edited",
+          status: Result.isFailure(read)
+            ? "unreadable"
+            : current === undefined
+              ? "removed"
+              : current === row.hash
+                ? "ok"
+                : "edited",
         });
       }
       for (const { agent } of plan.agents) {
         const row = delivered.get(agent);
         if (row === undefined) continue;
-        const text = yield* Blocks.read(row.path);
+        const read = yield* readTarget(row.path);
+        const text = Result.isSuccess(read) ? read.success : undefined;
         const found: Blocks.FoundBlock =
           text === undefined ? { kind: "absent" } : Blocks.findBlock(text, Pages.INDEX_MARKERS);
         results.push({
           id: row.agent,
           page: undefined,
           path: row.path,
-          status:
-            found.kind === "found" && found.hash === row.hash
+          status: Result.isFailure(read)
+            ? "unreadable"
+            : found.kind === "found" && found.hash === row.hash
               ? "ok"
               : found.kind === "absent"
                 ? "removed"

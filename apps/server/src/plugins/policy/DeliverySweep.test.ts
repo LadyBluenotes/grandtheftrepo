@@ -710,7 +710,10 @@ it.effect(
             "",
           ),
       );
-      assert.deepStrictEqual(yield* w.run(), { examined: 6, acted: 2, flags: 2 });
+      const raised = yield* w.calling(w.run());
+      assert.deepStrictEqual(raised.value, { examined: 6, acted: 2, flags: 2 });
+      // Two projects have blocks in the file, and it is read once.
+      assert.strictEqual(raised.calls.filter((call) => call === `read ${w.claudeFile}`).length, 1);
       const [flag, other, ...rest] = yield* w.flags;
       assert.deepStrictEqual(rest, []);
       assert.deepStrictEqual(
