@@ -40,9 +40,13 @@ import * as ServerConfig from "../../config.ts";
 import * as ProjectService from "../../project/ProjectService.ts";
 import * as Files from "./KanbanFiles.ts";
 
-/** What `admit` compares: the hash of the description a spec was checked or drafted from. */
-export const descriptionHash = (description: string) =>
-  NodeCrypto.createHash("sha256").update(description).digest("hex");
+/**
+ * What `admit` compares: the hash of the issue a spec was checked or drafted from. The creation
+ * time is in it because the slug and the description alone are the same for a card deleted and
+ * recreated under its title, and `createdAt` is set once and never rewritten.
+ */
+export const hashSource = (issue: Pick<KanbanIssue, "createdAt" | "description">) =>
+  NodeCrypto.createHash("sha256").update(`${issue.createdAt}\n${issue.description}`).digest("hex");
 
 /** Done issues wait this long before the sweep archives them. */
 const ARCHIVE_AFTER = Duration.days(7);
@@ -91,8 +95,8 @@ export class KanbanStore extends Context.Service<
      * state, and every other change is logged. An issue already out of those columns is `left` as
      * it is. The description is never touched.
      *
-     * `sourceHash` is the `descriptionHash` of the description the criteria came from. The check
-     * is inside the write, so an issue edited, or recreated under the same id, since then is
+     * `sourceHash` is the `hashSource` of the issue the criteria came from. The check is inside
+     * the write, so an issue edited, or deleted and recreated under the same id, since then is
      * `changed`: nothing is written.
      */
     readonly admit: (
@@ -680,7 +684,7 @@ const make = Effect.gen(function* () {
           const current = state.issues.get(id);
           if (current === undefined) return yield* notFound(`No issue "${id}".`);
           if (!HOLDING.has(current.status)) return "left" as const;
-          if (descriptionHash(current.description) !== sourceHash) return "changed" as const;
+          if (hashSource(current) !== sourceHash) return "changed" as const;
           const at = yield* nowIso;
           // In the given order; an existing criterion with the same text keeps its id and state.
           const unused = [...current.criteria];

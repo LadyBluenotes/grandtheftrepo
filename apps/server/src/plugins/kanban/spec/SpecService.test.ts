@@ -25,6 +25,7 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as SqlClient from "effect/sql/SqlClient";
+import * as TestClock from "effect/testing/TestClock";
 
 import * as ServerConfig from "../../../config.ts";
 import * as EventSink from "../../../orchestration-v2/EventSink.ts";
@@ -489,6 +490,44 @@ describe("SpecService", () => {
           assert.isNotNull(report?.attempt.completedAt);
           assert.strictEqual(report?.issueStatus, "triage");
           assert.strictEqual(yield* fileText(id), edited);
+          assert.lengthOf((yield* store.getIssue({ projectId, id })).criteria, 0);
+        }),
+      ).pipe(Effect.provide(layerTest)),
+  );
+
+  it.effect(
+    "a card deleted and recreated with the same text while the child drafts: malformed",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const { spec, store, launched, specify, react, file, fileText } = yield* start;
+          const { id } = yield* file("Login loops", rough);
+
+          yield* specify({ projectId, id });
+          // The card is archived, deleted and filed again with the same title and text, so it gets
+          // the same slug. Only its creation time differs.
+          yield* store.write(projectId, "user", { action: "issue.archive", id });
+          yield* store.write(projectId, "user", { action: "issue.delete", id });
+          yield* TestClock.adjust("1 second");
+          const again = yield* file("Login loops", rough);
+          assert.strictEqual(again.id, id);
+          const recreated = yield* fileText(id);
+          const threadId = launched[0]!.threadId!;
+          const runId = RunId.make("run:spec-recreated");
+          yield* react([
+            threadCreated(threadId),
+            planned(threadId, runId, 1, validSpec),
+            runUpdated(threadId, runId, "completed"),
+          ]);
+
+          const report = yield* spec.latest({ projectId, id });
+          assert.strictEqual(report?.attempt.status, "malformed");
+          assert.strictEqual(
+            report?.attempt.reason,
+            "The issue changed while the spec was drafted. Run specify again.",
+          );
+          assert.strictEqual(report?.issueStatus, "triage");
+          assert.strictEqual(yield* fileText(id), recreated);
           assert.lengthOf((yield* store.getIssue({ projectId, id })).criteria, 0);
         }),
       ).pipe(Effect.provide(layerTest)),

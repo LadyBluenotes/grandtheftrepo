@@ -178,7 +178,7 @@ const attemptText = (attempt: KanbanSpecAttempt, issueStatus?: KanbanStatus) => 
     case "valid":
       return `${head} The spec passed${issueStatus === undefined ? "" : placement(issueStatus)}.${text}`;
     case "malformed":
-      return `${head} ${attempt.reason ?? ""} The issue is unchanged.${text}`;
+      return `${head} ${attempt.reason ?? ""} The spec did not modify the issue.${text}`;
   }
 };
 
