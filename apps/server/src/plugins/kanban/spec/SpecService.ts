@@ -35,8 +35,10 @@ import { SPEC_FORMAT, validateSpec } from "./SpecValidator.ts";
 const NO_CHEAP_TIER =
   "The cheap tier is not configured. Use useExisting or enable the routing plugin.";
 
-/** Why an attempt is closed when `admit` finds a different description than the one it checked. */
+/** Why an attempt is closed when `admit` finds a different issue than the one it checked. */
 const ISSUE_CHANGED = "The issue changed while the spec was drafted. Run specify again.";
+/** Why one is closed when the issue is gone: there is nothing to run specify on again. */
+const ISSUE_DELETED = "The issue was deleted while the spec was drafted.";
 
 /** The run statuses that end a drafting thread's attempt. `waiting` still has a person to answer. */
 const ENDED = new Set<OrchestrationV2Run["status"]>([
@@ -69,7 +71,8 @@ const STRICTEST_MODES: DraftingModes = {
  * Each attempt records the hash of the issue it started from, its creation time, title and
  * description, and the admission applies only while the issue still has them: an issue edited, or
  * deleted and recreated under the same id, while a child drafted closes the attempt as
- * `malformed` and stays where it is.
+ * `malformed` and stays where it is. So does an issue deleted outright: a missing issue is an
+ * outcome of the attempt, not a failure to retry.
  *
  * The attempt is stored, with its outcome, before the issue is admitted: admitting renames the
  * issue file, which no SQL transaction can cover, and a card admitted without an attempt would
@@ -209,6 +212,36 @@ const make = Effect.gen(function* () {
           WHERE id = ${input.id}`,
     ).pipe(Effect.asVoid, Effect.catchTags({ SqlError: io }));
 
+  /**
+   * Admits the issue a valid spec was checked against. When it has changed or is gone, closes the
+   * attempt as `malformed` and returns why; otherwise returns nothing. Any other failure
+   * propagates: the reactor retries it.
+   */
+  const admit = (input: {
+    readonly attemptId: number;
+    readonly projectId: ProjectId;
+    readonly issueId: string;
+    readonly text: string | null;
+    readonly acceptance: ReadonlyArray<string>;
+    readonly sourceHash: string;
+  }) =>
+    store.admit(input.projectId, input.issueId, "spec", input.acceptance, input.sourceHash).pipe(
+      Effect.catchTags({
+        KanbanError: (error) =>
+          error.code === "not_found" ? Effect.succeed("deleted" as const) : Effect.fail(error),
+      }),
+      Effect.flatMap((outcome) => {
+        if (outcome !== "changed" && outcome !== "deleted") return Effect.void;
+        const reason = outcome === "changed" ? ISSUE_CHANGED : ISSUE_DELETED;
+        return close({
+          id: input.attemptId,
+          status: "malformed",
+          text: input.text,
+          reason,
+        }).pipe(Effect.as(reason));
+      }),
+    );
+
   const existing = Effect.fn("SpecService.existing")(function* (
     issue: KanbanIssue,
     projectId: ProjectId,
@@ -232,15 +265,17 @@ const make = Effect.gen(function* () {
       sourceHash,
     ).pipe(Effect.catchTags({ SqlError: io }));
     if (!check.valid) return attempt;
-    const outcome = yield* store.admit(projectId, issue.id, "spec", check.acceptance, sourceHash);
-    if (outcome !== "changed") return attempt;
-    yield* close({
-      id: attempt.id,
-      status: "malformed",
+    const reason = yield* admit({
+      attemptId: attempt.id,
+      projectId,
+      issueId: issue.id,
       text: attempt.text,
-      reason: ISSUE_CHANGED,
+      acceptance: check.acceptance,
+      sourceHash,
     });
-    return { ...attempt, status: "malformed", reason: ISSUE_CHANGED } satisfies KanbanSpecAttempt;
+    return reason === undefined
+      ? attempt
+      : ({ ...attempt, status: "malformed", reason } satisfies KanbanSpecAttempt);
   });
 
   const draft = Effect.fn("SpecService.draft")(function* (
@@ -421,15 +456,14 @@ const make = Effect.gen(function* () {
       reason: check.valid ? null : check.reason,
     });
     if (!check.valid) return;
-    const outcome = yield* store.admit(
-      attempt.project_id,
-      attempt.issue_id,
-      "spec",
-      check.acceptance,
-      attempt.source_hash,
-    );
-    if (outcome === "changed")
-      yield* close({ id: attempt.id, status: "malformed", text, reason: ISSUE_CHANGED });
+    yield* admit({
+      attemptId: attempt.id,
+      projectId: attempt.project_id,
+      issueId: attempt.issue_id,
+      text,
+      acceptance: check.acceptance,
+      sourceHash: attempt.source_hash,
+    });
   });
 
   return SpecService.of({ specify, latest, finish });

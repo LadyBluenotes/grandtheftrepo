@@ -80,8 +80,8 @@ followed by `## Out of scope`, and no other headings. A valid spec becomes the c
 criteria and moves it to **Todo**; a malformed one leaves the card where it is and says why. The
 description is never changed. `kanban_spec_get` shows the latest attempt and the column the card is
 in now, which differs if you moved it while a draft was running. If the drafting thread cannot be
-started, or you edit the description while it drafts, the attempt is closed as malformed with the
-reason, and you run it again.
+started, or you change or delete the card while it drafts, the attempt is closed as malformed with
+the reason, and you run it again if the card is still there.
 
 ## Files
 

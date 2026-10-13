@@ -366,6 +366,16 @@ const start = Effect.gen(function* () {
     launchFailsAt = operation;
   };
 
+  /** The attempts as stored, for a card that is gone and so has no `latest` report. */
+  const attempts = sql<{
+    readonly status: string;
+    readonly reason: string | null;
+  }>`SELECT status, reason FROM spec_attempt ORDER BY id`;
+  /** Events the reactor gave up on or is holding for a retry. */
+  const reactorFailures = sql<{
+    readonly sequence: number;
+  }>`SELECT sequence FROM host_reactor_failure`;
+
   return {
     spec,
     store,
@@ -376,6 +386,8 @@ const start = Effect.gen(function* () {
     react,
     file,
     fileText,
+    attempts,
+    reactorFailures,
     failAdmit,
     editBeforeAdmit,
     failLaunch,
@@ -590,6 +602,52 @@ describe("SpecService", () => {
         });
         assert.strictEqual(launched[1]?.runtimeMode, "auto-accept-edits");
         assert.strictEqual(launched[1]?.interactionMode, "default");
+      }),
+    ).pipe(Effect.provide(layerTest)),
+  );
+
+  it.effect(
+    "a card deleted while the child drafts: malformed, and the reactor does not retry",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const { launched, specify, react, file, store, attempts, reactorFailures } = yield* start;
+          const { id } = yield* file("Login loops", rough);
+
+          yield* specify({ projectId, id });
+          yield* store.write(projectId, "user", { action: "issue.archive", id });
+          yield* store.write(projectId, "user", { action: "issue.delete", id });
+          const threadId = launched[0]!.threadId!;
+          const runId = RunId.make("run:spec-deleted");
+          yield* react([
+            threadCreated(threadId),
+            planned(threadId, runId, 1, validSpec),
+            runUpdated(threadId, runId, "completed"),
+          ]);
+
+          assert.deepEqual(yield* attempts, [
+            { status: "malformed", reason: "The issue was deleted while the spec was drafted." },
+          ]);
+          assert.lengthOf(yield* reactorFailures, 0);
+        }),
+      ).pipe(Effect.provide(layerTest)),
+  );
+
+  it.effect("useExisting: a card deleted before the admission is malformed too", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { store, specify, file, attempts, editBeforeAdmit } = yield* start;
+        const { id } = yield* file("Login loops", validSpec);
+
+        editBeforeAdmit(
+          store
+            .write(projectId, "user", { action: "issue.archive", id })
+            .pipe(Effect.andThen(store.write(projectId, "user", { action: "issue.delete", id }))),
+        );
+        const attempt = yield* specify({ projectId, id, useExisting: true });
+        assert.strictEqual(attempt.status, "malformed");
+        assert.strictEqual(attempt.reason, "The issue was deleted while the spec was drafted.");
+        assert.deepEqual(yield* attempts, [{ status: "malformed", reason: attempt.reason }]);
       }),
     ).pipe(Effect.provide(layerTest)),
   );
