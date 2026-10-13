@@ -701,52 +701,73 @@ describe("SpecService", () => {
     ).pipe(Effect.provide(layerTest)),
   );
 
-  it.effect("starting the plugin closes an attempt whose thread was never created", () =>
-    Effect.scoped(
-      Effect.gen(function* () {
-        const { spec, sql, launched, specify, file } = yield* start;
-        const lost = yield* file("Login loops", rough);
-        const alive = yield* file("Logout loops", rough);
-        yield* specify({ projectId, id: lost.id });
-        yield* specify({ projectId, id: alive.id });
-        // The process exited after storing both attempts; only the second thread got created.
-        yield* (yield* EventSink.EventSinkV2).write({
-          events: [threadCreated(launched[1]!.threadId!)],
-        });
+  it.effect(
+    "starting the plugin closes an attempt whose thread or first run was never created",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const { spec, sql, launched, specify, react, file } = yield* start;
+          const noThread = yield* file("Login loops", rough);
+          const noRun = yield* file("Logout loops", rough);
+          const started = yield* file("Signin loops", rough);
+          yield* specify({ projectId, id: noThread.id });
+          yield* specify({ projectId, id: noRun.id });
+          yield* specify({ projectId, id: started.id });
+          // The process exited after storing all three attempts. The second launch got as far as
+          // creating its thread, the third as far as creating its run.
+          const [, noRunThread, startedThread] = launched.map((input) => input.threadId!);
+          const runId = RunId.make("run:spec-started");
+          yield* (yield* EventSink.EventSinkV2).write({
+            events: [
+              threadCreated(noRunThread!),
+              threadCreated(startedThread!),
+              runUpdated(startedThread!, runId, "running"),
+            ],
+          });
 
-        // The plugin starts later, and the layer runs the reconciliation once, after activation.
-        yield* TestClock.adjust("1 second");
-        const reconciled = yield* Deferred.make<void>();
-        const withSignal = Layer.succeed(
-          SpecService.SpecService,
-          SpecService.SpecService.of({
-            ...spec,
-            reconcile: Effect.ensuring(spec.reconcile, Deferred.succeed(reconciled, undefined)),
-          }),
-        );
-        yield* Layer.build(
-          SpecReactor.layer.pipe(
-            Layer.provide(withSignal),
-            Layer.provide(Layer.succeed(SqlClient.SqlClient, sql)),
-          ),
-        );
-        yield* Deferred.await(reconciled);
+          // The plugin starts later, and the layer runs the reconciliation once, after activation.
+          yield* TestClock.adjust("1 second");
+          const reconciled = yield* Deferred.make<void>();
+          const withSignal = Layer.succeed(
+            SpecService.SpecService,
+            SpecService.SpecService.of({
+              ...spec,
+              reconcile: Effect.ensuring(spec.reconcile, Deferred.succeed(reconciled, undefined)),
+            }),
+          );
+          yield* Layer.build(
+            SpecReactor.layer.pipe(
+              Layer.provide(withSignal),
+              Layer.provide(Layer.succeed(SqlClient.SqlClient, sql)),
+            ),
+          );
+          yield* Deferred.await(reconciled);
 
-        const closed = yield* spec.latest({ projectId, id: lost.id });
-        assert.strictEqual(closed?.attempt.status, "malformed");
-        assert.strictEqual(
-          closed?.attempt.reason,
-          "The drafting thread was never started. Run specify again.",
-        );
-        assert.isNotNull(closed?.attempt.completedAt);
-        assert.strictEqual(closed?.issueStatus, "triage");
-        // Its run's end still reaches the reactor through the saved cursor.
-        assert.strictEqual(
-          (yield* spec.latest({ projectId, id: alive.id }))?.attempt.status,
-          "running",
-        );
-      }),
-    ).pipe(Effect.provide(layerTest)),
+          for (const { id } of [noThread, noRun]) {
+            const closed = yield* spec.latest({ projectId, id });
+            assert.strictEqual(closed?.attempt.status, "malformed");
+            assert.strictEqual(
+              closed?.attempt.reason,
+              "The drafting thread was never started. Run specify again.",
+            );
+            assert.isNotNull(closed?.attempt.completedAt);
+            assert.strictEqual(closed?.issueStatus, "triage");
+          }
+          assert.strictEqual(
+            (yield* spec.latest({ projectId, id: started.id }))?.attempt.status,
+            "running",
+          );
+
+          // Its run's end still reaches the reactor, and the spec admits the card.
+          yield* react([
+            planned(startedThread!, runId, 1, validSpec),
+            runUpdated(startedThread!, runId, "completed"),
+          ]);
+          const decided = yield* spec.latest({ projectId, id: started.id });
+          assert.strictEqual(decided?.attempt.status, "valid");
+          assert.strictEqual(decided?.issueStatus, "todo");
+        }),
+      ).pipe(Effect.provide(layerTest)),
   );
 
   it.effect("six Approach items: malformed with the reason, the ticket untouched", () =>
