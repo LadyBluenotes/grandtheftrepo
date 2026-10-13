@@ -1,4 +1,3 @@
-import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as SqlClient from "effect/sql/SqlClient";
 import type { PluginMigration } from "../Plugin.ts";
@@ -59,8 +58,9 @@ const requests: PluginMigration[2] = Effect.gen(function* () {
 
 // A project with no `security_mode` row is `warn`. `security_scan` has a row for each ready
 // checkpoint the scan has handled, written with its findings, so `block` can tell a scan still to
-// come from one that found nothing. `security_scan_since` is when the scan began: a checkpoint
-// captured before then was never going to be scanned, so it has no row and is not pending. One finding per checkpoint, pattern, file and
+// come from one that found nothing. `security_scan_since` is when the scan began, written as the
+// reactor creates its cursor: a checkpoint captured before then was never going to be scanned, so
+// it has no row and is not pending. One finding per checkpoint, pattern, file and
 // line, so a replayed scan inserts nothing. `blocking` is whether the project was in `block` when
 // the finding was recorded: the thread is held while one such finding is unacknowledged.
 // `correction_id` points into the learning plugin's database and is written by the security sweep;
@@ -99,9 +99,6 @@ const security: PluginMigration[2] = Effect.gen(function* () {
     id INTEGER PRIMARY KEY CHECK (id = 1),
     since TEXT NOT NULL
   )`;
-  // The reactor starts from the newest event in the same start that runs this migration.
-  yield* sql`INSERT INTO security_scan_since (id, since)
-    VALUES (1, ${DateTime.formatIso(yield* DateTime.now)})`;
 });
 
 export const migrations = [

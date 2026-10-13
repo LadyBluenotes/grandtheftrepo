@@ -77,7 +77,8 @@ stored. Each project's security mode is `warn` unless changed: findings are reco
 list them with the `review_security_findings` tool. In `block`, a finding also holds the thread:
 review requests are refused and the thread is flagged until someone acknowledges every finding with
 the `review_security_ack` tool and a reason, which is kept with the findings. A turn the check could
-not read, such as one you stopped, holds the thread the same way, listed as a `scan_failed`
-finding, so look at that turn yourself before acknowledging it. A review request in `block` also
-waits until the check of the thread's latest turn has finished; ask again a moment later. `off` skips the check. A mode change applies to later turns. There
-is no screen to change the mode yet.
+not read, such as one you stopped or one that failed, holds the thread the same way, listed as a
+`scan_failed` finding, so look at that turn yourself before acknowledging it. A review request in
+`block` also waits until the check of the thread's latest turn has finished; ask again a moment
+later. `off` skips the check. The mode in effect when a turn is checked applies, which is when the
+turn ends unless a failed check is retried later. There is no screen to change the mode yet.

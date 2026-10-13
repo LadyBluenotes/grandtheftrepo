@@ -1,5 +1,6 @@
 import { assert, it } from "@effect/vitest";
 import {
+  CheckpointId,
   EventId,
   MessageId,
   OrchestrationV2Checkpoint,
@@ -15,6 +16,7 @@ import * as Layer from "effect/Layer";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/sql/SqlClient";
+import * as TestClock from "effect/testing/TestClock";
 
 import * as CheckpointDiffQuery from "../../../checkpointing/CheckpointDiffQuery.ts";
 import {
@@ -80,8 +82,11 @@ const turnCheckpoint = (ordinal: number, scopeId = `scope:${reviewed}`) =>
     capturedAt,
   });
 
-/** `reviewed`'s run for turn `ordinal`, as the read model reports it. */
-const stoppedRun = (ordinal: number): OrchestrationV2Run => {
+/** `reviewed`'s run for turn `ordinal` that ended without completing, as the read model reports it. */
+const unfinishedRun = (
+  ordinal: number,
+  status: "interrupted" | "cancelled" | "failed",
+): OrchestrationV2Run => {
   const providerInstanceId = ProviderInstanceId.make("codex");
   return {
     id: RunId.make(`run:${ordinal}`),
@@ -93,7 +98,7 @@ const stoppedRun = (ordinal: number): OrchestrationV2Run => {
     userMessageId: MessageId.make(`message:${ordinal}`),
     rootNodeId: null,
     activeAttemptId: null,
-    status: "interrupted",
+    status,
     requestedAt: capturedAt,
     startedAt: capturedAt,
     completedAt: capturedAt,
@@ -135,6 +140,7 @@ const boot = (
   diffs?: Readonly<
     Record<string, string | CheckpointRefUnavailableError | CheckpointWorkspacePathMissingError>
   >,
+  from: "start" | "now" = "start",
 ) =>
   Effect.gen(function* () {
     const kit = yield* harness;
@@ -166,9 +172,12 @@ const boot = (
       Effect.provide(Layer.mergeAll(layerDeps, kit.layerThreads)),
     );
     // The handler reads the diff query from the context the reactor's fiber starts in.
-    const started = PluginReactor.start({ plugin: "review", from: "start", handlers }).pipe(
-      Effect.provideService(SqlClient.SqlClient, kit.review),
-    );
+    const started = PluginReactor.start({
+      plugin: "review",
+      from,
+      handlers,
+      onCursorCreated: SecurityScanReactor.markScanStart,
+    }).pipe(Effect.provideService(SqlClient.SqlClient, kit.review));
     const withDiffs = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
       diffs === undefined
         ? effect
@@ -182,6 +191,14 @@ const boot = (
       Effect.flatMap(EventSink.EventSinkV2, (sink) => sink.write({ events })).pipe(
         Effect.andThen(reactor.drain),
       );
+    // An event the scan ignores, so the reactor has created its cursor before the test goes on.
+    yield* publish(
+      captured({
+        ...turnCheckpoint(1, "scope:warm-up"),
+        id: CheckpointId.make("checkpoint:warm-up"),
+        status: "stale",
+      }),
+    );
     return {
       ...kit,
       asked: Ref.get(asked),
@@ -246,6 +263,10 @@ it.effect(
           failureKind: "security",
           declaredMode: null,
           description: "secret.token at src/config.ts:2",
+          // The finding's own key, never its row id, which a rebuilt database would hand out again.
+          sourceKey: `security:${encodeURIComponent(reviewed)}:${encodeURIComponent(
+            turnCheckpoint(1).id,
+          )}:secret.token:src%2Fconfig.ts:2`,
           createdAt: DateTime.formatIso(capturedAt),
         });
         assert.notInclude(correction.description, token);
@@ -430,33 +451,46 @@ it.effect("warn: a failed scan is retried by the sweep until it reads the turn",
   ).pipe(Effect.provide(layerSink)),
 );
 
-it.effect("a stopped turn holds the thread in block and is passed over in warn", () =>
-  Effect.scoped(
-    Effect.gen(function* () {
-      const kit = yield* boot({ "0->1": configDiff([`+export const token = "${token}";`]) });
-      yield* kit.setRuns(reviewed, [stoppedRun(1), stoppedRun(2)]);
+it.effect(
+  "a turn that stopped or failed holds the thread in block and is passed over in warn",
+  () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const kit = yield* boot({ "0->1": configDiff([`+export const token = "${token}";`]) });
+        yield* kit.setRuns(reviewed, [
+          unfinishedRun(1, "interrupted"),
+          unfinishedRun(2, "failed"),
+          unfinishedRun(3, "cancelled"),
+          unfinishedRun(4, "failed"),
+        ]);
 
-      // `warn`: a warning, the event done, nothing recorded and nothing to retry.
-      yield* kit.publish(captured(turnCheckpoint(1)));
-      assert.deepEqual(yield* kit.asked, []);
-      assert.deepEqual(yield* kit.failures, []);
-      assert.deepEqual(yield* kit.security.findings({ threadId: reviewed }), []);
+        // `warn`: a warning, the event done, nothing recorded and nothing to retry.
+        yield* kit.publish(captured(turnCheckpoint(1)), captured(turnCheckpoint(2)));
+        assert.deepEqual(yield* kit.asked, []);
+        assert.deepEqual(yield* kit.failures, []);
+        assert.deepEqual(yield* kit.security.findings({ threadId: reviewed }), []);
 
-      // `block`: the turn cannot be checked, so it holds the thread.
-      yield* kit.security.setMode({ projectId, mode: "block" });
-      yield* kit.publish(captured(turnCheckpoint(2)));
-      assert.deepEqual(yield* kit.asked, []);
-      assert.deepEqual(yield* kit.failures, []);
-      assert.deepEqual(
-        (yield* kit.security.findings({ threadId: reviewed })).map((finding) => [
-          finding.checkpointId,
-          finding.patternId,
-        ]),
-        [[turnCheckpoint(2).id, "scan_failed"]],
-      );
-      assert.includeMembers(yield* kit.scanned, [turnCheckpoint(1).id, turnCheckpoint(2).id]);
-    }),
-  ).pipe(Effect.provide(layerSink)),
+        // `block`: the turn cannot be checked, so it holds the thread.
+        yield* kit.security.setMode({ projectId, mode: "block" });
+        yield* kit.publish(captured(turnCheckpoint(3)), captured(turnCheckpoint(4)));
+        assert.deepEqual(yield* kit.asked, []);
+        assert.deepEqual(yield* kit.failures, []);
+        assert.deepEqual(
+          (yield* kit.security.findings({ threadId: reviewed })).map((finding) => [
+            finding.checkpointId,
+            finding.patternId,
+          ]),
+          [
+            [turnCheckpoint(3).id, "scan_failed"],
+            [turnCheckpoint(4).id, "scan_failed"],
+          ],
+        );
+        assert.includeMembers(
+          yield* kit.scanned,
+          [1, 2, 3, 4].map((ordinal) => turnCheckpoint(ordinal).id),
+        );
+      }),
+    ).pipe(Effect.provide(layerSink)),
 );
 
 it.effect("block: a review waits for the scan of the latest checkpoint to commit", () =>
@@ -495,6 +529,32 @@ it.effect("block: a review waits for the scan of the latest checkpoint to commit
         yield* kit.requests.request({ threadId: other, requestedBy: "user" }),
         early,
       );
+    }),
+  ).pipe(Effect.provide(layerSink)),
+);
+
+it.effect("a checkpoint committed before the reactor's cursor was created is not pending", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      yield* TestClock.setTime(DateTime.toEpochMillis(DateTime.makeUnsafe("2026-10-02T00:00:00Z")));
+      // `ready` was captured on the 1st and committed before the reactor starts from the newest
+      // event, so the reactor never reads it.
+      yield* Effect.flatMap(EventSink.EventSinkV2, (sink) =>
+        sink.write({ events: [captured({ ...turnCheckpoint(1), id: ready })] }),
+      );
+      const kit = yield* boot({}, "now");
+      yield* kit.review`DELETE FROM security_scan`;
+      yield* kit.security.setMode({ projectId, mode: "block" });
+
+      const asked = yield* kit.requests.request({ threadId: reviewed, requestedBy: "user" });
+      assert.strictEqual(asked.checkpointId, ready);
+
+      // A checkpoint captured after the cursor was created waits for its scan.
+      yield* kit.captureLater;
+      const pending = yield* refusal(
+        kit.requests.request({ threadId: reviewed, requestedBy: "user" }),
+      );
+      assert.strictEqual(pending.code, "scan_pending");
     }),
   ).pipe(Effect.provide(layerSink)),
 );

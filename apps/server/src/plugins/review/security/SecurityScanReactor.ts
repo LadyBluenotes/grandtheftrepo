@@ -1,4 +1,4 @@
-import type { OrchestrationV2Checkpoint, ThreadId } from "@t3tools/contracts";
+import type { OrchestrationV2Checkpoint, OrchestrationV2Run, ThreadId } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
@@ -25,6 +25,16 @@ import {
 
 /** Findings one sweep tick records corrections for; the rest wait for the next tick. */
 const BATCH_SIZE = 100;
+
+/**
+ * Run statuses whose checkpoint `getTurnDiff` cannot diff to: it keeps completed runs only. A
+ * rolled-back run is not here; its work is gone and there is nothing to scan.
+ */
+const UNREADABLE_RUNS: ReadonlySet<OrchestrationV2Run["status"]> = new Set([
+  "interrupted",
+  "cancelled",
+  "failed",
+]);
 
 /** What a turn the scan could not read records in a `block` project, so the thread is held. */
 const SCAN_FAILED: ReadonlyArray<Match> = [{ patternId: "scan_failed", file: "", line: 0 }];
@@ -72,7 +82,7 @@ export const handlers = Effect.gen(function* () {
 
   /**
    * The matches on the lines the turn added, none when the checkpoint is not a root run's, or
-   * undefined when the turn cannot be read: its run was stopped, and `getTurnDiff` covers
+   * undefined when the turn cannot be read: its run stopped or failed, and `getTurnDiff` covers
    * completed runs only.
    */
   const scanTurn = (threadId: ThreadId, checkpoint: OrchestrationV2Checkpoint, ordinal: number) =>
@@ -86,7 +96,7 @@ export const handlers = Effect.gen(function* () {
       );
       if (!root) return [];
       const run = runs.find((candidate) => candidate.id === checkpoint.runId);
-      if (run?.status === "interrupted" || run?.status === "cancelled") return undefined;
+      if (run !== undefined && UNREADABLE_RUNS.has(run.status)) return undefined;
       // Read from the reactor fiber's context, which the server's chain gives it, rather than
       // required of the layer: that would put it in every plugin's requirements for this alone.
       const diffs = yield* Effect.serviceOption(CheckpointDiffQuery.CheckpointDiffQuery);
@@ -99,8 +109,10 @@ export const handlers = Effect.gen(function* () {
 
   /**
    * Scans one ready checkpoint of `threadId` and stores what it found. A turn the scan cannot read
-   * holds the thread in `block`; in `warn` a stopped turn is passed over with a warning, its lines
-   * scanned with the next turn's, and any other failure fails the event for the sweep to retry.
+   * holds the thread in `block`; in `warn` a stopped or failed turn is passed over with a warning,
+   * its lines scanned with the next completed turn's, and any other failure fails the event for the
+   * sweep to retry. The project's mode is read now, as the scan runs: the moment the turn ended,
+   * unless this is a retry of a failed scan.
    */
   const scanCheckpoint = (
     threadId: ThreadId,
@@ -125,10 +137,13 @@ export const handlers = Effect.gen(function* () {
         ),
       );
       if (scanned === undefined && mode === "warn") {
-        return yield* Effect.logWarning("review: security scan cannot read a stopped turn", {
-          threadId,
-          checkpointId: checkpoint.id,
-        });
+        return yield* Effect.logWarning(
+          "review: security scan cannot read a turn that did not complete",
+          {
+            threadId,
+            checkpointId: checkpoint.id,
+          },
+        );
       }
       const matches = scanned ?? SCAN_FAILED;
       if (matches.length === 0) return;
@@ -177,6 +192,28 @@ export const handlers = Effect.gen(function* () {
 });
 
 /**
+ * The correction's source key: the finding's own unique tuple, not its row id, so a review
+ * database rebuilt from scratch never lands a new finding on an old correction. Each part is
+ * encoded so no two findings share a key.
+ */
+const sourceKeyOf = (row: FindingRow) =>
+  `security:${[row.thread_id, row.checkpoint_id, row.pattern_id, row.file, String(row.line)]
+    .map(encodeURIComponent)
+    .join(":")}`;
+
+/**
+ * Records when the scan began, in the transaction that creates the reactor's cursor from the
+ * newest event: a checkpoint captured before then is one the reactor never reads, so it is not
+ * pending. Written once.
+ */
+export const markScanStart = Effect.gen(function* () {
+  const sql = yield* SqlClient.SqlClient;
+  const since = DateTime.formatIso(yield* DateTime.now);
+  yield* sql`INSERT INTO security_scan_since (id, since) VALUES (1, ${since})
+    ON CONFLICT (id) DO NOTHING`;
+});
+
+/**
  * Builds the security sweep. It first retries the scan's failed events with `retryFailed`, the
  * reactor's own retry, which otherwise runs only at start. It records a `security` correction in
  * the learning plugin for each finding without one, which the reactor cannot: a reactor sees only
@@ -222,7 +259,7 @@ export const sweep = <E>(retryFailed: Effect.Effect<void, E, SqlClient.SqlClient
             failureKind: "security",
             description: `${row.pattern_id} at ${row.file}:${row.line}`,
             sourceEventIds: [],
-            sourceKey: `security:${row.id}`,
+            sourceKey: sourceKeyOf(row),
             occurredAt: DateTime.makeUnsafe(row.created_at),
           })
           .pipe(
@@ -278,6 +315,7 @@ export const start = Effect.gen(function* () {
     plugin: "review",
     from: "now",
     handlers: yield* handlers,
+    onCursorCreated: markScanStart,
   });
   const supervisor = yield* PluginSupervisor.PluginSupervisor;
   yield* supervisor.register(yield* sweep(reactor.retryFailed()));

@@ -97,7 +97,7 @@ const ReviewSecurityAckTool = Tool.make("review_security_ack", {
 
 const ReviewSecurityFindingsTool = Tool.make("review_security_findings", {
   ...shared,
-  description: `The security scan's findings on one thread, oldest first: the pattern, file and line each matched on a line a turn added, the checkpoint of that turn, the correction it recorded, and when and why it was acknowledged. Patterns: ${SECURITY_PATTERNS}. The matched text is never stored; open the file at the line to see it. In a block project a turn the scan could not read, such as a stopped one, is listed as scan_failed, with no file and line 0: check that checkpoint by hand before acknowledging it.`,
+  description: `The security scan's findings on one thread, oldest first: the pattern, file and line each matched on a line a turn added, the checkpoint of that turn, the correction it recorded, and when and why it was acknowledged. Patterns: ${SECURITY_PATTERNS}. The matched text is never stored; open the file at the line to see it. In a block project a turn the scan could not read, such as a stopped or failed one, is listed as scan_failed, with no file and line 0: check that checkpoint by hand before acknowledging it.`,
   parameters: SecurityFindingsInput,
   success: Schema.Array(SecurityFinding),
 })

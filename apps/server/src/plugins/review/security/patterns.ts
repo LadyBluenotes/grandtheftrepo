@@ -88,13 +88,15 @@ const BUILT_COMMAND = /\$\{|\b[rR]?[fF][rR]?["']|\+/;
 const indentOf = (text: string) => text.length - text.trimStart().length;
 
 /**
- * Whether the line at `index` is a `run:` key or inside one: the nearest enclosing key above it, by
- * indentation, is `run:`. Only the hunk is visible, so a line whose enclosing key lies above the
- * hunk does not count.
+ * Whether the line at `index` is a `run:` key or may be inside one: the nearest enclosing key above
+ * it, by indentation, is `run:`. A line that is itself another key holds that key's value. Only the
+ * hunk is visible, so a line whose enclosing key lies above the hunk counts, since an addition deep
+ * inside a long `run: |` block has its key far out of the hunk.
  */
 const underRun = (lines: ReadonlyArray<HunkLine>, index: number) => {
   const target = lines[index]!.text;
   if (RUN_KEY.test(target)) return true;
+  if (YAML_KEY.test(target)) return false;
   let indent = indentOf(target);
   for (let i = index - 1; i >= 0; i--) {
     const text = lines[i]!.text;
@@ -106,7 +108,7 @@ const underRun = (lines: ReadonlyArray<HunkLine>, index: number) => {
     // A shallower line of a block scalar; its own enclosing key decides.
     indent = depth;
   }
-  return false;
+  return true;
 };
 
 const untrustedShell = (text: string) => {

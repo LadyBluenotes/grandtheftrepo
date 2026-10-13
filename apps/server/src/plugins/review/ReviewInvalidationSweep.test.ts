@@ -287,6 +287,9 @@ it.effect(
         yield* requests.request({ threadId: reviewed, requestedBy: "user" });
         yield* captureLater;
         yield* security.setMode({ projectId, mode: "block" });
+        // The scan began before either checkpoint was captured.
+        yield* review`INSERT INTO security_scan_since (id, since)
+          VALUES (1, '2026-09-30T00:00:00.000Z')`;
 
         assert.deepEqual(yield* sweep({ dryRun: false }), { examined: 1, acted: 0, flags: 0 });
         assert.deepEqual(

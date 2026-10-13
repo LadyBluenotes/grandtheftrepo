@@ -88,10 +88,12 @@ export const scanPending = (
     const [row] = yield* sql<{ readonly scanned: number; readonly since: string | null }>`
       SELECT EXISTS (SELECT 1 FROM security_scan WHERE checkpoint_id = ${checkpoint.id}) AS scanned,
         (SELECT since FROM security_scan_since WHERE id = 1) AS since`;
+    // Strictly after: a checkpoint captured in the same millisecond the cursor was sampled may be
+    // one the reactor skipped.
     return (
       row?.scanned === 0 &&
       row.since !== null &&
-      DateTime.formatIso(checkpoint.capturedAt) >= row.since
+      DateTime.formatIso(checkpoint.capturedAt) > row.since
     );
   });
 
@@ -108,7 +110,10 @@ export class SecurityHold extends Context.Service<
     readonly getMode: (input: {
       readonly projectId: ProjectId;
     }) => Effect.Effect<SecurityModeSetting, ReviewVerdictError>;
-    /** Applies to the turns that follow; a hold already open stays until it is acknowledged. */
+    /**
+     * Applies to the turns scanned after it, which are those that end after it unless a failed scan
+     * is retried; a hold already open stays until it is acknowledged.
+     */
     readonly setMode: (
       input: SecurityModeSetting,
     ) => Effect.Effect<SecurityModeSetting, ReviewVerdictError>;
