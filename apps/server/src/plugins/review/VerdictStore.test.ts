@@ -405,3 +405,34 @@ it.effect("keeps one verdict and the correction it declared when conflicting cal
     }),
   ),
 );
+
+it.effect(
+  "refuses a verdict on a thread the security scan holds, even on a request opened before",
+  () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { requests, record, security, review, verdictCount, correctionCount } =
+          yield* harness;
+        // A request opened while the project was in `warn`; a retried scan then held the thread.
+        const asked = yield* requests.request({ threadId: reviewed, requestedBy: "user" });
+        yield* review`INSERT INTO security_finding
+          (thread_id, checkpoint_id, pattern_id, file, line, blocking, created_at)
+          VALUES (${reviewed}, ${ready}, 'secret.token', 'src/config.ts', 2, 1,
+            '2026-10-01T00:00:00.000Z')`;
+
+        const refused = yield* refusal(record(reviewer, approve));
+        assert.strictEqual(refused.code, "gated");
+        assert.strictEqual(
+          refused.message,
+          "Security hold: 1 finding needs acknowledgement. Call review_security_ack with a reason.",
+        );
+        assert.strictEqual(yield* verdictCount, 0);
+        assert.strictEqual(yield* correctionCount, 0);
+
+        yield* security.ack({ threadId: reviewed, reason: "A test fixture." });
+        yield* record(reviewer, approve);
+        const [answered] = yield* requests.list({ threadId: reviewed });
+        assert.deepEqual(answered, { ...asked, status: "answered" });
+      }),
+    ),
+);

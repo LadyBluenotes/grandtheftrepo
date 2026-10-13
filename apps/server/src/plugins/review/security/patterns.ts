@@ -140,9 +140,10 @@ export const scan = (diff: string) => {
       const found = (patternId: SecurityPatternId) => matches.push({ patternId, file, line });
       if (TOKEN.test(text)) found("secret.token");
       if (PRIVATE_KEY.test(text)) found("secret.private_key");
+      // New-side lines are consecutive, so the five on each side are the five entries each way.
       if (
         EVAL.test(text) &&
-        lines.some((other) => Math.abs(other.line - line) <= 5 && FETCHED.test(other.text))
+        lines.slice(Math.max(0, index - 5), index + 6).some((other) => FETCHED.test(other.text))
       ) {
         found("rce.eval_fetched");
       }

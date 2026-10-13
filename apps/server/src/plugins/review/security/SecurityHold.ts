@@ -97,8 +97,36 @@ export const scanPending = (
     );
   });
 
-export const SCAN_PENDING_MESSAGE =
-  "The security scan of this thread's latest checkpoint has not finished. Ask again shortly.";
+/**
+ * Refuses a review step on `threadId` while, in a `block` project, the scan of `checkpoint` is still
+ * to come (`scan_pending`), and then while the thread is held (`gated`). The scan writes its row
+ * and its findings in one transaction, so asking whether it is done before asking for a hold means
+ * a scan that commits between the two is seen by the second.
+ */
+export const securityGate = (
+  sql: SqlClient.SqlClient,
+  input: {
+    readonly threadId: ThreadId;
+    readonly projectId: ProjectId;
+    readonly checkpoint: Pick<OrchestrationV2Checkpoint, "id" | "capturedAt">;
+  },
+) =>
+  Effect.gen(function* () {
+    if (yield* scanPending(sql, input.projectId, input.checkpoint)) {
+      return yield* new ReviewVerdictError({
+        code: "scan_pending",
+        message:
+          "The security scan of this thread's latest checkpoint has not finished. Ask again shortly.",
+      });
+    }
+    const held = yield* holdOf(sql, input.threadId);
+    if (held > 0) {
+      return yield* new ReviewVerdictError({
+        code: "gated",
+        message: `${holdText(held)} Call review_security_ack with a reason.`,
+      });
+    }
+  });
 
 /**
  * A project's security mode, a thread's findings, and the acknowledgement that clears a hold. The

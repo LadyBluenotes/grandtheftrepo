@@ -2,7 +2,17 @@ import { assert, it } from "@effect/vitest";
 import type { ReviewVerdictError } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 
-import { approve, harness, later, other, ready, reviewed, reviewer, sendBack } from "./testkit.ts";
+import {
+  approve,
+  harness,
+  later,
+  other,
+  projectId,
+  ready,
+  reviewed,
+  reviewer,
+  sendBack,
+} from "./testkit.ts";
 
 const refusal = (effect: Effect.Effect<void, ReviewVerdictError>) =>
   effect.pipe(
@@ -97,4 +107,39 @@ it.effect("decides by the request still standing after a rollback, not the one m
       yield* gate.check(reviewed);
     }),
   ),
+);
+
+it.effect(
+  "does not pass a thread the security scan holds, nor one whose scan is still to come",
+  () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { gate, security, review } = yield* harness;
+        // In `block`, with the scan begun before `ready` was captured and no scan of it yet.
+        yield* security.setMode({ projectId, mode: "block" });
+        yield* review`INSERT INTO security_scan_since (id, since)
+        VALUES (1, '2026-09-30T00:00:00.000Z')`;
+        assert.deepEqual(yield* refusal(gate.check(reviewed)), {
+          code: "scan_pending",
+          message:
+            "The security scan of this thread's latest checkpoint has not finished. Ask again shortly.",
+        });
+
+        // The scan commits with a finding: nobody asked for a review, and the thread still waits.
+        yield* review`INSERT INTO security_scan (checkpoint_id, thread_id, scanned_at)
+        VALUES (${ready}, ${reviewed}, '2026-10-01T00:00:00.000Z')`;
+        yield* review`INSERT INTO security_finding
+        (thread_id, checkpoint_id, pattern_id, file, line, blocking, created_at)
+        VALUES (${reviewed}, ${ready}, 'secret.token', 'src/config.ts', 2, 1,
+          '2026-10-01T00:00:00.000Z')`;
+        assert.deepEqual(yield* refusal(gate.check(reviewed)), {
+          code: "gated",
+          message:
+            "Security hold: 1 finding needs acknowledgement. Call review_security_ack with a reason.",
+        });
+
+        yield* security.ack({ threadId: reviewed, reason: "A test fixture." });
+        yield* gate.check(reviewed);
+      }),
+    ),
 );

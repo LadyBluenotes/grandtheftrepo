@@ -184,8 +184,8 @@ them half-evaluated. The host hands `toolkitRegistration` to `ServerPlugin.mcp` 
   reactor tests the lines each root-run turn adds against six fixed patterns unless the project's
   security mode is `off`, and the `review/security` sweep records each finding as a `security`
   correction, because a reactor sees only its own plugin's services; in `block` a finding refuses
-  `review.request`, holds back the invalidation sweep's replacement request and keeps a
-  `security_hold` flag until `review.security.ack`. The same sweep calls the reactor's
+  `review.request`, verdicts and `ReviewGate.check`, holds back the invalidation sweep's
+  replacement request and keeps a `security_hold` flag until `review.security.ack`. The same sweep calls the reactor's
   `retryFailed` each tick and settles an event the reactor gave up on as a scan row, with a
   `scan_failed` finding in `block`; in `block` a turn the scan cannot read, a stopped or failed
   one included, is held as a `scan_failed` finding rather than passed. The checkpoint becomes visible
