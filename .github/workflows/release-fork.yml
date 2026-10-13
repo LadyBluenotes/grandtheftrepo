@@ -3,9 +3,9 @@ name: Fork nightly release
 # Builds this fork's desktop app and publishes it as a GitHub prerelease, so an
 # installed copy updates itself through the app's own updater (the feed repo is
 # baked in from GITHUB_REPOSITORY at build time, and a -nightly version selects
-# the nightly channel). Windows x64 is the target. Linux x64 is built as well
-# because the Windows build bundles the Linux CLI for WSL and upstream's
-# reusable build job waits for that archive in the same run.
+# the nightly channel). The targets are Windows x64 and macOS arm64. Linux x64
+# is built as well because the Windows build bundles the Linux CLI for WSL and
+# upstream's reusable build job waits for that archive in the same run.
 #
 # Upstream's release.yml is not used: it needs Blacksmith runners, npm, Vercel,
 # AUR and signing secrets. Disable it under Actions once workflows are enabled
@@ -15,7 +15,12 @@ name: Fork nightly release
 # A run only publishes when main has new commits since the last nightly and at
 # least six hours have passed, the same gate upstream uses. Runs after the
 # nightly upstream sync. Builds are unsigned: Windows shows a SmartScreen
-# prompt on first install, and updates after that need no prompt.
+# prompt on first install, and updates after that need no prompt. The macOS
+# app is signed ad hoc, so Gatekeeper asks once to open it. It cannot update
+# itself: Squirrel.Mac only installs an update that satisfies the running
+# app's code signing requirement, and an ad hoc requirement is the hash of
+# that one build. So it is built without an update feed and never checks;
+# each macOS nightly is installed from the DMG.
 
 on:
   schedule:
@@ -144,6 +149,32 @@ jobs:
       resource_key: linux-x64
       cli_archive: true
 
+  # Apple silicon only. With no Apple secrets the reusable job takes its
+  # "macOS signing disabled" path, and both the app and the CLI archive are
+  # signed ad hoc.
+  desktop_mac_arm64:
+    name: Desktop macOS arm64
+    needs: [preflight, build_bundle]
+    if: needs.preflight.outputs.proceed == 'true'
+    uses: ./.github/workflows/release-desktop.yml
+    with:
+      version: ${{ needs.preflight.outputs.version }}
+      ref: ${{ github.sha }}
+      release_channel: nightly
+      relay_client_tracing: false
+      clerk_publishable_key: ""
+      clerk_jwt_template: ""
+      clerk_cli_oauth_client_id: ""
+      relay_url: ""
+      label: macOS arm64
+      runner: macos-15
+      platform: mac
+      target: dmg
+      arch: arm64
+      rust_target: aarch64-apple-darwin
+      resource_key: darwin-arm64
+      cli_archive: true
+
   # Runs after Linux so the WSL archive it waits for already exists.
   desktop_win_x64:
     name: Desktop Windows x64
@@ -170,7 +201,7 @@ jobs:
 
   release:
     name: Publish prerelease
-    needs: [preflight, desktop_linux_x64, desktop_win_x64]
+    needs: [preflight, desktop_linux_x64, desktop_mac_arm64, desktop_win_x64]
     if: needs.preflight.outputs.proceed == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 15
@@ -191,12 +222,15 @@ jobs:
 
       # The Windows build writes a per-arch updater manifest; with one arch the
       # updater expects the plain channel name. Linux manifests need no rename.
+      # The macOS app is unsigned here and cannot apply updates, so it is built
+      # without a feed; any Mac manifest or blockmap is dropped so no installed
+      # copy is ever offered an update it would fail to install.
       - name: Finish release assets
         shell: bash
         run: |
           set -euo pipefail
           cd release-assets
-          rm -f builder-debug.yml
+          rm -f builder-debug.yml *-mac.yml *.dmg.blockmap *.zip.blockmap
           shopt -s nullglob
           for manifest in *-win-x64.yml; do
             mv "$manifest" "${manifest%-win-x64.yml}.yml"
