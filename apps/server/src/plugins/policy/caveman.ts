@@ -1,3 +1,10 @@
+/**
+ * The default body below is adapted from the Caveman skill (skills/caveman/SKILL.md in
+ * https://github.com/JuliusBrussee/caveman), Copyright 2026 Julius Brussee, licensed under the
+ * Apache License, Version 2.0. Changes: the skill's reply rules are rewritten and condensed into
+ * one block for an instruction file, and its activation, persistence and intensity modes are left
+ * out. The license text and this notice are in `THIRD_PARTY_LICENSES` at the repository root.
+ */
 import { POLICY_ENVIRONMENT_PROJECT_ID } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as SqlClient from "effect/sql/SqlClient";
@@ -8,8 +15,8 @@ import * as PolicyService from "./PolicyService.ts";
 export const CAVEMAN_KEY = "caveman";
 
 /**
- * The rules, adapted from https://github.com/JuliusBrussee/caveman (Apache-2.0). An agent loads
- * the installed block into every message of a session, so this stays under 1,200 characters.
+ * The rules, adapted from Caveman (see the notice at the top of the file). An agent loads the
+ * installed block into every message of a session, so this stays under 1,200 characters.
  */
 export const CAVEMAN_TEXT = [
   "Reply terse. Keep every technical fact. Drop every filler word.",
