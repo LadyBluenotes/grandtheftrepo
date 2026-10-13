@@ -36,7 +36,7 @@ offer of help, one idea per sentence, and code, commands, paths and error text w
 Security warnings, irreversible actions, ordered steps, questions back to you, and anything written
 outside chat, such as code, comments, commits and docs, stay in plain full sentences. The rules are
 adapted from [caveman](https://github.com/JuliusBrussee/caveman) by Julius Brussee, used under the
-Apache License 2.0; the license text is in `THIRD_PARTY_LICENSES` at the repository root.
+Apache License 2.0; its notice is listed under [Open source licenses](./open-source-licenses.md).
 
 It reaches every thread of Claude, Codex and Copilot through the instruction files above, with
 nothing to install. Cursor, Grok, OpenCode and Antigravity do not read those files, so it does not

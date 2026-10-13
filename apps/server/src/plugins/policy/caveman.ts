@@ -3,7 +3,8 @@
  * https://github.com/JuliusBrussee/caveman), Copyright 2026 Julius Brussee, licensed under the
  * Apache License, Version 2.0. Changes: the skill's reply rules are rewritten and condensed into
  * one block for an instruction file, and its activation, persistence and intensity modes are left
- * out. The license text and this notice are in `THIRD_PARTY_LICENSES` at the repository root.
+ * out. The license text and this notice are the "Caveman reply rules" entry of
+ * `third-party-licenses.config.json`, which the app lists under Open source licenses.
  */
 import { POLICY_ENVIRONMENT_PROJECT_ID } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
