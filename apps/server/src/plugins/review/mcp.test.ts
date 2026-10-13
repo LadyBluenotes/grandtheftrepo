@@ -2,6 +2,7 @@ import { expect, it } from "@effect/vitest";
 import {
   EnvironmentId,
   OrchestratorMcpFailure,
+  PONYTAIL_RUNG_IDS,
   ProviderInstanceId,
   type ThreadId,
   type AuthMcpClientAccess,
@@ -119,6 +120,18 @@ it.effect("lists the review tools with the write tool marked as changing things"
   ),
 );
 
+it.effect("tells the reviewer the six rungs in order and how a failed one is reported", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const { server } = yield* withTools;
+      const description = server.tools.find(({ tool }) => tool.name === "review_verdict")?.tool
+        .description;
+      expect(description).toContain(PONYTAIL_RUNG_IDS.join(", "));
+      expect(description).toContain("convention verdict whose summary starts with rung:<id>");
+    }),
+  ),
+);
+
 it.effect(
   "records one verdict and one correction for a thread caller, and again adds nothing",
   () =>
@@ -180,6 +193,10 @@ it.effect("refuses a bad or missing mode, the reviewer's own thread and a foreig
         [
           { ...sendBack, checkpointId: foreign },
           `Checkpoint ${foreign} is not a ready checkpoint of thread ${reviewed}`,
+        ],
+        [
+          { ...sendBack, failureMode: "convention", summary: "rung:bogus" },
+          'Unknown rung "bogus". Rungs: needed, existing, platform, dependency, one_line, minimum.',
         ],
       ] as const;
       for (const [input, message] of refusals) {
