@@ -109,7 +109,10 @@ them half-evaluated. The host hands `toolkitRegistration` to `ServerPlugin.mcp` 
   A launcher starts work through `TierSelectionService.launch` or `delegate`: they pick a tier from
   the caller's task class, one tier up per failed run of the same work, hand the launch that tier's
   model, and append a `routing_recommended` row to `routing_events`; with the plugin off the launch
-  is unchanged. Server: `apps/server/src/plugins/routing/`. Contracts:
+  is unchanged. A reactor compares the thread's first run with its recommendation and appends one
+  `routing_observed` row; `routing.adherence` and the `routing_adherence` MCP tool report the share
+  that matched over a window, with each mismatch, and answer `unavailable` below five observed
+  launches. Server: `apps/server/src/plugins/routing/`. Contracts:
   `packages/contracts/src/plugins/routing.ts`. Web: `apps/web/src/plugins/routing/`.
 - **learning**: a record of corrections, visible instances of work going wrong, taken from
   events the server already emits: failed or interrupted provider turns, pull request wakes

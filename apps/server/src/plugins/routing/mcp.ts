@@ -1,5 +1,7 @@
 import {
   OrchestratorMcpFailure,
+  RoutingAdherence,
+  RoutingAdherenceInput,
   RoutingTiers,
   RoutingTiersGetInput,
   type RoutingError,
@@ -11,6 +13,7 @@ import * as McpInvocationContext from "../../mcp/McpInvocationContext.ts";
 import * as McpToolAccess from "../../mcp/McpToolAccess.ts";
 import { readCaller, resolveProjectId } from "../../mcp/threadAccess.ts";
 import * as ThreadManagementService from "../../orchestration-v2/ThreadManagementService.ts";
+import * as AdherenceService from "./AdherenceService.ts";
 import * as TierMapService from "./TierMapService.ts";
 
 const RoutingTiersTool = Tool.make("routing_tiers", {
@@ -28,7 +31,18 @@ const RoutingTiersTool = Tool.make("routing_tiers", {
   .annotate(Tool.Readonly, true)
   .annotate(Tool.Destructive, false);
 
-export const RoutingToolkit = Toolkit.make(RoutingTiersTool);
+const RoutingAdherenceTool = Tool.make("routing_adherence", {
+  description:
+    "Whether the recommended model is the one that ran. Over the recommendations a project made from (inclusive) to (exclusive), ISO instants in UTC: measure is the share whose thread's first run used the recommended provider instance and model, with how many were observed (sampleSize) and state unavailable with the reason below five; mismatches lists each recommendation that ran something else, with its thread, tier, recommended and observed entry, time and a one-sentence flag.",
+  parameters: RoutingAdherenceInput,
+  success: RoutingAdherence,
+  failure: OrchestratorMcpFailure,
+  failureMode: "return",
+})
+  .annotate(Tool.Readonly, true)
+  .annotate(Tool.Destructive, false);
+
+export const RoutingToolkit = Toolkit.make(RoutingTiersTool, RoutingAdherenceTool);
 
 const failure = (error: RoutingError) =>
   new OrchestratorMcpFailure({
@@ -38,19 +52,29 @@ const failure = (error: RoutingError) =>
   });
 
 /**
- * The service is read when the handlers are built, not declared as a tool dependency: plugin
+ * The services are read when the handlers are built, not declared as tool dependencies: plugin
  * services are typed as absent from the server chain, and these tools only register while
- * the plugin is active, which is when the service is there.
+ * the plugin is active, which is when the services are there.
  */
 export const handlers = McpToolAccess.toLayer(
   RoutingToolkit,
-  Effect.map(Effect.serviceOption(TierMapService.TierMapService), (option) => ({
-    routing_tiers: McpToolAccess.reads((input: RoutingTiersGetInput) =>
-      Effect.gen(function* () {
-        const tiers = yield* TierMapService.fromOption(option);
-        const projectId = yield* resolveProjectId(yield* readCaller(), input.projectId);
-        return yield* tiers.get({ projectId });
-      }).pipe(Effect.catchTags({ RoutingError: (error) => Effect.fail(failure(error)) })),
-    ),
-  })),
+  Effect.gen(function* () {
+    const tierMap = yield* Effect.serviceOption(TierMapService.TierMapService);
+    const adherence = yield* Effect.serviceOption(AdherenceService.AdherenceService);
+    return {
+      routing_tiers: McpToolAccess.reads((input: RoutingTiersGetInput) =>
+        Effect.gen(function* () {
+          const tiers = yield* TierMapService.fromOption(tierMap);
+          const projectId = yield* resolveProjectId(yield* readCaller(), input.projectId);
+          return yield* tiers.get({ projectId });
+        }).pipe(Effect.catchTags({ RoutingError: (error) => Effect.fail(failure(error)) })),
+      ),
+      routing_adherence: McpToolAccess.reads((input: RoutingAdherenceInput) =>
+        Effect.gen(function* () {
+          const report = yield* AdherenceService.fromOption(adherence);
+          return yield* report.adherence(input);
+        }).pipe(Effect.catchTags({ RoutingError: (error) => Effect.fail(failure(error)) })),
+      ),
+    };
+  }),
 );

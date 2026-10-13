@@ -1,7 +1,15 @@
 import * as Schema from "effect/Schema";
-import { NonNegativeInt, ProjectId, TrimmedNonEmptyString } from "../baseSchemas.ts";
+import {
+  IsoDateTime,
+  NonNegativeInt,
+  PositiveInt,
+  ProjectId,
+  ThreadId,
+  TrimmedNonEmptyString,
+} from "../baseSchemas.ts";
 import { ProviderInstanceId } from "../providerInstance.ts";
 import { definePluginMethods } from "./method.ts";
+import { TelemetryMeasure } from "./telemetry.ts";
 
 /** How much model a task needs. */
 export const RoutingTier = Schema.Literals(["cheap", "standard", "strong"]);
@@ -78,6 +86,52 @@ export const RoutingRecommendedDetail = Schema.Struct({
 });
 export type RoutingRecommendedDetail = typeof RoutingRecommendedDetail.Type;
 
+const RoutingObservedBase = {
+  /** The `routing_events` id of the `routing_recommended` row this answers. */
+  recommendationId: PositiveInt,
+  /** The provider instance and model of the thread's first run. */
+  observed: RoutingEntry,
+};
+
+/**
+ * The `detail` of a `routing_observed` event, stored as JSON. `flag` is one sentence naming the
+ * thread, the recommended tier and the observed model, and is set exactly when `matched` is false.
+ */
+export const RoutingObservedDetail = Schema.Union([
+  Schema.Struct({ ...RoutingObservedBase, matched: Schema.Literal(true), flag: Schema.Null }),
+  Schema.Struct({ ...RoutingObservedBase, matched: Schema.Literal(false), flag: Schema.String }),
+]);
+export type RoutingObservedDetail = typeof RoutingObservedDetail.Type;
+
+/** A project's window: `from` inclusive, `to` exclusive, both instants in UTC, by recommendation time. */
+export const RoutingAdherenceInput = Schema.Struct({
+  projectId: ProjectId,
+  from: IsoDateTime,
+  to: IsoDateTime,
+});
+export type RoutingAdherenceInput = typeof RoutingAdherenceInput.Type;
+
+/** A recommendation whose thread ran something else. `at` is when it was recommended. */
+export const RoutingMismatch = Schema.Struct({
+  threadId: ThreadId,
+  tier: RoutingTier,
+  recommended: RoutingEntry,
+  observed: RoutingEntry,
+  at: IsoDateTime,
+  flag: Schema.String,
+});
+export type RoutingMismatch = typeof RoutingMismatch.Type;
+
+/**
+ * Whether the recommended model is the one that ran: the share of observed recommendations whose
+ * first run matched, and each recommendation that did not. `unavailable` below the minimum sample.
+ */
+export const RoutingAdherence = Schema.Struct({
+  measure: TelemetryMeasure,
+  mismatches: Schema.Array(RoutingMismatch),
+});
+export type RoutingAdherence = typeof RoutingAdherence.Type;
+
 export class RoutingError extends Schema.TaggedError<RoutingError>()("RoutingError", {
   code: Schema.Literals(["inactive", "invalid", "not_found", "io"]),
   message: Schema.String,
@@ -96,6 +150,13 @@ export const ROUTING_METHODS = definePluginMethods({
     gateway: "settingsWrite",
     input: RoutingTiersSetInput,
     output: RoutingTiers,
+    error: RoutingError,
+  },
+  adherence: {
+    method: "routing.adherence",
+    gateway: "read",
+    input: RoutingAdherenceInput,
+    output: RoutingAdherence,
     error: RoutingError,
   },
 });
