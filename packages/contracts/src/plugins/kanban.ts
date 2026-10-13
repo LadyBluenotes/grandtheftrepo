@@ -286,7 +286,8 @@ export type KanbanSpecAttempt = typeof KanbanSpecAttempt.Type;
  */
 export const KanbanSpecReport = Schema.Struct({
   attempt: KanbanSpecAttempt,
-  issueStatus: KanbanStatus,
+  /** Null when the issue no longer exists: it was deleted after the attempt. */
+  issueStatus: Schema.NullOr(KanbanStatus),
 });
 export type KanbanSpecReport = typeof KanbanSpecReport.Type;
 
@@ -361,7 +362,7 @@ export const KANBAN_METHODS = definePluginMethods({
     output: KanbanSpecAttempt,
     error: KanbanError,
   },
-  /** The issue's latest spec attempt and the status the issue is in now, or null without an attempt. */
+  /** The issue's latest spec attempt and the status the issue is in now (null once it is deleted), or null without an attempt. */
   specGet: {
     method: "kanban.spec.get",
     gateway: "read",

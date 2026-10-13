@@ -162,12 +162,15 @@ const issueText = (issue: KanbanIssue, decisions: ReadonlyArray<KanbanDecision>)
   ].join("\n");
 
 /** Where the issue is now, after a spec that passed: a passed spec does not say the card moved. */
-const placement = (issueStatus: KanbanStatus) =>
-  issueStatus === "triage" || issueStatus === "inbox"
-    ? `, but the issue is still in ${issueStatus}, waiting to be admitted: call kanban_ticket_specify again`
-    : `; the issue is in ${issueStatus}`;
+const placement = (issueStatus: KanbanStatus | null) =>
+  issueStatus === null
+    ? ", but the issue no longer exists"
+    : issueStatus === "triage" || issueStatus === "inbox"
+      ? `, but the issue is still in ${issueStatus}, waiting to be admitted: call kanban_ticket_specify again`
+      : `; the issue is in ${issueStatus}`;
 
-const attemptText = (attempt: KanbanSpecAttempt, issueStatus?: KanbanStatus) => {
+/** `issueStatus` is where the issue is now, null once it is deleted; omitted when it is not known. */
+const attemptText = (attempt: KanbanSpecAttempt, issueStatus?: KanbanStatus | null) => {
   const from =
     attempt.childThreadId === null ? "the description" : `drafting thread ${attempt.childThreadId}`;
   const head = `Spec attempt ${attempt.id} for ${attempt.issueId}, from ${from}: ${attempt.status}.`;
@@ -178,7 +181,9 @@ const attemptText = (attempt: KanbanSpecAttempt, issueStatus?: KanbanStatus) => 
     case "valid":
       return `${head} The spec passed${issueStatus === undefined ? "" : placement(issueStatus)}.${text}`;
     case "malformed":
-      return `${head} ${attempt.reason ?? ""} The spec did not modify the issue.${text}`;
+      return `${head} ${attempt.reason ?? ""} ${
+        issueStatus === null ? "The issue no longer exists." : "The spec did not modify the issue."
+      }${text}`;
   }
 };
 

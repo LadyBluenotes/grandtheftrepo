@@ -399,8 +399,15 @@ const make = Effect.gen(function* () {
         WHERE project_id = ${projectId} AND issue_id = ${id}
         ORDER BY id DESC LIMIT 1`.pipe(Effect.catchTags({ SqlError: io }));
     if (rows[0] === undefined) return null;
-    const issue = yield* store.getIssue({ projectId, id });
-    return { attempt: toAttempt(rows[0]), issueStatus: issue.status };
+    // A deleted issue still has its attempts, and the deletion may be why one was closed.
+    const issueStatus = yield* store.getIssue({ projectId, id }).pipe(
+      Effect.map((issue) => issue.status),
+      Effect.catchTags({
+        KanbanError: (error) =>
+          error.code === "not_found" ? Effect.succeed(null) : Effect.fail(error),
+      }),
+    );
+    return { attempt: toAttempt(rows[0]), issueStatus };
   });
 
   const finish: SpecService["Service"]["finish"] = Effect.fn("SpecService.finish")(function* (run) {

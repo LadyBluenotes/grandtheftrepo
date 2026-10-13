@@ -100,12 +100,13 @@ export class KanbanStore extends Context.Service<
     /**
      * Admits an issue from Triage or Inbox to Todo as `by`, in one write, with `criteria` as its
      * acceptance criteria in that order: one already there with the same text keeps its id and
-     * state, and every other change is logged. An issue already out of those columns is `left` as
-     * it is. The description is never touched.
+     * state, and every other change is logged. The description is never touched.
      *
      * `sourceHash` is the `hashSource` of the issue the criteria came from: its creation time,
      * title and description. The check is inside the write, so an issue edited, or deleted and
-     * recreated under the same id, since then is `changed`: nothing is written.
+     * recreated under the same id, since then is `changed`, in whatever column it is now. One
+     * unchanged but already out of Triage and Inbox is `left` as it is. Either way nothing is
+     * written.
      */
     readonly admit: (
       projectId: ProjectId,
@@ -691,8 +692,9 @@ const make = Effect.gen(function* () {
         Effect.gen(function* () {
           const current = state.issues.get(id);
           if (current === undefined) return yield* notFound(`No issue "${id}".`);
-          if (!HOLDING.has(current.status)) return "left" as const;
+          // Before the column check: an issue edited and moved on meanwhile is `changed`, not `left`.
           if (hashSource(current) !== sourceHash) return "changed" as const;
+          if (!HOLDING.has(current.status)) return "left" as const;
           const at = yield* nowIso;
           // In the given order; an existing criterion with the same text keeps its id and state.
           const unused = [...current.criteria];

@@ -4,11 +4,14 @@ import {
   KANBAN_METHODS,
   KanbanError,
   PLUGIN_GATEWAY_WS_METHODS,
+  ProjectId,
   type OrchestrationV2ThreadShell,
+  type Project,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
@@ -24,6 +27,18 @@ import * as PluginHost from "../PluginHost.ts";
 import * as PluginSupervisor from "../PluginSupervisor.ts";
 import { registry } from "../registry.ts";
 import { thread } from "./writerFixtures.ts";
+
+const projectId = ProjectId.make("project-1");
+const project: Project = {
+  id: projectId,
+  title: "Grand Theft Repo",
+  workspaceRoot: "/unused",
+  defaultModelSelection: null,
+  scripts: [],
+  createdAt: "2026-10-01T00:00:00.000Z",
+  updatedAt: "2026-10-01T00:00:00.000Z",
+  deletedAt: null,
+};
 
 const writers: ReadonlyArray<OrchestrationV2ThreadShell> = [
   thread("a", { startedSeconds: 10 }),
@@ -48,7 +63,9 @@ const layerHost = PluginHost.layerAll.pipe(
             archivedThreads: [],
           }),
       }),
-      Layer.mock(ProjectService.ProjectService)({}),
+      Layer.mock(ProjectService.ProjectService)({
+        getById: (id) => Effect.succeed(id === projectId ? Option.some(project) : Option.none()),
+      }),
       // Inactive routing still types its catalog and settings reads through `layerAll`.
       Layer.mock(ProviderRegistry.ProviderRegistry)({}),
       ServerSettings.layerTest(),
@@ -141,6 +158,39 @@ it.effect(
         }).pipe(Effect.provide(layerHost));
       }),
     ).pipe(Effect.provide(layerTest)),
+);
+
+it.effect("spec.get still reports an attempt once its issue is deleted", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      yield* writeStateFile("plugins.json", onlyKanban);
+      yield* Effect.gen(function* () {
+        const write = (input: unknown) => operate(KANBAN_METHODS.write.method, input);
+        yield* write({
+          projectId,
+          action: "issue.create",
+          title: "Gone soon",
+          description: "Rough.",
+          status: "triage",
+        });
+        const input = { projectId, id: "gone-soon" };
+        yield* operate(KANBAN_METHODS.ticketSpecify.method, { ...input, useExisting: true });
+        const before = yield* read(KANBAN_METHODS.specGet.method, input);
+        assert.deepEqual(
+          [before?.issueStatus, before?.attempt.status, before?.attempt.reason],
+          ["triage", "malformed", "Missing section: Goal."],
+        );
+
+        yield* write({ projectId, action: "issue.archive", id: "gone-soon" });
+        yield* write({ projectId, action: "issue.delete", id: "gone-soon" });
+        const after = yield* read(KANBAN_METHODS.specGet.method, input);
+        assert.deepEqual(
+          [after?.issueStatus, after?.attempt.status, after?.attempt.reason],
+          [null, "malformed", "Missing section: Goal."],
+        );
+      }).pipe(Effect.provide(layerHost));
+    }),
+  ).pipe(Effect.provide(layerTest)),
 );
 
 it.effect("a dry run records the sweep and writes no flag", () =>

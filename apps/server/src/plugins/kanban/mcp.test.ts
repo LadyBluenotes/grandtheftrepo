@@ -348,6 +348,37 @@ it.effect("registers kanban tools through the plugin host and files an issue ove
         interactionMode: "plan",
       });
 
+      // An attempt outlives its card: spec_get still reads it, and says the card is gone.
+      yield* rpc(32, "tools/call", {
+        name: "kanban_write",
+        arguments: { projectId, action: "issue.create", title: "Gone soon", description: "Rough." },
+      });
+      const refused = resultText(
+        yield* rpc(33, "tools/call", {
+          name: "kanban_ticket_specify",
+          arguments: { projectId, id: "gone-soon", useExisting: true },
+        }),
+      );
+      expect(refused).toContain("from the description: malformed. Missing section: Goal.");
+      expect(refused).toContain("The spec did not modify the issue.");
+      for (const [id, action] of [
+        [34, "issue.archive"],
+        [35, "issue.delete"],
+      ] as const)
+        yield* rpc(id, "tools/call", {
+          name: "kanban_write",
+          arguments: { projectId, action, id: "gone-soon" },
+        });
+      const gone = resultText(
+        yield* rpc(36, "tools/call", {
+          name: "kanban_spec_get",
+          arguments: { projectId, id: "gone-soon" },
+        }),
+      );
+      expect(gone).toContain("from the description: malformed. Missing section: Goal.");
+      expect(gone).toContain("The issue no longer exists.");
+      expect(gone).not.toContain("The spec did not modify the issue.");
+
       const fs = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
       const { baseDir } = yield* ServerConfig.ServerConfig;
