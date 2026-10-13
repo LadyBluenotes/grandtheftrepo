@@ -294,4 +294,33 @@ describe("createKanbanAttentionAtomFamily", () => {
       harness.dispose();
     }
   });
+
+  it.each([
+    ["archived", { archivedAt: v2Now }],
+    ["deleted", { deletedAt: v2Now }],
+  ])("reads again when a thread with a pending request is %s", async (_name, lifecycle) => {
+    const waitingThread = {
+      ...v2ThreadShell,
+      pendingRuntimeRequest: {
+        id: RuntimeRequestId.make("request-1"),
+        kind: "user_input" as const,
+        createdAt: v2Now,
+      },
+    };
+    const harness = attentionHarness(waiting);
+    try {
+      await harness.asked(1);
+      harness.registry.set(harness.shells, [presentThreadShell(env, waitingThread)]);
+      await harness.asked(2);
+      // The request stays pending; only the thread's lifecycle changes, as it does when another
+      // client archives or deletes it.
+      harness.registry.set(harness.shells, [
+        presentThreadShell(env, { ...waitingThread, ...lifecycle }),
+      ]);
+      await harness.asked(3);
+      expect(harness.reads).toHaveLength(3);
+    } finally {
+      harness.dispose();
+    }
+  });
 });

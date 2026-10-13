@@ -53,21 +53,24 @@ export function createKanbanActiveAtomFamily<R, ER>(
   );
 }
 
-/** Changes when a thread's pending request starts or ends, or it settles or leaves the project. */
-const pendingRequestsKey = (threads: ReadonlyArray<EnvironmentThreadShell>) =>
+/**
+ * Changes when a thread's pending request starts or ends, or the thread settles, is archived or
+ * deleted, or leaves the project: what the server's attention rows are filtered by.
+ */
+const waitingThreadsKey = (threads: ReadonlyArray<EnvironmentThreadShell>) =>
   threads
     .map(
       (thread) =>
-        `${thread.id} ${thread.source.pendingRuntimeRequest?.id ?? "-"} ${thread.settledOverride ?? "-"} ${thread.settledAt ?? "-"}`,
+        `${thread.id} ${thread.source.pendingRuntimeRequest?.id ?? "-"} ${thread.settledOverride ?? "-"} ${thread.settledAt ?? "-"} ${thread.archivedAt ?? "-"} ${thread.deletedAt ?? "-"}`,
     )
     .join("\n");
 
 /**
  * What waits on a person in a project, for the strip above the board: the `kanban.attention.list`
  * rows. It re-reads when `focus` changes, when a project thread's pending request starts or ends
- * or the thread settles, and on every board snapshot, which follows each board command. Any other
- * shell update, such as streaming text, leaves the signal equal and refetches nothing. It never
- * polls, so a flag a sweep raises shows on the next of those.
+ * or the thread settles, is archived or is deleted, and on every board snapshot, which follows each
+ * board command. Any other shell update, such as streaming text, leaves the signal equal and
+ * refetches nothing. It never polls, so a flag a sweep raises shows on the next of those.
  *
  * A client passes its own board and thread atoms, and `focus` for whatever brings the strip back
  * into view (the web passes the window's focus signal).
@@ -93,7 +96,7 @@ export function createKanbanAttentionAtomFamily<R, ER>(
         (get) =>
           [
             sources.focus === undefined ? undefined : get(sources.focus),
-            pendingRequestsKey(get(threads)),
+            waitingThreadsKey(get(threads)),
             get(board),
           ] as const,
       ),
