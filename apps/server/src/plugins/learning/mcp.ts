@@ -36,7 +36,7 @@ const shared = {
 const CorrectionsTool = Tool.make("learning_corrections", {
   ...shared,
   description:
-    "List a project's corrections, recorded instances of work going wrong, created between two ISO timestamps (inclusive). Omit projectId for the calling thread's project; narrow with failureKind: provider_turn_failed, provider_turn_interrupted, changes_requested, reopened_after_settlement, review_verdict or manual.",
+    "List a project's corrections, recorded instances of work going wrong, created between two ISO timestamps (inclusive). Omit projectId for the calling thread's project; narrow with failureKind: provider_turn_failed, provider_turn_interrupted, changes_requested, reopened_after_settlement, review_verdict, security or manual.",
   parameters: Schema.Struct({
     ...LearningCorrectionsInput.fields,
     projectId: Schema.optional(ProjectId),

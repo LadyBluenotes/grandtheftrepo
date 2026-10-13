@@ -19,6 +19,7 @@ import * as McpInvocationContext from "../../mcp/McpInvocationContext.ts";
 import * as CorrectionStore from "../learning/CorrectionStore.ts";
 import { plugin } from "./index.ts";
 import * as ReviewRequests from "./ReviewRequests.ts";
+import * as SecurityHold from "./security/SecurityHold.ts";
 import * as VerdictStore from "./VerdictStore.ts";
 import {
   approve,
@@ -92,6 +93,7 @@ const withTools = Effect.gen(function* () {
         Layer.provide(Layer.succeed(VerdictStore.VerdictStore, kit.store)),
         Layer.provide(Layer.succeed(CorrectionStore.CorrectionStore, kit.corrections)),
         Layer.provide(Layer.succeed(ReviewRequests.ReviewRequests, kit.requests)),
+        Layer.provide(Layer.succeed(SecurityHold.SecurityHold, kit.security)),
         Layer.provide(kit.layerThreads),
       ),
   );
@@ -113,6 +115,8 @@ it.effect("lists the review tools with the write tools marked as changing things
       expect(server.tools.map(({ tool }) => tool.name).toSorted()).toEqual([
         "review_request",
         "review_requests",
+        "review_security_ack",
+        "review_security_findings",
         "review_verdict",
         "review_verdicts",
       ]);
@@ -122,6 +126,8 @@ it.effect("lists the review tools with the write tools marked as changing things
       expect(annotations).toEqual({
         review_request: false,
         review_requests: true,
+        review_security_ack: false,
+        review_security_findings: true,
         review_verdict: false,
         review_verdicts: true,
       });
@@ -320,4 +326,42 @@ it.effect("refuses a request from outside a T3 thread and for a thread with no c
       expect(yield* requests.list({ threadId: reviewed })).toEqual([]);
     }),
   ),
+);
+
+it.effect(
+  "a read-only client cannot acknowledge a security hold; the reason is required; anyone reads findings",
+  () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { call } = yield* withTools;
+        const readOnly = yield* call(clientScope("read-only"), "review_security_ack", {
+          threadId: reviewed,
+          reason: "Fixture.",
+        });
+        expect(failureOf(readOnly)).toMatchObject({ code: "capability_denied" });
+
+        const blank = yield* call(threadScope(reviewer), "review_security_ack", {
+          threadId: reviewed,
+          reason: "",
+        });
+        expect(failureOf(blank)).toMatchObject({
+          code: "invalid_request",
+          message: "A reason is required.",
+        });
+        const noHold = yield* call(threadScope(reviewer), "review_security_ack", {
+          threadId: reviewed,
+          reason: "Fixture.",
+        });
+        expect(failureOf(noHold)).toMatchObject({
+          code: "invalid_request",
+          message: "There is no security hold on this thread.",
+        });
+
+        const findings = yield* call(clientScope("read-only"), "review_security_findings", {
+          threadId: reviewed,
+        });
+        expect(findings.isError).toBe(false);
+        expect(findings.structuredContent).toEqual([]);
+      }),
+    ),
 );

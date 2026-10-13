@@ -54,7 +54,10 @@ export type ReviewVerdictsInput = typeof ReviewVerdictsInput.Type;
 export class ReviewVerdictError extends Schema.TaggedError<ReviewVerdictError>()(
   "ReviewVerdictError",
   {
-    /** `gated` is `ReviewGate.check` refusing completion; its message says why. */
+    /**
+     * `gated` is `ReviewGate.check` refusing completion, or a security hold refusing a review
+     * request; its message says why.
+     */
     code: Schema.Literals(["inactive", "invalid", "not_found", "conflict", "gated", "io"]),
     message: Schema.String,
   },
@@ -85,6 +88,57 @@ export type ReviewRequest = typeof ReviewRequest.Type;
 export const ReviewRequestInput = Schema.Struct({ threadId: ThreadId });
 
 /**
+ * What the security scan does with a project's turns: `off` skips it, `warn` records findings, and
+ * `block` also holds the thread's review requests until someone acknowledges them.
+ */
+export const SecurityMode = Schema.Literals(["off", "warn", "block"]);
+export type SecurityMode = typeof SecurityMode.Type;
+
+/** The fixed patterns the scan tests a turn's added lines against. */
+export const SecurityPatternId = Schema.Literals([
+  "secret.token",
+  "secret.private_key",
+  "rce.eval_fetched",
+  "rce.pipe_to_shell",
+  "workflow.injection",
+  "shell.untrusted",
+]);
+export type SecurityPatternId = typeof SecurityPatternId.Type;
+
+/** One pattern matched on one line a turn added. The matched text is never stored. */
+export const SecurityFinding = Schema.Struct({
+  id: Schema.Int,
+  threadId: ThreadId,
+  /** The checkpoint whose turn added the line. */
+  checkpointId: CheckpointId,
+  patternId: SecurityPatternId,
+  file: Schema.String,
+  /** The line in the file as the checkpoint has it, from 1. */
+  line: Schema.Int,
+  /** The `security` correction it recorded in the learning plugin; null until recorded. */
+  correctionId: Schema.NullOr(Schema.Int),
+  createdAt: IsoDateTime,
+  acknowledgedAt: Schema.NullOr(IsoDateTime),
+  ackReason: Schema.NullOr(Schema.String),
+});
+export type SecurityFinding = typeof SecurityFinding.Type;
+
+/** The security findings on one thread. */
+export const SecurityFindingsInput = Schema.Struct({ threadId: ThreadId });
+
+/** Acknowledges every open finding on the thread; the service refuses an empty reason. */
+export const SecurityAckInput = Schema.Struct({
+  threadId: ThreadId,
+  reason: Schema.String.check(Schema.isMaxLength(1000)),
+});
+
+export const SecurityModeInput = Schema.Struct({ projectId: ProjectId });
+
+/** A project's security mode; a project with none saved is `warn`. */
+export const SecurityModeSetting = Schema.Struct({ projectId: ProjectId, mode: SecurityMode });
+export type SecurityModeSetting = typeof SecurityModeSetting.Type;
+
+/**
  * The plugin's methods and the gateway each answers behind. They are not in the WebSocket RPC
  * group, which is at TypeScript's instantiation limit; the gateway RPCs dispatch them by name.
  */
@@ -108,6 +162,35 @@ export const REVIEW_METHODS = definePluginMethods({
     gateway: "read",
     input: ReviewRequestInput,
     output: Schema.Array(ReviewRequest),
+    error: ReviewVerdictError,
+  },
+  /** Answers with the findings it acknowledged. */
+  securityAck: {
+    method: "review.security.ack",
+    gateway: "operate",
+    input: SecurityAckInput,
+    output: Schema.Array(SecurityFinding),
+    error: ReviewVerdictError,
+  },
+  securityFindings: {
+    method: "review.security.findings",
+    gateway: "read",
+    input: SecurityFindingsInput,
+    output: Schema.Array(SecurityFinding),
+    error: ReviewVerdictError,
+  },
+  securityGetMode: {
+    method: "review.security.getMode",
+    gateway: "read",
+    input: SecurityModeInput,
+    output: SecurityModeSetting,
+    error: ReviewVerdictError,
+  },
+  securitySetMode: {
+    method: "review.security.setMode",
+    gateway: "settingsWrite",
+    input: SecurityModeSetting,
+    output: SecurityModeSetting,
     error: ReviewVerdictError,
   },
 });

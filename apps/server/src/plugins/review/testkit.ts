@@ -24,6 +24,7 @@ import { migrations } from "./migrations.ts";
 import * as ReviewGate from "./ReviewGate.ts";
 import * as ReviewInvalidationSweep from "./ReviewInvalidationSweep.ts";
 import * as ReviewRequests from "./ReviewRequests.ts";
+import * as SecurityHold from "./security/SecurityHold.ts";
 import * as VerdictStore from "./VerdictStore.ts";
 
 export const reviewed = ThreadId.make("thread:reviewed");
@@ -174,16 +175,21 @@ export const harness = Effect.gen(function* () {
     threads.layer,
     Attention.layer.pipe(Layer.provide(Layer.succeed(HostDatabase.HostDatabase, host.sql))),
   );
-  const { store, requests, gate, sweep } = yield* Effect.all({
+  const { store, requests, gate, sweep, security, attention } = yield* Effect.all({
     store: VerdictStore.VerdictStore,
     requests: ReviewRequests.ReviewRequests,
     gate: ReviewGate.ReviewGate,
     sweep: ReviewInvalidationSweep.sweep,
+    security: SecurityHold.SecurityHold,
+    attention: Attention.Attention,
   }).pipe(
     Effect.provide(
-      Layer.mergeAll(VerdictStore.layer, ReviewRequests.layer, ReviewGate.layer).pipe(
-        Layer.provideMerge(layerDeps),
-      ),
+      Layer.mergeAll(
+        VerdictStore.layer,
+        ReviewRequests.layer,
+        ReviewGate.layer,
+        SecurityHold.layer,
+      ).pipe(Layer.provideMerge(layerDeps)),
     ),
   );
   const count = (sql: SqlClient.SqlClient, table: string) =>
@@ -195,6 +201,8 @@ export const harness = Effect.gen(function* () {
     store,
     requests,
     gate,
+    security,
+    attention,
     corrections,
     sweep: sweep.run,
     verdictCount: count(review.sql, "review_verdicts"),

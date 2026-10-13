@@ -154,7 +154,11 @@ them half-evaluated. The host hands `toolkitRegistration` to `ServerPlugin.mcp` 
   the request; once the thread's latest is another checkpoint, the `review/invalidation` sweep marks
   the request stale for good, invalidates the verdicts on its checkpoint, opens a request at the
   latest, and keeps a `stale_review` attention flag until that one is answered. `ReviewGate.check`
-  is the completion gate a ticket asks before it finishes; nothing calls it yet. Server:
+  is the completion gate a ticket asks before it finishes; nothing calls it yet. The plugin's
+  reactor tests the lines each root-run turn adds against six fixed patterns unless the project's
+  security mode is `off`, and the `review/security` sweep records each finding as a `security`
+  correction, because a reactor sees only its own plugin's services; in `block` a finding refuses
+  `review.request` and keeps a `security_hold` flag until `review.security.ack`. Server:
   `apps/server/src/plugins/review/`. Contracts: `packages/contracts/src/plugins/review.ts`. No
   screen yet. User guide: [Policies and reviews](./user/policies-and-reviews.md#reviews).
 - **caveman**: whether each provider instance's model traffic goes through caveman's loopback

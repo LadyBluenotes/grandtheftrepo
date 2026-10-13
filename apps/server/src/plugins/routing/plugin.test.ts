@@ -20,6 +20,7 @@ import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/sql/SqlClient";
 import { HttpBody, HttpClient, HttpRouter } from "effect/http";
 
+import * as CheckpointDiffQuery from "../../checkpointing/CheckpointDiffQuery.ts";
 import * as ServerConfig from "../../config.ts";
 import * as McpHttpServer from "../../mcp/McpHttpServer.ts";
 import type * as McpInvocationContext from "../../mcp/McpInvocationContext.ts";
@@ -105,6 +106,7 @@ const layerHost = PluginHost.layerAll.pipe(
       Layer.mock(ThreadManagementService.ThreadManagementService)({}),
       Layer.mock(ProjectService.ProjectService)({}),
       Layer.mock(ProviderRegistry.ProviderRegistry)({}),
+      Layer.mock(CheckpointDiffQuery.CheckpointDiffQuery)({}),
       ServerSettings.layerTest(),
     ),
   ),
