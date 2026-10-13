@@ -58,6 +58,7 @@ them is resolved by keeping the line.
 | `apps/web/src/components/sidebar/mainAppLocation.ts`         | `/board` and the `/plugins` paths in `isSidebarUtilityPage`                                                                                                            |
 | `apps/web/src/components/sidebar/SidebarChrome.tsx`          | the board's `SidebarUtilityItem`, gated on `kanbanSupportedAtom`, and `<PluginSidebarEntries />` after the Usage entry, plus imports; `SidebarUtilityItem` is exported |
 | `apps/web/src/components/CommandPalette.tsx`                 | the board's `actionItems.push` block, gated the same way, plus imports                                                                                                 |
+| `third-party-licenses.config.json`                           | the `Caveman reply rules` entry at the end of `customNotices`, so the adapted policy text is credited in the app's license list                                        |
 
 ## Plugin services and the type system
 
@@ -152,9 +153,10 @@ them half-evaluated. The host hands `toolkitRegistration` to `ServerPlugin.mcp` 
   block. `policy.create`, `.accept`, `.install` and `.verify` are gateway methods, and the
   `policy_list` MCP tool reads. A supervisor sweep installs and verifies accepted policies an
   agent lacks or holds under older rules, but only while no run is active on the project (any
-  run, for `*`). The first start seeds `*` / `ponytail`, the six-question ladder, unless a policy of
-  that key exists in any state; the review plugin refuses a `convention` summary that starts with
-  `rung:` and names none of the six rung ids. Server: `apps/server/src/plugins/policy/`. Contracts:
+  run, for `*`). The first start seeds `*` / `ponytail`, the six-question ladder, and `*` /
+  `caveman`, the terse reply rules, each unless a policy of that key exists in any state; the
+  review plugin refuses a `convention` summary that starts with `rung:` and names none of the six
+  rung ids. Server: `apps/server/src/plugins/policy/`. Contracts:
   `packages/contracts/src/plugins/policy.ts`. No screen.
 - **review**: a reviewing agent's typed verdict on one checkpoint of another thread: `approve`, or
   `changes_requested` with one of six failure modes (`defect`, `incomplete`, `scope_drift`,
