@@ -34,6 +34,8 @@ export interface ReportPullRequest {
    */
   readonly closedAt: string | null;
   readonly linkedAt: string;
+  /** When the snapshot holding the state, title and times was synced from the host. */
+  readonly syncedAt: string;
 }
 
 export interface ReportThread {
@@ -183,14 +185,19 @@ export const foldReport = (input: ReportInput): TelemetryReport => {
     ];
   });
 
-  // A pull request linked from two threads is listed once, as linked since its earliest link.
+  // A pull request linked from two threads is listed once: as its latest synced snapshot says,
+  // linked since its earliest link. Each thread's link syncs on its own.
   const pullRequests = new Map<string, ReportPullRequest>();
   for (const thread of threads) {
     for (const pr of thread.pullRequests) {
       const seen = pullRequests.get(pr.key);
-      if (seen === undefined) pullRequests.set(pr.key, pr);
-      else if (pr.linkedAt < seen.linkedAt)
-        pullRequests.set(pr.key, { ...seen, linkedAt: pr.linkedAt });
+      if (seen === undefined) {
+        pullRequests.set(pr.key, pr);
+        continue;
+      }
+      const latest = pr.syncedAt > seen.syncedAt ? pr : seen;
+      const linkedAt = pr.linkedAt < seen.linkedAt ? pr.linkedAt : seen.linkedAt;
+      pullRequests.set(pr.key, { ...latest, linkedAt });
     }
   }
   const linked = [...pullRequests.values()].toSorted(

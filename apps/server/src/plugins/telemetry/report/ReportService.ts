@@ -69,6 +69,7 @@ const toReportThread = (shell: OrchestrationV2ThreadShell): ReportThread => ({
         closedAt:
           snapshot.state === "open" ? null : instant(snapshot.mergedAt ?? snapshot.closedAt),
         linkedAt: instant(link.linkedAt) ?? link.linkedAt,
+        syncedAt: instant(snapshot.syncedAt) ?? snapshot.syncedAt,
       },
     ];
   }),

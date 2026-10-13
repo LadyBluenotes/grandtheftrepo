@@ -283,6 +283,46 @@ it("pull requests: one linked from two threads counts from its earliest link, in
   }
 });
 
+it("pull requests: one linked from two threads shows its latest synced snapshot, in either order", () => {
+  // Linked first from one thread and synced while open; the other thread's link synced after
+  // it merged.
+  const stale = pullRequest(11, {
+    title: "Draft title",
+    reviewDecision: "changes-requested",
+    linkedAt: BEFORE,
+    syncedAt: INSIDE,
+  });
+  const fresh = pullRequest(11, {
+    title: "Final title",
+    state: "merged",
+    closedAt: INSIDE,
+    linkedAt: TO,
+    syncedAt: LATER,
+  });
+  for (const [first, second] of [
+    [stale, fresh],
+    [fresh, stale],
+  ] as const) {
+    const report = foldReport({
+      ...fullInput(),
+      threads: [
+        thread("thread:a", { pullRequests: [first] }),
+        thread("thread:b", { pullRequests: [second] }),
+      ],
+    });
+    // Merged in the range, and linked before `to` through the earlier link.
+    assert.deepEqual(
+      report.pullRequests.items.map((pr) => [pr.number, pr.state, pr.title]),
+      [[11, "merged", "Final title"]],
+    );
+    // No longer open, so no longer waiting on the requested changes.
+    assert.deepEqual(
+      report.unresolved.items.filter((entry) => entry.kind === "pull_request"),
+      [],
+    );
+  }
+});
+
 it("while telemetry replays, the sections built from its thread rows are unavailable, and the rest answer", () => {
   const reason = "Telemetry is still replaying the event log.";
   const report = foldReport({ ...fullInput(), threadRowsUnavailable: reason });

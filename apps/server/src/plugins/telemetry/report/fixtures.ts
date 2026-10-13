@@ -33,6 +33,7 @@ export const pullRequest = (
   reviewDecision: null,
   closedAt: null,
   linkedAt: BEFORE,
+  syncedAt: BEFORE,
   ...overrides,
 });
 
