@@ -44,13 +44,17 @@ export class CavemanReadiness extends Context.Service<CavemanReadiness, Readines
   "t3/plugins/caveman/readiness/CavemanReadiness",
 ) {}
 
-export const layer = Layer.succeed(
-  CavemanReadiness,
+/**
+ * The checks over `probe`, `listening` outside tests. A malformed origin is never probed: one that
+ * parses, such as `ftp://127.0.0.1:8787`, would still open a socket and could wait out its timeout.
+ */
+export const make = (probe: (origin: string) => Effect.Effect<boolean | null>) =>
   CavemanReadiness.of({
     checks: () =>
       Effect.gen(function* () {
         const origin = proxyOrigin((yield* HostProcess.Environment).CAVE_GATEWAY_URL);
-        return [proxyCheck(origin, yield* listening(origin))];
+        return [proxyCheck(origin, isOrigin(origin) ? yield* probe(origin) : null)];
       }),
-  }),
-);
+  });
+
+export const layer = Layer.succeed(CavemanReadiness, make(listening));

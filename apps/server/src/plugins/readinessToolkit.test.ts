@@ -54,6 +54,14 @@ const clientScope: McpInvocationContext.McpInvocationScope = {
   capabilities: new Set(["orchestration"]),
   issuedAt: 1,
 };
+/** A credential that may not control threads, so the project-scoped read tools refuse it. */
+const limitedToken = "limited-payload.limited-signature";
+const limitedScope: McpInvocationContext.McpInvocationScope = {
+  ...clientScope,
+  requestNamespace: "client:session-2",
+  client: { sessionId: "session-2", label: "Viewer", access: "auto" },
+  capabilities: new Set(),
+};
 
 /** The structured result of an MCP tool call, from a JSON or SSE response body. */
 function structuredResult(body: string): unknown {
@@ -113,7 +121,11 @@ it.effect("the plugins_readiness tool and the plugins.readiness method agree", (
           Layer.succeed(McpHttpServer.McpClientAuthenticator, {
             authenticate: (request) =>
               Effect.succeed(
-                request.headers.authorization === `Bearer ${clientToken}` ? clientScope : undefined,
+                request.headers.authorization === `Bearer ${clientToken}`
+                  ? clientScope
+                  : request.headers.authorization === `Bearer ${limitedToken}`
+                    ? limitedScope
+                    : undefined,
               ),
           }),
         ),
@@ -122,40 +134,42 @@ it.effect("the plugins_readiness tool and the plugins.readiness method agree", (
         Layer.build,
       );
       const httpClient = yield* HttpClient.HttpClient;
-      const headers = {
-        accept: "application/json, text/event-stream",
-        authorization: `Bearer ${clientToken}`,
-      };
-      const initialize = yield* httpClient.post("/mcp", {
-        headers,
-        body: HttpBody.text(
-          `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"probe","version":"1.0.0"}}}`,
-          "application/json",
-        ),
+      /** An MCP session for `token`; its `call` answers with the response body of a tool call. */
+      const session = Effect.fn("session")(function* (token: string) {
+        const headers = {
+          accept: "application/json, text/event-stream",
+          authorization: `Bearer ${token}`,
+        };
+        const initialize = yield* httpClient.post("/mcp", {
+          headers,
+          body: HttpBody.text(
+            `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"probe","version":"1.0.0"}}}`,
+            "application/json",
+          ),
+        });
+        assert.strictEqual(initialize.status, 200);
+        return (id: number, args: object) =>
+          httpClient
+            .post("/mcp", {
+              headers: {
+                ...headers,
+                "mcp-session-id": initialize.headers["mcp-session-id"]!,
+                "mcp-protocol-version": "2025-06-18",
+              },
+              body: HttpBody.text(
+                JSON.stringify({
+                  jsonrpc: "2.0",
+                  id,
+                  method: "tools/call",
+                  params: { name: "plugins_readiness", arguments: args },
+                }),
+                "application/json",
+              ),
+            })
+            .pipe(Effect.flatMap((response) => response.text));
       });
-      assert.strictEqual(initialize.status, 200);
-      const call = (id: number, args: object) =>
-        httpClient
-          .post("/mcp", {
-            headers: {
-              ...headers,
-              "mcp-session-id": initialize.headers["mcp-session-id"]!,
-              "mcp-protocol-version": "2025-06-18",
-            },
-            body: HttpBody.text(
-              JSON.stringify({
-                jsonrpc: "2.0",
-                id,
-                method: "tools/call",
-                params: { name: "plugins_readiness", arguments: args },
-              }),
-              "application/json",
-            ),
-          })
-          .pipe(
-            Effect.flatMap((response) => response.text),
-            Effect.map(structuredResult),
-          );
+      const raw = yield* session(clientToken);
+      const call = (id: number, args: object) => Effect.map(raw(id, args), structuredResult);
 
       const forProject = yield* fromMethod({ projectId });
       assert.deepEqual(yield* call(2, { projectId }), { plugins: forProject });
@@ -171,6 +185,15 @@ it.effect("the plugins_readiness tool and the plugins.readiness method agree", (
       const forEnvironment = yield* fromMethod({});
       assert.deepEqual(yield* call(3, {}), { plugins: forEnvironment });
       assert.deepEqual(forEnvironment[0]?.checks[0]?.sentence, "Asked about the environment.");
+
+      // A credential that cannot control threads is refused, as by `policy_list`, project or not.
+      const limited = yield* session(limitedToken);
+      for (const args of [{ projectId }, {}]) {
+        const refused = yield* limited(4, args);
+        assert.isUndefined(structuredResult(refused));
+        assert.include(refused, "capability_denied");
+        assert.include(refused, "This credential cannot control threads.");
+      }
     }),
   ).pipe(
     Effect.provide(

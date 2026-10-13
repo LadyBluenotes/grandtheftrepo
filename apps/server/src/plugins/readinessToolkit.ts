@@ -5,7 +5,7 @@ import { Tool, Toolkit } from "effect/ai";
 
 import * as McpInvocationContext from "../mcp/McpInvocationContext.ts";
 import * as McpToolAccess from "../mcp/McpToolAccess.ts";
-import { loadCaller } from "../mcp/threadAccess.ts";
+import { readCaller } from "../mcp/threadAccess.ts";
 import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
 import type { PluginHost } from "./PluginHost.ts";
 
@@ -37,7 +37,9 @@ export const handlers = (tag: typeof PluginHost) =>
     Effect.map(tag, (host) => ({
       plugins_readiness: McpToolAccess.reads((input) =>
         Effect.gen(function* () {
-          const projectId = input.projectId ?? (yield* loadCaller()).caller?.projectId ?? null;
+          // As `policy_list` and `knowledge_list`: a credential that cannot control threads is refused.
+          const { caller } = yield* readCaller();
+          const projectId = input.projectId ?? caller?.projectId ?? null;
           return { plugins: yield* host.readiness(projectId) };
         }),
       ),

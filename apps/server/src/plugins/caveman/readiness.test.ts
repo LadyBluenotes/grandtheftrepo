@@ -31,18 +31,35 @@ describe("proxyCheck", () => {
   });
 });
 
-it.effect("reads a malformed CAVE_GATEWAY_URL as a setting to fix", () =>
-  Effect.scoped(
-    Effect.gen(function* () {
-      const checks = yield* Context.get(yield* Layer.build(Checks.layer), Checks.CavemanReadiness)
+it.effect("reads a malformed CAVE_GATEWAY_URL as a setting to fix, without probing it", () =>
+  Effect.gen(function* () {
+    const probed: Array<string> = [];
+    const readiness = Checks.make((origin) =>
+      Effect.sync(() => {
+        probed.push(origin);
+        return true;
+      }),
+    );
+    const read = (gateway: string) =>
+      readiness
         .checks(null)
-        .pipe(Effect.provideService(HostProcess.Environment, { CAVE_GATEWAY_URL: "not a url" }));
+        .pipe(Effect.provideService(HostProcess.Environment, { CAVE_GATEWAY_URL: gateway }));
+
+    for (const gateway of ["not a url", "ftp://127.0.0.1:8787"]) {
       assert.deepEqual(
-        checks.map((check) => check.status),
+        (yield* read(gateway)).map((check) => check.status),
         ["attention"],
+        gateway,
       );
-    }),
-  ),
+    }
+    assert.deepEqual(probed, []);
+
+    assert.deepEqual(
+      (yield* read("http://127.0.0.1:8787")).map((check) => check.status),
+      ["ready"],
+    );
+    assert.deepEqual(probed, ["http://127.0.0.1:8787"]);
+  }),
 );
 
 it.effect("probes the proxy's loopback port once per request", () =>
