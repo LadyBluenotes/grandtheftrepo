@@ -14,6 +14,7 @@ import * as Reopened from "./producers/reopened.ts";
 import * as TurnFailures from "./producers/turnFailures.ts";
 import * as PromoteSweep from "./PromoteSweep.ts";
 import * as Promoter from "./Promoter.ts";
+import * as RegressionSweep from "./regressions/RegressionSweep.ts";
 
 /** Every producer's handlers, run by one reactor from the first event the server ever committed. */
 export const handlers = {
@@ -30,6 +31,7 @@ const start = Effect.gen(function* () {
   // Classify before promote, so a tick hands over what it just classified.
   yield* supervisor.register(yield* ClassifySweep.sweep);
   yield* supervisor.register(yield* PromoteSweep.sweep);
+  yield* supervisor.register(yield* RegressionSweep.sweep);
 }).pipe(Effect.orDie);
 
 /**
@@ -38,7 +40,8 @@ const start = Effect.gen(function* () {
  * wakes while changes are requested, and threads reopened after settlement.
  * Two sweeps turn them into learning items, one per recurring failure mode per
  * project, and hand each item once to the owner kind the rules or a person
- * picked. MCP tools expose corrections and items to agents.
+ * picked; a third opens an item for each efficiency measure that worsened from
+ * one week to the next. MCP tools expose corrections and items to agents.
  */
 export const plugin = {
   id: "learning",

@@ -83,8 +83,21 @@ const promoteIndexes: PluginMigration[2] = Effect.gen(function* () {
     ON learning_promotions (state, owner_kind, next_attempt_at)`;
 });
 
+// The regression sweep writes a project's row once every measure of the window starting at
+// `window_from` was compared, and skips a project that has one.
+const regressionRuns: PluginMigration[2] = Effect.gen(function* () {
+  const sql = yield* SqlClient.SqlClient;
+  yield* sql`CREATE TABLE regression_runs (
+    project_id TEXT NOT NULL,
+    window_from TEXT NOT NULL,
+    ran_at TEXT NOT NULL,
+    PRIMARY KEY (project_id, window_from)
+  )`;
+});
+
 export const migrations = [
   [1, "Corrections", corrections],
   [2, "LearningItems", learningItems],
   [3, "PromoteIndexes", promoteIndexes],
+  [4, "RegressionRuns", regressionRuns],
 ] as const satisfies ReadonlyArray<PluginMigration>;
