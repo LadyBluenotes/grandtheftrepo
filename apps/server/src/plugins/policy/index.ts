@@ -3,6 +3,7 @@ import * as Layer from "effect/Layer";
 
 import type { ServerPlugin } from "../Plugin.ts";
 import * as PluginSupervisor from "../PluginSupervisor.ts";
+import * as Caveman from "./caveman.ts";
 import * as DeliverySweep from "./DeliverySweep.ts";
 import * as Mcp from "./mcp.ts";
 import { migrations } from "./migrations.ts";
@@ -12,6 +13,7 @@ import * as Ponytail from "./ponytail.ts";
 // Registering fails only on a second sweep under this plugin's own name, a defect.
 const start = Effect.gen(function* () {
   yield* Ponytail.seed();
+  yield* Caveman.seed();
   yield* (yield* PluginSupervisor.PluginSupervisor).register(yield* DeliverySweep.make);
 }).pipe(Effect.orDie);
 
@@ -19,7 +21,7 @@ const start = Effect.gen(function* () {
  * Reviewed working rules per project, rendered as one marked block per policy into the
  * instruction file each agent reads from the user's home, with a check that the block is intact.
  * A supervisor sweep installs accepted policies the agents lack, between runs. The built-in
- * `ponytail` policy is seeded on start when it does not exist.
+ * `ponytail` and `caveman` policies are each seeded on start when they do not exist.
  */
 export const plugin = {
   id: "policy",

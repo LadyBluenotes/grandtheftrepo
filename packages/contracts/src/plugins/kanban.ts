@@ -299,6 +299,45 @@ export const KanbanSpecifyInput = Schema.Struct({
 });
 export type KanbanSpecifyInput = typeof KanbanSpecifyInput.Type;
 
+/**
+ * What a strip row is about: `question` and `permission` for a request an agent is waiting on,
+ * the flag's own kind otherwise.
+ */
+export const KanbanAttentionKind = Schema.Literals([
+  "question",
+  "permission",
+  "budget_breach",
+  "routing_mismatch",
+  "two_writers",
+  "stale_review",
+  "security_hold",
+  "unowned_finding",
+]);
+export type KanbanAttentionKind = typeof KanbanAttentionKind.Type;
+
+/**
+ * One thing in a project waiting on a person: a live request on one of its threads, or a flag a
+ * plugin raised. A row leaves when its cause clears; nothing dismisses it.
+ */
+export const KanbanAttentionRow = Schema.Struct({
+  source: Schema.Literals(["request", "flag"]),
+  id: TrimmedNonEmptyString,
+  /** Null for a flag about the project rather than one thread, such as a budget breach. */
+  threadId: Schema.NullOr(ThreadId),
+  threadTitle: Schema.NullOr(Schema.String),
+  kind: KanbanAttentionKind,
+  /** One sentence. */
+  text: Schema.String,
+  /** What to do about it: a label and the screen it leads to. */
+  resumeAction: Schema.Struct({
+    label: Schema.String,
+    target: Schema.Literals(["thread", "board", "settings"]),
+  }),
+  /** When it started waiting; rows are ordered by it, oldest first. */
+  since: IsoDateTime,
+});
+export type KanbanAttentionRow = typeof KanbanAttentionRow.Type;
+
 export const KANBAN_METHODS = definePluginMethods({
   getIssue: {
     method: "kanban.getIssue",
@@ -368,6 +407,14 @@ export const KANBAN_METHODS = definePluginMethods({
     gateway: "read",
     input: KanbanGetIssueInput,
     output: Schema.NullOr(KanbanSpecReport),
+    error: KanbanError,
+  },
+  /** What waits on a person in a project, oldest first. */
+  attentionList: {
+    method: "kanban.attention.list",
+    gateway: "read",
+    input: KanbanProjectInput,
+    output: Schema.Array(KanbanAttentionRow),
     error: KanbanError,
   },
 });

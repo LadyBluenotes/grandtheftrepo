@@ -26,7 +26,27 @@ every agent is told to ask these questions, in this order, before adding anythin
 
 `ponytail` is edited like any other policy: add a new version with your own wording and accept it.
 Once a `ponytail` policy exists, in any state, the server leaves it alone, so your version is never
-replaced. The wording comes from [ponytail](https://github.com/DietrichGebert/ponytail).
+replaced. The questions are adapted from [ponytail](https://github.com/DietrichGebert/ponytail) by
+DietrichGebert, used under the MIT license; its notice is listed under
+[Open source licenses](./open-source-licenses.md).
+
+### The caveman policy
+
+The first time the policy plugin starts, it also adds a policy named `caveman` to `*` and accepts
+it. It tells agents to reply tersely: answer first, with no greeting, plan announcement, recap or
+offer of help, one idea per sentence, and code, commands, paths and error text word for word.
+Security warnings, irreversible actions, ordered steps, questions back to you, and anything written
+outside chat, such as code, comments, commits and docs, stay in plain full sentences. The rules are
+adapted from [caveman](https://github.com/JuliusBrussee/caveman) by Julius Brussee, used under the
+Apache License 2.0; its notice is listed under [Open source licenses](./open-source-licenses.md).
+
+It reaches every thread of Claude, Codex and Copilot through the instruction files above, with
+nothing to install. Cursor, Grok, OpenCode and Antigravity do not read those files, so it does not
+reach them.
+
+To switch the style off, add a new version of `caveman` with a neutral body, such as
+`Reply in plain sentences.`, and accept it. The server delivers it between runs and never replaces
+your version. Turning the policy plugin off does not remove a block already installed.
 
 ## Reviews
 

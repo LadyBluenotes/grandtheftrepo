@@ -1,4 +1,3 @@
-import { useAtomValue } from "@effect/atom-react";
 import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
@@ -23,9 +22,8 @@ import {
 } from "~/components/ui/select";
 import { stackedThreadToast, toastManager } from "~/components/ui/toast";
 import { useProjects } from "~/state/entities";
-import { usePrimaryEnvironmentId } from "~/state/environments";
-import { primaryServerProvidersAtom, primaryServerSettingsAtom } from "~/state/server";
 import { offeredModels, useRoutingSetTier, useRoutingTiers } from "./state";
+import { usePluginEnvironmentId, usePluginServerConfig } from "../pluginState";
 
 const SOURCE_BADGE: Record<
   RoutingSource,
@@ -37,14 +35,14 @@ const SOURCE_BADGE: Record<
 };
 
 /**
- * Which model each tier uses, for the primary environment or for one of its projects. A project
+ * Which model each tier uses, for the Plugins page's environment or for one of its projects. A project
  * with no entry of its own shows the one it inherits; choosing something saves an override.
  */
 export function SettingsPanel() {
-  const environmentId = usePrimaryEnvironmentId();
+  const environmentId = usePluginEnvironmentId();
   const projects = useProjects().filter((project) => project.environmentId === environmentId);
-  const providers = useAtomValue(primaryServerProvidersAtom);
-  const preferences = useAtomValue(primaryServerSettingsAtom).providerModelPreferences;
+  const { providers, settings } = usePluginServerConfig();
+  const preferences = settings.providerModelPreferences;
   const [scope, setScope] = useState<RoutingScope>("environment");
   const tiers = useRoutingTiers(scope);
   const { canWrite, set } = useRoutingSetTier();

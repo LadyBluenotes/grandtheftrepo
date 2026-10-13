@@ -2,6 +2,7 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import {
   KANBAN_METHODS,
+  KanbanAttentionRow,
   KanbanError,
   PLUGIN_GATEWAY_WS_METHODS,
   ProjectId,
@@ -26,7 +27,7 @@ import * as Attention from "../Attention.ts";
 import * as PluginHost from "../PluginHost.ts";
 import * as PluginSupervisor from "../PluginSupervisor.ts";
 import { registry } from "../registry.ts";
-import { thread } from "./writerFixtures.ts";
+import { projectA, thread } from "./writerFixtures.ts";
 
 const projectId = ProjectId.make("project-1");
 const project: Project = {
@@ -62,6 +63,8 @@ const layerHost = PluginHost.layerAll.pipe(
             threads: writers,
             archivedThreads: [],
           }),
+        listProjectThreads: ({ projectId }) =>
+          Effect.succeed(writers.filter((writer) => writer.projectId === projectId)),
       }),
       Layer.mock(ProjectService.ProjectService)({
         getById: (id) => Effect.succeed(id === projectId ? Option.some(project) : Option.none()),
@@ -105,6 +108,7 @@ const layerTest = Layer.mergeAll(
 const decodeError = Schema.decodeUnknownEffect(KanbanError);
 const decodeSpecReport = Schema.decodeUnknownEffect(KANBAN_METHODS.specGet.output);
 const specInput = { projectId: "project-1", id: "some-issue" };
+const decodeRows = Schema.decodeUnknownEffect(Schema.Array(KanbanAttentionRow));
 
 const operate = (method: string, input: unknown) =>
   PluginHost.handlers[PLUGIN_GATEWAY_WS_METHODS.operate]({ method, input });
@@ -144,6 +148,13 @@ it.effect(
           assert.deepEqual(
             flags.map((flag) => flag.threadId),
             ["a"],
+          );
+          const rows = yield* decodeRows(
+            yield* read(KANBAN_METHODS.attentionList.method, { projectId: projectA }),
+          );
+          assert.deepEqual(
+            rows.map((row) => [row.source, row.kind, row.threadTitle]),
+            [["flag", "two_writers", "Thread a"]],
           );
 
           assert.isNull(yield* read(KANBAN_METHODS.stopGet.method, {}));
@@ -234,6 +245,7 @@ it.effect("disabled: no file, no sweep, and its methods say the plugin is not ac
           operate(KANBAN_METHODS.stopSet.method, {}),
           operate(KANBAN_METHODS.ticketSpecify.method, specInput),
           read(KANBAN_METHODS.specGet.method, specInput),
+          read(KANBAN_METHODS.attentionList.method, { projectId: projectA }),
         ]) {
           const refused = yield* call.pipe(
             Effect.andThen(Effect.die("expected a failure")),

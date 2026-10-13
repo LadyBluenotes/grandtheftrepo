@@ -16,9 +16,9 @@ import * as Cause from "effect/Cause";
 import { AsyncResult } from "effect/reactivity";
 
 import { connectionAtomRuntime } from "~/connection/runtime";
-import { usePrimaryEnvironmentId } from "~/state/environments";
 import { useEnvironmentQuery } from "~/state/query";
 import { useAtomCommand } from "~/state/use-atom-command";
+import { usePluginEnvironmentId } from "../pluginState";
 
 const routingTiers = createPluginRpcQueryAtomFamily(connectionAtomRuntime, {
   label: "environment-data:plugins:routing",
@@ -30,9 +30,9 @@ const routingSetTier = createPluginRpcCommand(connectionAtomRuntime, {
   method: ROUTING_METHODS.tiersSet,
 });
 
-/** The primary environment's resolved tiers, or one project's when `scope` names it. */
+/** The Plugins page environment's resolved tiers, or one project's when `scope` names it. */
 export function useRoutingTiers(scope: RoutingScope) {
-  const environmentId = usePrimaryEnvironmentId();
+  const environmentId = usePluginEnvironmentId();
   return useEnvironmentQuery(
     environmentId === null
       ? null
@@ -43,9 +43,9 @@ export function useRoutingTiers(scope: RoutingScope) {
   );
 }
 
-/** Saves one tier on the primary environment; `canWrite` follows the settings grant. */
+/** Saves one tier on the Plugins page's environment; `canWrite` follows the settings grant. */
 export function useRoutingSetTier() {
-  const environmentId = usePrimaryEnvironmentId();
+  const environmentId = usePluginEnvironmentId();
   const run = useAtomCommand(routingSetTier, { reportFailure: false });
   const canWrite = useAtomValue(routingSetTier.permissionAtom(environmentId));
   return {
