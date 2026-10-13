@@ -5,6 +5,7 @@ import * as Option from "effect/Option";
 
 import * as PluginRpc from "../PluginRpc.ts";
 import * as ReviewRequests from "./ReviewRequests.ts";
+import * as SecurityHold from "./security/SecurityHold.ts";
 import * as VerdictStore from "./VerdictStore.ts";
 
 /** The handlers exist whether or not the plugin runs, so an inactive plugin answers with an error. */
@@ -29,4 +30,11 @@ export const table = PluginRpc.defineHandlers(REVIEW_METHODS)({
     ),
   requestsList: (input) =>
     Effect.flatMap(running(ReviewRequests.ReviewRequests), (s) => s.list(input)),
+  securityAck: (input) => Effect.flatMap(running(SecurityHold.SecurityHold), (s) => s.ack(input)),
+  securityFindings: (input) =>
+    Effect.flatMap(running(SecurityHold.SecurityHold), (s) => s.findings(input)),
+  securityGetMode: (input) =>
+    Effect.flatMap(running(SecurityHold.SecurityHold), (s) => s.getMode(input)),
+  securitySetMode: (input) =>
+    Effect.flatMap(running(SecurityHold.SecurityHold), (s) => s.setMode(input)),
 });

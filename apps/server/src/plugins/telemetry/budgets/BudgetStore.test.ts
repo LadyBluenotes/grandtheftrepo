@@ -22,7 +22,7 @@ const valid = {
   enabled: true,
 };
 
-/** The store over a fresh telemetry database, which the migration gives its three defaults. */
+/** The store over a fresh telemetry database, which the migrations give its four defaults. */
 const fixture = Effect.gen(function* () {
   const { sql } = yield* PluginDatabase.open({ id: "telemetry", filename: ":memory:", migrations });
   const store = yield* BudgetStore.BudgetStore.pipe(
@@ -39,21 +39,20 @@ const fixture = Effect.gen(function* () {
   return { store, refusal };
 });
 
-it.effect("the three defaults exist after migration, one per tier for every project", () =>
-  Effect.scoped(
-    Effect.gen(function* () {
-      const { store } = yield* fixture;
-      assert.deepEqual(
-        yield* store.list({}),
-        (
-          [
-            ["cheap", 800],
-            ["standard", 1500],
-            ["strong", 3000],
-          ] as const
-        ).map(([tier, threshold], index) => ({
-          id: index + 1,
-          measure: "context_efficiency",
+it.effect(
+  "the defaults exist after migration: output tokens per tier, and the largest tool result",
+  () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { store } = yield* fixture;
+        const budget = (
+          id: number,
+          measure: string,
+          tier: "cheap" | "standard" | "strong",
+          threshold: number,
+        ) => ({
+          id,
+          measure,
           tier,
           threshold,
           direction: "lower_is_better" as const,
@@ -62,10 +61,16 @@ it.effect("the three defaults exist after migration, one per tier for every proj
           enabled: true,
           state: "ok" as const,
           latest: [],
-        })),
-      );
-    }),
-  ),
+        });
+        assert.deepEqual(yield* store.list({}), [
+          budget(1, "context_efficiency", "cheap", 800),
+          budget(2, "context_efficiency", "standard", 1500),
+          budget(3, "context_efficiency", "strong", 3000),
+          // The measure ignores its tier, so this one row judges every run.
+          budget(4, "tool_output_max_per_call", "standard", 8000),
+        ]);
+      }),
+    ),
 );
 
 it.effect("refuses an unknown measure or tier, or a threshold or sample it cannot judge", () =>
@@ -93,7 +98,7 @@ it.effect("refuses an unknown measure or tier, or a threshold or sample it canno
         yield* refusal({ ...valid, minSample: 2.5 }),
         "Budget is invalid: minSample",
       );
-      assert.strictEqual((yield* store.list({})).length, 3);
+      assert.strictEqual((yield* store.list({})).length, 4);
     }),
   ),
 );
@@ -228,6 +233,7 @@ it.effect("lists the budgets that judge a project, with that project's newest ev
           [1, "ok", []],
           [2, "breach", ["breach"]],
           [3, "ok", []],
+          [4, "ok", []],
         ],
       );
       const forB = yield* store.list({ projectId: projectB });
@@ -237,6 +243,7 @@ it.effect("lists the budgets that judge a project, with that project's newest ev
           [1, "ok", []],
           [2, "ok", ["recovery"]],
           [3, "ok", []],
+          [4, "ok", []],
           [own.id, "ok", []],
         ],
       );

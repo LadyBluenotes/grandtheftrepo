@@ -5,6 +5,7 @@ import {
   REVIEW_METHODS,
   ReviewRequest,
   ReviewVerdictError,
+  SecurityModeSetting,
 } from "@t3tools/contracts";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
@@ -14,6 +15,7 @@ import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 import { McpServer } from "effect/ai";
 
+import * as CheckpointDiffQuery from "../../checkpointing/CheckpointDiffQuery.ts";
 import * as ServerConfig from "../../config.ts";
 import * as McpHttpServer from "../../mcp/McpHttpServer.ts";
 import * as ThreadManagementService from "../../orchestration-v2/ThreadManagementService.ts";
@@ -25,9 +27,16 @@ import * as Attention from "../Attention.ts";
 import * as PluginHost from "../PluginHost.ts";
 import * as PluginSupervisor from "../PluginSupervisor.ts";
 import { registry } from "../registry.ts";
-import { later, readModel, ready, reviewed } from "./testkit.ts";
+import { later, projectId, readModel, ready, reviewed } from "./testkit.ts";
 
-const REVIEW_TOOLS = ["review_verdict", "review_verdicts", "review_request", "review_requests"];
+const REVIEW_TOOLS = [
+  "review_verdict",
+  "review_verdicts",
+  "review_request",
+  "review_requests",
+  "review_security_ack",
+  "review_security_findings",
+];
 
 const writePluginsJson = (plugins: string) =>
   Effect.gen(function* () {
@@ -106,6 +115,7 @@ const withHost = <A, E, R>(
               model.layer,
               Layer.mock(ProjectService.ProjectService)({}),
               Layer.mock(ProviderRegistry.ProviderRegistry)({}),
+              Layer.mock(CheckpointDiffQuery.CheckpointDiffQuery)({}),
               ServerSettings.layerTest(),
             ),
           ),
@@ -119,20 +129,32 @@ const withHost = <A, E, R>(
     ),
   );
 
-const call = (gateway: "read" | "operate", method: string, input: unknown) =>
+const call = (gateway: keyof typeof PLUGIN_GATEWAY_WS_METHODS, method: string, input: unknown) =>
   PluginHost.handlers[PLUGIN_GATEWAY_WS_METHODS[gateway]]({ method, input });
 const decodeRequest = Schema.decodeUnknownEffect(ReviewRequest);
 const decodeRequests = Schema.decodeUnknownEffect(Schema.Array(ReviewRequest));
 const decodeError = Schema.decodeUnknownEffect(ReviewVerdictError);
+const decodeMode = Schema.decodeUnknownEffect(SecurityModeSetting);
 
 it.effect("enabled: a request over the gateway goes stale on the supervisor's tick", () =>
   withHost(only(["learning", "review"]), (model) =>
     Effect.gen(function* () {
       const supervisor = yield* PluginSupervisor.PluginSupervisor;
-      assert.deepInclude((yield* supervisor.status).sweeps, {
-        plugin: "review",
-        name: "invalidation",
+      const registered = (yield* supervisor.status).sweeps;
+      assert.deepInclude(registered, { plugin: "review", name: "invalidation" });
+      assert.deepInclude(registered, { plugin: "review", name: "security" });
+
+      // A project's security mode is `warn` until it is set over the settings gateway. `off` leaves
+      // the request below free of the scan.
+      const getMode = call("read", REVIEW_METHODS.securityGetMode.method, { projectId }).pipe(
+        Effect.flatMap(decodeMode),
+      );
+      assert.deepEqual(yield* getMode, { projectId, mode: "warn" });
+      yield* call("settingsWrite", REVIEW_METHODS.securitySetMode.method, {
+        projectId,
+        mode: "off",
       });
+      assert.deepEqual(yield* getMode, { projectId, mode: "off" });
 
       const asked = yield* call("operate", REVIEW_METHODS.request.method, {
         threadId: reviewed,
@@ -146,7 +168,10 @@ it.effect("enabled: a request over the gateway goes stale on the supervisor's ti
         tick.sweeps
           .filter((sweep) => sweep.plugin === "review")
           .map((s) => [s.name, s.status, s.examined, s.acted, s.flags]),
-        [["invalidation", "ok", 1, 2, 1]],
+        [
+          ["invalidation", "ok", 1, 2, 1],
+          ["security", "ok", 0, 0, 0],
+        ],
       );
       const listed = yield* call("read", REVIEW_METHODS.requestsList.method, {
         threadId: reviewed,
@@ -169,26 +194,35 @@ it.effect("enabled: a request over the gateway goes stale on the supervisor's ti
   ),
 );
 
-it.effect("disabled: no sweep, and the request methods say the plugin is not running", () =>
-  withHost(only(["learning"]), () =>
-    Effect.gen(function* () {
-      const supervisor = yield* PluginSupervisor.PluginSupervisor;
-      assert.notDeepInclude((yield* supervisor.status).sweeps, {
-        plugin: "review",
-        name: "invalidation",
-      });
-      for (const [gateway, method] of [
-        ["operate", REVIEW_METHODS.request.method],
-        ["read", REVIEW_METHODS.requestsList.method],
-      ] as const) {
-        const refused = yield* call(gateway, method, { threadId: reviewed }).pipe(
-          Effect.andThen(Effect.die("expected a failure")),
-          Effect.flip,
-        );
-        if (refused._tag !== "PluginMethodError") return assert.fail(refused.message);
-        const error = yield* decodeError(refused.error);
-        assert.strictEqual(error.code, "inactive");
-      }
-    }),
-  ),
+it.effect(
+  "disabled: no sweep, and the request and security methods say the plugin is not running",
+  () =>
+    withHost(only(["learning"]), () =>
+      Effect.gen(function* () {
+        const supervisor = yield* PluginSupervisor.PluginSupervisor;
+        const registered = (yield* supervisor.status).sweeps;
+        assert.notDeepInclude(registered, { plugin: "review", name: "invalidation" });
+        assert.notDeepInclude(registered, { plugin: "review", name: "security" });
+        for (const [gateway, method, input] of [
+          ["operate", REVIEW_METHODS.request.method, { threadId: reviewed }],
+          ["read", REVIEW_METHODS.requestsList.method, { threadId: reviewed }],
+          [
+            "operate",
+            REVIEW_METHODS.securityAck.method,
+            { threadId: reviewed, reason: "Fixture." },
+          ],
+          ["read", REVIEW_METHODS.securityFindings.method, { threadId: reviewed }],
+          ["read", REVIEW_METHODS.securityGetMode.method, { projectId }],
+          ["settingsWrite", REVIEW_METHODS.securitySetMode.method, { projectId, mode: "off" }],
+        ] as const) {
+          const refused = yield* call(gateway, method, input).pipe(
+            Effect.andThen(Effect.die("expected a failure")),
+            Effect.flip,
+          );
+          if (refused._tag !== "PluginMethodError") return assert.fail(refused.message);
+          const error = yield* decodeError(refused.error);
+          assert.strictEqual(error.code, "inactive");
+        }
+      }),
+    ),
 );

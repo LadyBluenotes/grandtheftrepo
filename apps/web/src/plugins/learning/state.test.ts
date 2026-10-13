@@ -1,5 +1,6 @@
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/models";
 import {
+  LearningFailureKind,
   ProjectId,
   ThreadId,
   type LearningCorrection,
@@ -10,6 +11,7 @@ import { describe, expect, it } from "vite-plus/test";
 
 import {
   correctionsWindow,
+  FAILURE_KINDS,
   failureModeLabel,
   filterCorrections,
   itemRows,
@@ -115,6 +117,12 @@ describe("filterCorrections", () => {
     expect(ids({ kind: null, mode: "defect" })).toEqual([2]);
     expect(ids({ kind: null, mode: "none" })).toEqual([1]);
     expect(ids({ kind: "review_verdict", mode: "none" })).toEqual([]);
+  });
+});
+
+describe("FAILURE_KINDS", () => {
+  it("offers every kind of correction the server records as a filter", () => {
+    expect([...FAILURE_KINDS].toSorted()).toEqual([...LearningFailureKind.literals].toSorted());
   });
 });
 

@@ -97,7 +97,7 @@ it.effect("measures wait for the reactor, and answer unavailable while it is sti
       const waiting = yield* Effect.forkChild(measures(window));
       yield* TestClock.adjust("3 seconds");
       const replaying = yield* Fiber.join(waiting);
-      assert.strictEqual(replaying.length, 14);
+      assert.strictEqual(replaying.length, 16);
       assert.deepEqual(
         [...new Set(replaying.map((measure) => `${measure.state}: ${measure.missingReason}`))],
         ["unavailable: Telemetry is still replaying the event log."],
@@ -134,7 +134,7 @@ it.effect("any failed replay makes every measure unavailable, until the failure 
       yield* sql`INSERT INTO host_reactor_failure (sequence, type, attempts, last_error, failed_at)
         VALUES (1, 'thread.created', 5, 'database is locked', '2026-10-02T12:00:00.000Z')`;
       const failed = yield* measures(window);
-      assert.strictEqual(failed.length, 14);
+      assert.strictEqual(failed.length, 16);
       assert.deepEqual(
         [...new Set(failed.map((measure) => `${measure.state}: ${measure.missingReason}`))],
         [
@@ -172,7 +172,7 @@ const tierMap = TierMapService.TierMapService.of({
 /**
  * One thread with two runs in the window on the same model name: one on the Codex instance, which
  * read two files and wrote 100 and 300 output tokens, and one on a Claude instance, which read
- * one file twice and wrote 5000.
+ * one file twice and wrote 5000. A third call, by a subagent, belongs to neither.
  */
 const seedTwoInstances = (sql: SqlClient.SqlClient) =>
   Effect.gen(function* () {
@@ -193,6 +193,12 @@ const seedTwoInstances = (sql: SqlClient.SqlClient) =>
         ('item:2', 'run:codex', 'thread:1', 2, 'dynamic_tool', 'Read', 'src/b.ts', 'completed', 1),
         ('item:3', 'run:claude', 'thread:1', 1, 'dynamic_tool', 'Read', 'src/a.ts', 'completed', 2),
         ('item:4', 'run:claude', 'thread:1', 2, 'dynamic_tool', 'Read', 'src/a.ts', 'completed', 2)`;
+    // A call a provider's subagent made: no run, so no instance, and a size of its own.
+    yield* sql`INSERT INTO telemetry_tool_calls
+        (item_id, run_id, thread_id, ordinal, item_type, tool_name, path, output_tokens, item_at,
+         status, event_sequence)
+      VALUES ('item:5', NULL, 'thread:1', 3, 'dynamic_tool', 'Grep', NULL, 900,
+        '2026-10-04T00:00:00.000Z', 'completed', 2)`;
     yield* sql`INSERT INTO telemetry_turn_usage
         (provider_turn_id, thread_id, run_id, input_tokens, cached_input_tokens, output_tokens,
          usage_updated_at, recorded_at, event_sequence)
@@ -231,12 +237,16 @@ it.effect("with a tier, only the runs on the tier's provider instance and model 
       const all = yield* measures(window);
       assert.deepEqual(summary(all, "repeated_reads"), ["ok", 0.25, 2]);
       assert.deepEqual(summary(all, "context_efficiency"), ["unavailable", null, 0]);
+      // The call with no run is counted by the tool output measures and by no per-run one.
+      assert.deepEqual(summary(all, "tool_output_total"), ["ok", 900, 1]);
 
       const standard = yield* measures({ ...window, tier: "standard" }).pipe(
         Effect.provideService(TierMapService.TierMapService, tierMap),
       );
       assert.deepEqual(summary(standard, "repeated_reads"), ["ok", 0, 1]);
       assert.deepEqual(summary(standard, "context_efficiency"), ["ok", 200, 2]);
+      // With no run it has no model either, so no tier claims it.
+      assert.deepEqual(summary(standard, "tool_output_total"), ["unavailable", null, 0]);
 
       const strong = yield* measures({ ...window, tier: "strong" }).pipe(
         Effect.provideService(TierMapService.TierMapService, tierMap),
@@ -248,7 +258,7 @@ it.effect("with a tier, only the runs on the tier's provider instance and model 
 
       // The routing plugin is off: nothing says which runs a tier ran.
       const routingOff = yield* measures({ ...window, tier: "standard" });
-      assert.strictEqual(routingOff.length, 14);
+      assert.strictEqual(routingOff.length, 16);
       assert.deepEqual(
         [...new Set(routingOff.map((measure) => `${measure.state}: ${measure.missingReason}`))],
         ["unavailable: Tiers come from the routing plugin, which is not running."],

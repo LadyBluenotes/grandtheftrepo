@@ -241,3 +241,34 @@ it.effect("clamps a cursor that is past the log", () =>
     }),
   ).pipe(Effect.provide(layerSink)),
 );
+
+it.effect("runs onCursorCreated once, with the new cursor, and not on a restart", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const sql = yield* pluginDatabase;
+      yield* sql`CREATE TABLE created (cursor INTEGER NOT NULL)`;
+      const onCursorCreated = Effect.flatMap(
+        SqlClient.SqlClient,
+        (client) =>
+          client`INSERT INTO created (cursor) SELECT sequence FROM host_reactor_cursor WHERE id = 1`,
+      ).pipe(Effect.asVoid);
+      yield* writeThreads(1, 2);
+      // A restart reads the saved cursor and runs nothing. With events in the log, `drain` waits
+      // until the reactor has read or created its cursor.
+      for (const _start of ["first", "restart"]) {
+        yield* Effect.scoped(
+          Effect.gen(function* () {
+            const reactor = yield* PluginReactor.start({
+              plugin: "test",
+              from: "now",
+              handlers: {},
+              onCursorCreated,
+            });
+            yield* reactor.drain;
+          }).pipe(Effect.provideService(SqlClient.SqlClient, sql)),
+        );
+      }
+      assert.deepEqual(yield* sql`SELECT cursor FROM created`, [{ cursor: 2 }]);
+    }),
+  ).pipe(Effect.provide(layerSink)),
+);

@@ -8,6 +8,7 @@ import {
   settledFields,
   threadFields,
   toolCallFields,
+  toolOutputFields,
   turnUsageFields,
   verdictFields,
 } from "./fields.ts";
@@ -24,6 +25,10 @@ const accessed: ReadonlyArray<Readonly<Record<string, unknown>>> = [
   runFields(Fixtures.run),
   toolCallFields(Fixtures.readItem),
   toolCallFields(Fixtures.editItem),
+  toolOutputFields(Fixtures.commandItem),
+  toolOutputFields(Fixtures.mcpItem),
+  toolOutputFields(Fixtures.fileSearchItem),
+  toolOutputFields(Fixtures.webSearchItem),
   threadFields(Fixtures.thread),
   settledFields(settled),
   pinnedFields(pinned),
@@ -37,7 +42,17 @@ const roots: ReadonlyArray<readonly [string, ReadonlyArray<unknown>]> = [
   ["provider-turn.updated", [usageEvent]],
   ["providerTurn", [usageEvent.payload]],
   ["run", [Fixtures.run]],
-  ["turnItem", [Fixtures.readItem, Fixtures.editItem]],
+  [
+    "turnItem",
+    [
+      Fixtures.readItem,
+      Fixtures.editItem,
+      Fixtures.commandItem,
+      Fixtures.mcpItem,
+      Fixtures.fileSearchItem,
+      Fixtures.webSearchItem,
+    ],
+  ],
   ["thread.settled", [settled]],
   ["thread.pinned", [pinned]],
   ["thread", [Fixtures.thread]],
@@ -75,6 +90,8 @@ it("lists every measure in the issue's order", () => {
       "scope_stability",
       "recovery_efficiency",
       "supervision_burden",
+      "tool_output_total",
+      "tool_output_max_per_call",
     ],
   );
 });
@@ -94,4 +111,25 @@ it("cites paths that exist on the events they name", () => {
     return !fixtures.some((fixture) => isSet(walk(fixture, keys)));
   });
   assert.deepEqual(missing, []);
+});
+
+it("the tool output measures cite what the accessors read of a tool call", () => {
+  const toolOutput = computeMeasures(input()).filter((measure) =>
+    measure.measure.startsWith("tool_output_"),
+  );
+  assert.strictEqual(toolOutput.length, 2);
+  for (const measure of toolOutput) {
+    for (const path of [
+      "turnItem.output",
+      "turnItem.results",
+      "turnItem.toolName",
+      "turnItem.input",
+    ]) {
+      assert.include(measure.provenance, path);
+      assert.isTrue(
+        accessed.some((fields) => isSet(fields[path])),
+        `${path} is set by no accessor on a fixture`,
+      );
+    }
+  }
 });

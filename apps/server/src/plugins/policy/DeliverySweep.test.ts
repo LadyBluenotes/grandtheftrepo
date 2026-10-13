@@ -22,6 +22,7 @@ import * as ServerConfig from "../../config.ts";
 import { liveThreadShell } from "../../mcp/McpToolAccess.testkit.ts";
 import * as ThreadManagementService from "../../orchestration-v2/ThreadManagementService.ts";
 import * as ServerSettings from "../../serverSettings.ts";
+import { sha256 } from "../InstructionBlocks.ts";
 import * as PluginDatabase from "../PluginDatabase.ts";
 import * as PluginSupervisor from "../PluginSupervisor.ts";
 import * as DeliverySweep from "./DeliverySweep.ts";
@@ -29,7 +30,6 @@ import { plugin } from "./index.ts";
 import * as Files from "./InstructionFiles.ts";
 import { migrations } from "./migrations.ts";
 import * as PolicyService from "./PolicyService.ts";
-import { sha256 } from "./Render.ts";
 
 const everywhere = POLICY_ENVIRONMENT_PROJECT_ID;
 const alpha = ProjectId.make("alpha");

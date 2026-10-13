@@ -17,6 +17,7 @@ export const LearningFailureKind = Schema.Literals([
   "changes_requested",
   "reopened_after_settlement",
   "review_verdict",
+  "security",
   "manual",
 ]);
 export type LearningFailureKind = typeof LearningFailureKind.Type;

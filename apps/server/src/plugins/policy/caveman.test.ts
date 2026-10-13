@@ -15,11 +15,12 @@ import * as SqlClient from "effect/sql/SqlClient";
 
 import * as ServerConfig from "../../config.ts";
 import * as ServerSettings from "../../serverSettings.ts";
+import { findBlock } from "../InstructionBlocks.ts";
 import * as PluginDatabase from "../PluginDatabase.ts";
 import * as Caveman from "./caveman.ts";
 import { migrations } from "./migrations.ts";
 import * as PolicyService from "./PolicyService.ts";
-import { findBlock } from "./Render.ts";
+import { policyMarkers } from "./Render.ts";
 
 const projectId = POLICY_ENVIRONMENT_PROJECT_ID;
 const key = Caveman.CAVEMAN_KEY;
@@ -197,7 +198,7 @@ it.effect("installs one block into Claude's and Codex's files and touches nothin
       assert.strictEqual(text.split("<!-- fork-policy:start key=caveman -->").length, 2);
       assert.strictEqual(text.split("<!-- fork-policy:end key=caveman -->").length, 2);
       assert.include(text, Caveman.CAVEMAN_TEXT);
-      const found = findBlock(text, key);
+      const found = findBlock(text, policyMarkers(key));
       if (found.kind !== "found") return assert.fail(`${file} has no caveman block`);
       // The blank line before the block and the newline after it are the only bytes added.
       assert.strictEqual(text.slice(0, found.start), `${mine}\n`);

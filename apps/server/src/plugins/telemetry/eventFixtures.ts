@@ -137,6 +137,48 @@ export const editItem: OrchestrationV2TurnItem = {
   fileName: "src/a.ts",
 };
 
+/** A shell command behind a `bash -lc` wrapper, as Codex records it, with its output. */
+export const commandItem: Extract<OrchestrationV2TurnItem, { readonly type: "command_execution" }> =
+  {
+    ...itemBase,
+    id: TurnItemId.make("item:command"),
+    ordinal: 104,
+    type: "command_execution",
+    input: "/bin/bash -lc 'cd app && /usr/bin/git status'",
+    output: "On branch main\nnothing to commit, working tree clean\n",
+  };
+
+/** An MCP tool, whose output is an object. */
+export const mcpItem: Extract<OrchestrationV2TurnItem, { readonly type: "dynamic_tool" }> = {
+  ...itemBase,
+  id: TurnItemId.make("item:mcp"),
+  ordinal: 105,
+  type: "dynamic_tool",
+  toolName: "mcp__t3-code__thread_list",
+  input: {},
+  output: { threads: [{ id: "thread:1", title: "Fix login" }], nextCursor: null },
+};
+
+export const fileSearchItem: Extract<OrchestrationV2TurnItem, { readonly type: "file_search" }> = {
+  ...itemBase,
+  id: TurnItemId.make("item:file-search"),
+  ordinal: 106,
+  type: "file_search",
+  pattern: "TODO",
+  results: [{ fileName: "src/a.ts", line: 4, preview: "// TODO: handle the empty case" }],
+};
+
+export const webSearchItem: Extract<OrchestrationV2TurnItem, { readonly type: "web_search" }> = {
+  ...itemBase,
+  id: TurnItemId.make("item:web-search"),
+  ordinal: 107,
+  type: "web_search",
+  patterns: ["effect schema"],
+  results: [
+    { title: "Schema", url: "https://effect.website/docs/schema", snippet: "Define types." },
+  ],
+};
+
 /** A timeline item that is not a tool call. */
 export const noticeItem: OrchestrationV2TurnItem = {
   ...itemBase,

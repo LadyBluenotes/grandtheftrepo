@@ -1,6 +1,7 @@
 import type { PluginStatus } from "@t3tools/contracts";
 import {
   ActivityIcon,
+  BookOpenTextIcon,
   GraduationCapIcon,
   RouteIcon,
   ScrollTextIcon,
@@ -50,5 +51,11 @@ export const pluginRegistry: ReadonlyArray<PluginEntry> = [
     Screen: lazy(() =>
       import("./policy/PolicyScreen").then((module) => ({ default: module.PolicyScreen })),
     ),
+  },
+  {
+    id: "knowledge",
+    title: "Knowledge",
+    icon: BookOpenTextIcon,
+    Screen: lazy(() => import("./knowledge/KnowledgePage")),
   },
 ];

@@ -26,6 +26,7 @@ import type * as Orchestrator from "../../orchestration-v2/Orchestrator.ts";
 import * as ThreadManagementService from "../../orchestration-v2/ThreadManagementService.ts";
 import * as Attention from "../Attention.ts";
 import * as CorrectionStore from "../learning/CorrectionStore.ts";
+import { securityGate } from "./security/SecurityHold.ts";
 
 interface Row {
   readonly id: string;
@@ -140,7 +141,7 @@ const make = Effect.gen(function* () {
   const find = (id: string) =>
     Effect.map(sql<Row>`SELECT * FROM review_verdicts WHERE id = ${id}`, (rows) => rows[0]);
 
-  /** The reviewed thread's project, and the checkpoint if it is a ready one of that thread. */
+  /** The reviewed thread's project and the checkpoint, when it is a ready one of that thread. */
   const readCheckpoint = Effect.fn("VerdictStore.readCheckpoint")(function* (
     threadId: ThreadId,
     checkpointId: CheckpointId,
@@ -156,18 +157,18 @@ const make = Effect.gen(function* () {
       .getThreadRecords(threadId, ["checkpoints"])
       .pipe(Effect.catch(io));
     // Checkpoints a fork inherits can carry the source thread's id, so ownership is checked on the record.
-    const ready = checkpoints.some(
-      (checkpoint) =>
-        checkpoint.id === checkpointId &&
-        checkpoint.threadId === threadId &&
-        checkpoint.status === "ready",
+    const checkpoint = checkpoints.find(
+      (candidate) =>
+        candidate.id === checkpointId &&
+        candidate.threadId === threadId &&
+        candidate.status === "ready",
     );
-    if (!ready) {
+    if (checkpoint === undefined) {
       return yield* invalid(
         `Checkpoint ${checkpointId} is not a ready checkpoint of thread ${threadId}`,
       );
     }
-    return shell.projectId;
+    return { projectId: shell.projectId, checkpoint };
   });
 
   const record: VerdictStore["Service"]["record"] = (reviewerThreadId, input) =>
@@ -202,7 +203,10 @@ const make = Effect.gen(function* () {
         return yield* invalid(`Unknown rung "${rung}". Rungs: ${PONYTAIL_RUNG_IDS.join(", ")}.`);
       }
 
-      const projectId = yield* readCheckpoint(input.threadId, input.checkpointId);
+      const { projectId, checkpoint } = yield* readCheckpoint(input.threadId, input.checkpointId);
+      // A thread held by the security scan takes no verdict until the hold is acknowledged, as it
+      // takes no review request, since an approval could otherwise answer one opened earlier.
+      yield* securityGate(sql, { threadId: input.threadId, projectId, checkpoint });
       const corrections = yield* CorrectionStore.CorrectionStore;
       const sourceKey = `verdict:${id}`;
       // A correction with no row is an earlier call's that stopped between the two writes. Only the

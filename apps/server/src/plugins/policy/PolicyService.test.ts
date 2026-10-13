@@ -16,8 +16,8 @@ import * as SqlClient from "effect/sql/SqlClient";
 
 import * as ServerConfig from "../../config.ts";
 import * as ServerSettings from "../../serverSettings.ts";
+import * as InstructionBlocks from "../InstructionBlocks.ts";
 import * as PluginDatabase from "../PluginDatabase.ts";
-import * as InstructionFiles from "./InstructionFiles.ts";
 import { migrations } from "./migrations.ts";
 import * as PolicyService from "./PolicyService.ts";
 
@@ -419,7 +419,7 @@ it.layer(layerTest)("PolicyService", (it) => {
       const path = yield* Path.Path;
       const home = yield* HostProcess.HomeDirectory;
       const targetsWith = (settings: Parameters<typeof ServerSettings.layerTest>[0]) =>
-        InstructionFiles.targets().pipe(
+        InstructionBlocks.targets().pipe(
           Effect.provide(ServerSettings.layerTest(settings)),
           Effect.provideService(HostProcess.Environment, {
             CLAUDE_CONFIG_DIR: path.join(home, "host-claude"),

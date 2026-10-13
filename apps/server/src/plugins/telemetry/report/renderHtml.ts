@@ -38,6 +38,19 @@ const measureValue = (measure: TelemetryMeasure) => {
   }
 };
 
+/** A measure's five largest results as a table of their own, or nothing for a measure without them. */
+const largestResults = (measure: TelemetryMeasure) => {
+  const rows = (measure.detail?.largest ?? [])
+    .slice(0, 5)
+    .map(
+      (row) =>
+        `<tr><td>${escape(row.tool)}</td><td>~${row.estimatedTokens}</td><td>${escape(row.threadId)}</td></tr>`,
+    );
+  return rows.length === 0
+    ? ""
+    : `<table><thead><tr><th>Largest result</th><th>Tokens</th><th>Thread</th></tr></thead><tbody>${rows.join("")}</tbody></table>`;
+};
+
 const STYLE = [
   "body{color:var(--foreground);font-family:var(--font-sans)}",
   "h1{font-size:1.25rem;margin:0 0 4px}",
@@ -158,7 +171,7 @@ export const renderHtml = (report: TelemetryReport) =>
       escape(item.measure),
       escape(measureValue(item)),
       String(item.sampleSize),
-      escape(item.missingReason ?? ""),
+      escape(item.missingReason ?? "") + largestResults(item),
     ]),
     "</body></html>",
   ].join("");

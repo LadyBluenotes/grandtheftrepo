@@ -38,8 +38,8 @@ same file, so any plugin can raise one without depending on the plugin that show
 
 ## Upstream seams
 
-These are the only lines upstream files carry for the plugin system. A merge conflict in one of
-them is resolved by keeping the line.
+These are the only lines upstream files carry for this fork. A merge conflict in one of them is
+resolved by keeping the line.
 
 | File                                                         | Line                                                                                                                                                                   |
 | ------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -60,7 +60,9 @@ them is resolved by keeping the line.
 | `apps/web/src/components/sidebar/mainAppLocation.ts`         | `/board` and the `/plugins` paths in `isSidebarUtilityPage`                                                                                                            |
 | `apps/web/src/components/sidebar/SidebarChrome.tsx`          | the board's `SidebarUtilityItem`, gated on `kanbanSupportedAtom`, and `<PluginSidebarEntries />` after the Usage entry, plus imports; `SidebarUtilityItem` is exported |
 | `apps/web/src/components/CommandPalette.tsx`                 | the board's `actionItems.push` block, gated the same way, plus imports                                                                                                 |
+| `apps/server/src/orchestration-v2/toolOutputImageBytes.ts`   | `export function carriesImage`, the one exported function: does a record hold image bytes or the size stripping left, so the estimate matches what ingestion stores    |
 | `third-party-licenses.config.json`                           | the `Caveman reply rules` and `Ponytail ladder` entries at the end of `customNotices`, so the adapted policy text is credited in the app's license list                |
+| `scripts/build-desktop-artifact.ts`                          | in `createBuildConfig`, unsigned Mac builds get `identity: "-"`, `hardenedRuntime: false` and no GitHub update feed, plus their tests                                  |
 
 ## Plugin services and the type system
 
@@ -105,7 +107,7 @@ them half-evaluated. The host hands `toolkitRegistration` to `ServerPlugin.mcp` 
   `packages/client-runtime/src/plugins/kanban.ts`. Server: `apps/server/src/plugins/kanban/`.
   Contracts: `packages/contracts/src/plugins/kanban.ts`. Web: `apps/web/src/plugins/kanban/`.
   Mobile: `apps/mobile/src/features/kanban/`. User guide: [Kanban board](./user/kanban.md).
-- **telemetry**: the fourteen efficiency measures of #1 over a project's window, from the
+- **telemetry**: the sixteen efficiency measures of #1 and #35 over a project's window, from the
   `telemetry.measures` gateway method and the `telemetry_measures` MCP tool. Its reactor keeps
   runs, tool calls, threads and provider turn token usage from the event log in the plugin's own
   tables, and pure functions in `measures/` compute each measure from those rows; cost is priced
@@ -120,7 +122,15 @@ them half-evaluated. The host hands `toolkitRegistration` to `ServerPlugin.mcp` 
   replays the log to record each run's instance. The `telemetry/budgets` sweep judges each budget,
   one measure for one tier, over the last seven whole UTC days per project, writes a
   `budget_events` row only when its state changes, and raises or clears a `budget_breach`
-  attention flag. `telemetry.report` and the `telemetry_report` MCP tool fold a project's range
+  attention flag. `tool_output_total` and `tool_output_max_per_call` size each tool call's output as
+  characters over four, an inline image as 1,500, from the sizes the reactor stores beside each
+  tool call (migration 4 adds them and replays the log), and carry per-tool and largest-result
+  `detail` through `telemetry.measures` and the `telemetry_tool_output` MCP tool. They read no
+  tier, so the sweep asks for them without one: the default budget on the largest result names
+  `standard` only because a budget needs a tier, and judges every run, routing plugin on or off. A
+  call a provider's subagent makes has no run: the reactor keeps it with the item's own time
+  (migration 4), the two measures count it, and the per-run measures and a tier leave it out.
+  `telemetry.report` and the `telemetry_report` MCP tool fold a project's range
   into ten sections, from the thread records, the learning and review plugins and the host's
   attention flags, with the same report as one self-contained HTML page; at start the plugin gives
   each project with a default model a `Weekly report` thread and a scheduled task that posts that
@@ -151,7 +161,8 @@ them half-evaluated. The host hands `toolkitRegistration` to `ServerPlugin.mcp` 
   drop a repeat; no promoter is registered yet, so records wait. A third sweep compares each
   project's telemetry measures over the last seven whole UTC days with the seven before, once a
   day, and opens or strengthens an `efficiency_regression:<measure>` item, with no owner kind, for
-  each measure worse by its threshold in `regressions/thresholds.ts`; with telemetry off it does
+  each measure worse by its threshold in `regressions/thresholds.ts`, except a volume measure
+  such as `tool_output_total`, which that file lists as not compared; with telemetry off it does
   nothing. Server:
   `apps/server/src/plugins/learning/`. Contracts:
   `packages/contracts/src/plugins/learning.ts`. No screen yet.
@@ -182,7 +193,21 @@ them half-evaluated. The host hands `toolkitRegistration` to `ServerPlugin.mcp` 
   the request; once the thread's latest is another checkpoint, the `review/invalidation` sweep marks
   the request stale for good, invalidates the verdicts on its checkpoint, opens a request at the
   latest, and keeps a `stale_review` attention flag until that one is answered. `ReviewGate.check`
-  is the completion gate a ticket asks before it finishes; nothing calls it yet. Server:
+  is the completion gate a ticket asks before it finishes; nothing calls it yet. The plugin's
+  reactor tests the lines each root-run turn adds against six fixed patterns unless the project's
+  security mode is `off`, and the `review/security` sweep records each finding as a `security`
+  correction, because a reactor sees only its own plugin's services; in `block` a finding refuses
+  `review.request`, verdicts and `ReviewGate.check`, holds back the invalidation sweep's
+  replacement request and keeps a `security_hold` flag until `review.security.ack`. The same sweep calls the reactor's
+  `retryFailed` each tick and settles an event the reactor gave up on as a scan row, with a
+  `scan_failed` finding in `block`; in `block` a turn the scan cannot read, a stopped or failed
+  one included, is held as a `scan_failed` finding rather than passed. The checkpoint becomes visible
+  before the reactor reaches it, so the reactor writes a `security_scan` row with each checkpoint's
+  findings, and in `block` `review.request` (code `scan_pending`) and the invalidation sweep wait
+  for that row. A checkpoint captured before `security_scan_since` never gets one and does not
+  wait; the reactor records that time through `PluginReactor.start`'s `onCursorCreated`, in the
+  transaction that creates its cursor from the newest event, so the boundary and the cursor agree.
+  Server:
   `apps/server/src/plugins/review/`. Contracts: `packages/contracts/src/plugins/review.ts`. No
   screen yet. User guide: [Policies and reviews](./user/policies-and-reviews.md#reviews).
 - **caveman**: whether each provider instance's model traffic goes through caveman's loopback
@@ -195,6 +220,24 @@ them half-evaluated. The host hands `toolkitRegistration` to `ServerPlugin.mcp` 
   the panel on the Plugins page uses `caveman.status`, `caveman.setRoute`, `caveman.learnPlan` and
   `caveman.learnRefresh`. Server: `apps/server/src/plugins/caveman/`. Contracts:
   `packages/contracts/src/plugins/caveman.ts`. Web: `apps/web/src/plugins/caveman/`.
+- **knowledge**: short markdown pages per project that a person accepted, each written to
+  `<project>/.knowledge/<key>.md` and listed in one index block in the project's `CLAUDE.md`,
+  `AGENTS.md` and `.github/copilot-instructions.md`, for the agents in use as the policy plugin
+  resolves them. The block helpers both plugins use are in
+  `apps/server/src/plugins/InstructionBlocks.ts`. Agents propose drafts with the
+  `knowledge_propose` MCP tool, from a thread only, for a project the server knows, and read
+  accepted pages with `knowledge_list`. `knowledge.accept` (from `draft`) and `.retire` (from
+  `accepted`) move a page in one conditional update, so a request that lost a race is refused, and
+  install at once; an install failure is their error, though the change stands.
+  `knowledge.discard` keeps a draft as retired without writing. `knowledge.install` and `.verify`
+  are gateway methods too. Each install records, per page file (`page:<key>`) and per agent's
+  index block, the hash of what it wrote. The `knowledge/delivery` sweep writes only a component
+  whose record differs from what the accepted pages render to and whose file still holds what was
+  recorded, even with no agent in use, and only while no thread in the project has a run; a file
+  edited by hand stays `drifted` in `verify` until a person installs. Server:
+  `apps/server/src/plugins/knowledge/`. Contracts: `packages/contracts/src/plugins/knowledge.ts`.
+  Web: `apps/web/src/plugins/knowledge/`, at `/plugins/knowledge`. User guide:
+  [Project knowledge](./user/knowledge.md).
 
 `apps/web/src/routeTree.gen.ts` is generated and committed. A conflict there is resolved by running
 the web dev server or build once, which regenerates it.
@@ -223,13 +266,22 @@ anything new. Only Fork CI, Sync upstream and Fork nightly release stay active.
 ## Nightly builds
 
 `.github/workflows/release-fork.yml` runs at 05:41 UTC on days `main` moved and can be run by hand.
-It builds the Windows x64 and Linux x64 desktop apps and CLI archives, unsigned, through upstream's
-reusable build job on GitHub-hosted runners, and publishes them as a prerelease tagged
-`v<version>-nightly.<date>.<n>`. There is no macOS build; signing it needs an Apple developer
-account.
+It builds the Windows x64, macOS arm64 and Linux x64 desktop apps and CLI archives through
+upstream's reusable build job on GitHub-hosted runners, and publishes them as a prerelease tagged
+`v<version>-nightly.<date>.<n>`. None carry a publisher signature, which needs an Apple developer
+account and a Windows signing certificate. The macOS app and CLI are signed ad hoc, which Apple
+silicon needs to open them. There is no Intel Mac build.
 
-Install the first copy by hand from the Releases page. Windows shows a SmartScreen prompt once
-because the build is unsigned: More info, then Run anyway. From then on the app updates itself from
-this fork's releases on the nightly channel. An app installed from upstream keeps updating from
-upstream, so it has to be replaced once. The `t3` CLI from one of these archives updates from this
-fork as well.
+Install the first copy by hand from the Releases page. An app installed from upstream keeps updating
+from upstream, so it has to be replaced once. The `t3` CLI from one of these archives updates from
+this fork as well.
+
+Windows shows a SmartScreen prompt once because the build is unsigned: More info, then Run anyway.
+From then on the app updates itself from this fork's releases on the nightly channel.
+
+On a Mac, open the `arm64` DMG and drag the app to Applications. Gatekeeper blocks the first launch
+because the app has no Developer ID. On macOS 14 and earlier, Control-click the app and choose Open.
+On macOS 15 and later, try to open it once, then choose Open Anyway under System Settings > Privacy
+& Security. The Mac app does not look for updates at all: macOS updates go through Squirrel.Mac,
+which only installs an update signed to match the running app, and an ad hoc signature matches only
+its own build. Install every nightly by hand from its DMG the same way.

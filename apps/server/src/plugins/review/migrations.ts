@@ -56,8 +56,54 @@ const requests: PluginMigration[2] = Effect.gen(function* () {
   yield* sql`CREATE INDEX review_request_superseded ON review_request (superseded_by)`;
 });
 
+// A project with no `security_mode` row is `warn`. `security_scan` has a row for each ready
+// checkpoint the scan has handled, written with its findings, so `block` can tell a scan still to
+// come from one that found nothing. `security_scan_since` is when the scan began, written as the
+// reactor creates its cursor: a checkpoint captured before then was never going to be scanned, so
+// it has no row and is not pending. One finding per checkpoint, pattern, file and
+// line, so a replayed scan inserts nothing. `blocking` is whether the project was in `block` when
+// the finding was recorded: the thread is held while one such finding is unacknowledged.
+// `correction_id` points into the learning plugin's database and is written by the security sweep;
+// the partial index is that sweep's batch. A `scan_failed` row records no correction.
+const security: PluginMigration[2] = Effect.gen(function* () {
+  const sql = yield* SqlClient.SqlClient;
+  yield* sql`CREATE TABLE security_mode (
+    project_id TEXT PRIMARY KEY,
+    mode TEXT NOT NULL CHECK (mode IN ('off', 'warn', 'block'))
+  )`;
+  yield* sql`CREATE TABLE security_finding (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    thread_id TEXT NOT NULL,
+    checkpoint_id TEXT NOT NULL,
+    pattern_id TEXT NOT NULL,
+    file TEXT NOT NULL,
+    line INTEGER NOT NULL,
+    blocking INTEGER NOT NULL CHECK (blocking IN (0, 1)),
+    correction_id INTEGER,
+    created_at TEXT NOT NULL,
+    acknowledged_at TEXT,
+    ack_reason TEXT,
+    CHECK ((acknowledged_at IS NULL) = (ack_reason IS NULL))
+  )`;
+  yield* sql`CREATE UNIQUE INDEX security_finding_key
+    ON security_finding (checkpoint_id, pattern_id, file, line)`;
+  yield* sql`CREATE INDEX security_finding_thread ON security_finding (thread_id, acknowledged_at)`;
+  yield* sql`CREATE INDEX security_finding_uncorrected ON security_finding (id)
+    WHERE correction_id IS NULL AND pattern_id <> 'scan_failed'`;
+  yield* sql`CREATE TABLE security_scan (
+    checkpoint_id TEXT PRIMARY KEY,
+    thread_id TEXT NOT NULL,
+    scanned_at TEXT NOT NULL
+  )`;
+  yield* sql`CREATE TABLE security_scan_since (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    since TEXT NOT NULL
+  )`;
+});
+
 export const migrations = [
   [1, "Verdicts", verdicts],
   [2, "ProjectWindow", projectWindow],
   [3, "Requests", requests],
+  [4, "Security", security],
 ] as const satisfies ReadonlyArray<PluginMigration>;

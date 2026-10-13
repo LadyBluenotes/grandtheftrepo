@@ -87,3 +87,20 @@ A review describes the work as it was at its checkpoint. Once the thread changes
 review is out of date: T3 Code marks the request stale, opens a new request at the latest
 checkpoint, and that one needs its own verdict. An out-of-date review stays out of date, even if
 you roll the thread back to the checkpoint it reviewed.
+
+### Security scan
+
+After each turn, T3 Code checks the lines the agent added for leaked secrets (AWS, GitHub and
+OpenAI-style keys, and private keys), downloaded code run with `eval` or piped into a shell,
+`${{ github.event.* }}` expressions in a GitHub workflow's `run:` steps, and shell commands built
+from variables. Removed and unchanged lines are never checked, and the matched text is never
+stored. Each project's security mode is `warn` unless changed: findings are recorded, and agents
+list them with the `review_security_findings` tool. In `block`, a finding also holds the thread:
+review requests and verdicts are refused, the thread cannot pass review, and it is flagged until
+someone acknowledges every finding with the `review_security_ack` tool and a reason, which is kept
+with the findings. A turn the check could
+not read, such as one you stopped or one that failed, holds the thread the same way, listed as a
+`scan_failed` finding, so look at that turn yourself before acknowledging it. A review request in
+`block` also waits until the check of the thread's latest turn has finished; ask again a moment
+later. `off` skips the check. The mode in effect when a turn is checked applies, which is when the
+turn ends unless a failed check is retried later. There is no screen to change the mode yet.

@@ -14,6 +14,7 @@ import type * as SqlError from "effect/sql/SqlError";
 
 import type * as Orchestrator from "../../orchestration-v2/Orchestrator.ts";
 import * as ThreadManagementService from "../../orchestration-v2/ThreadManagementService.ts";
+import { securityGate } from "./security/SecurityHold.ts";
 
 export interface RequestRow {
   readonly id: number;
@@ -117,7 +118,8 @@ export class ReviewRequests extends Context.Service<
     /**
      * Asks for a review of the thread's latest checkpoint. Asking again at the same checkpoint
      * answers with the request already standing there. A request at a checkpoint a verdict
-     * already names is answered from the start.
+     * already names is answered from the start. Refused while the thread has a security hold,
+     * and in a `block` project until the security scan has handled the latest checkpoint.
      */
     readonly request: (input: {
       readonly threadId: ThreadId;
@@ -160,6 +162,10 @@ const make = Effect.gen(function* () {
           code: "invalid",
           message: "This thread has no checkpoint to review yet.",
         });
+      }
+      const shell = yield* threads.getThreadShell(threadId).pipe(Effect.catch(io));
+      if (shell !== null) {
+        yield* securityGate(sql, { threadId, projectId: shell.projectId, checkpoint: latest });
       }
       const requestedAt = DateTime.formatIso(yield* DateTime.now);
       const row = yield* sql.withTransaction(
