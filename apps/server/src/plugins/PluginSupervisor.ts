@@ -67,6 +67,11 @@ export class PluginSupervisor extends Context.Service<
     /** Runs every registered sweep once, now, and records the summary. */
     readonly tick: Effect.Effect<SupervisorTickSummary, SqlError.SqlError>;
     readonly status: Effect.Effect<SupervisorStatus, SqlError.SqlError>;
+    /**
+     * Ticks one interval after it starts and every interval after that; returns at once when no
+     * sweep is registered. `ticker` forks it.
+     */
+    readonly loop: Effect.Effect<void, SqlError.SqlError>;
   }
 >()("t3/plugins/PluginSupervisor") {}
 
@@ -237,24 +242,30 @@ const make = (order: ReadonlyArray<string>) =>
       };
     });
 
-    // Sweeps register while plugin layers build, so the check waits for activation.
     const interval = Duration.seconds(intervalSeconds);
-    yield* forkParked(
-      Effect.gen(function* () {
-        if (sweeps.size === 0) return;
-        yield* Effect.sleep(interval);
-        yield* tick.pipe(
-          Effect.catchCause((cause) =>
-            Cause.hasInterruptsOnly(cause)
-              ? Effect.failCause(cause)
-              : Effect.logError("supervisor tick failed", { cause }),
-          ),
-          Effect.repeat(Schedule.spaced(interval)),
-        );
-      }),
-    );
+    const loop: PluginSupervisor["Service"]["loop"] = Effect.gen(function* () {
+      if (sweeps.size === 0) return;
+      yield* Effect.sleep(interval);
+      yield* tick.pipe(
+        Effect.catchCause((cause) =>
+          Cause.hasInterruptsOnly(cause)
+            ? Effect.failCause(cause)
+            : Effect.logError("supervisor tick failed", { cause }),
+        ),
+        Effect.repeat(Schedule.spaced(interval)),
+      );
+    });
 
-    return PluginSupervisor.of({ register, tick, status });
+    return PluginSupervisor.of({ register, tick, status, loop });
   });
 
 export const layer = (order: ReadonlyArray<string>) => Layer.effect(PluginSupervisor, make(order));
+
+/**
+ * Forks the supervisor's `loop`. A sweep's `run` executes in that fiber, so it sees the services
+ * of whatever this layer is built over: `PluginHost.layerAll` builds it over every active plugin.
+ * Sweeps register while plugin layers build, so the loop's check waits for activation.
+ */
+export const ticker = Layer.effectDiscard(
+  Effect.flatMap(PluginSupervisor, (supervisor) => forkParked(supervisor.loop)),
+);

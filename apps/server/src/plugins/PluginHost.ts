@@ -199,16 +199,15 @@ export const make = (plugins: ReadonlyArray<Registered>) =>
     });
   });
 
-const layer = Layer.effect(PluginHost, make(registry));
-
 const mergeActive = <R>(
+  plugins: typeof registry,
   pick: (
     plugin: ServerPlugin<PluginRequirements, PluginMcpRequirements>,
   ) => Layer.Layer<never, never, R | SqlClient.SqlClient> | undefined,
 ) =>
   Effect.gen(function* () {
     const host = yield* PluginHost;
-    return registry
+    return plugins
       .filter((plugin) => host.activeIds.has(plugin.id))
       .flatMap((plugin) => {
         const layer = pick(plugin);
@@ -230,26 +229,33 @@ const mergeActive = <R>(
   });
 
 /**
- * The host, its supervisor, `Attention` and every active plugin's services, for the server's
- * layer chain. The supervisor and `Attention` share one connection to the host's own file. A
- * plugin's reactor reads the event sink the orchestrator publishes to; the runtime layer keeps it
- * to itself, so the same layer is provided here, and layer memoization makes it the one instance.
+ * The host over `plugins`, its supervisor, `Attention` and every active plugin's services. The
+ * supervisor and `Attention` share one connection to the host's own file. A plugin's reactor reads
+ * the event sink the orchestrator publishes to; the runtime layer keeps it to itself, so the same
+ * layer is provided here, and layer memoization makes it the one instance. The supervisor's ticker
+ * is built over the same plugin layers, so a sweep sees every active plugin's services.
  */
-export const layerAll = Layer.unwrap(mergeActive((plugin) => plugin.layer)).pipe(
-  Layer.provideMerge(
-    Layer.merge(PluginSupervisor.layer(registry.map((plugin) => plugin.id)), Attention.layer).pipe(
-      Layer.provide(HostDatabase.layer),
+export const layerOf = (plugins: typeof registry) => {
+  const layerPlugins = Layer.unwrap(mergeActive(plugins, (plugin) => plugin.layer));
+  return Layer.merge(layerPlugins, PluginSupervisor.ticker.pipe(Layer.provide(layerPlugins))).pipe(
+    Layer.provideMerge(
+      Layer.merge(PluginSupervisor.layer(plugins.map((plugin) => plugin.id)), Attention.layer).pipe(
+        Layer.provide(HostDatabase.layer),
+      ),
     ),
-  ),
-  Layer.provide(RuntimeLayer.layerEventSink),
-  Layer.provideMerge(layer),
-);
+    Layer.provide(RuntimeLayer.layerEventSink),
+    Layer.provideMerge(Layer.effect(PluginHost, make(plugins))),
+  );
+};
+
+/** The host over the registry, for the server's layer chain. */
+export const layerAll = layerOf(registry);
 
 /** The supervisor's tool and every active plugin's MCP tools, for the `/mcp` server layer. */
 export const layerMcp = (register: typeof toolkitRegistration) =>
   Layer.merge(
     register(SupervisorToolkit.SupervisorToolkit, SupervisorToolkit.handlers),
-    Layer.unwrap(mergeActive((plugin) => plugin.mcp?.(register))),
+    Layer.unwrap(mergeActive(registry, (plugin) => plugin.mcp?.(register))),
   );
 
 /** Every plugin method behind the gateway; the host services come from the server's layer chain. */
