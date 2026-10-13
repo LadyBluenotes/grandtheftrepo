@@ -8,14 +8,18 @@ import {
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
+import * as Result from "effect/Result";
 import * as SqlClient from "effect/sql/SqlClient";
 
 import * as ThreadManagementService from "../../orchestration-v2/ThreadManagementService.ts";
 import * as ServerSettings from "../../serverSettings.ts";
+import * as Attention from "../Attention.ts";
+import * as DeliveryDrift from "../DeliveryDrift.ts";
 import * as Blocks from "../InstructionBlocks.ts";
 import * as Files from "./InstructionFiles.ts";
 import { needsDelivery } from "./needsDelivery.ts";
 import * as PolicyService from "./PolicyService.ts";
+import { blockId, policyMarkers } from "./Render.ts";
 
 interface AcceptedRow {
   readonly project_id: ProjectId;
@@ -31,15 +35,30 @@ interface DeliveredRow {
   readonly verifiedAt: string | null;
 }
 
+interface RecordedRow {
+  readonly project_id: ProjectId;
+  readonly key: string;
+  readonly agent: PolicyAgent;
+  readonly targetPath: string;
+  readonly renderedHash: string;
+}
+
 /**
  * The supervisor sweep that makes policy delivery automatic. Every accepted policy that an
  * agent's instruction file does not carry current, because it was never installed, a newer
  * version was accepted, `RULES.md` changed, the agent's file moved, or the last install was not
  * verified, is installed and verified through `PolicyService`, but only at a session boundary: a
  * project's policy waits while any thread in the project has a run, and a `*` policy while any
- * thread does. A waiting policy leaves nothing behind and the next tick looks again. `examined`
- * counts policy and agent pairs, `acted` installs, `flags` deliveries a failed install or
- * verification left unverified. A dry run counts the installs it would make and writes nothing.
+ * thread does. A waiting policy leaves nothing behind and the next tick looks again.
+ *
+ * After the installs it checks every delivery it recorded and keeps one `delivery_drift` flag per
+ * project and agent file whose block was edited or deleted since. It never writes such a block: a
+ * person may have edited it on purpose, and an install from the Policies screen or `policy.install`
+ * puts the accepted version back, after which the next tick clears the flag.
+ *
+ * `examined` counts policy and agent pairs, `acted` installs and flags raised, rewritten or
+ * cleared, `flags` deliveries a failed install or verification left unverified plus the drift
+ * flags standing. A dry run counts what it would do and changes nothing.
  */
 export const make = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
@@ -48,6 +67,7 @@ export const make = Effect.gen(function* () {
   const policies = yield* PolicyService.PolicyService;
   const threads = yield* ThreadManagementService.ThreadManagementService;
   const rulesPath = yield* Files.rulesPath();
+  const attention = yield* Attention.Attention;
   const services = yield* Effect.context<
     FileSystem.FileSystem | Path.Path | ServerSettings.ServerSettingsService
   >();
@@ -102,7 +122,7 @@ export const make = Effect.gen(function* () {
       message: error.message,
     });
 
-  const run = Effect.fn("DeliverySweep.run")(
+  const installDue = Effect.fn("DeliverySweep.install")(
     function* ({ dryRun }: { readonly dryRun: boolean }) {
       const rulesHash = Blocks.sha256((yield* Blocks.read(rulesPath)) ?? "");
       const accepted = yield* sql<AcceptedRow>`
@@ -189,6 +209,98 @@ export const make = Effect.gen(function* () {
     },
     (effect) => Effect.provideContext(effect, services),
   );
+
+  /**
+   * One flag per project, agent and file, `policy:<projectId>:<agent>:<path>`, for the project's
+   * policies delivered into it: a file holds every policy's block, so the flag names those of the
+   * project that changed. The project is second in the key so the project's board can list it
+   * (`kanban/attentionRows.ts`), which lists a `policy:*:` flag of the whole environment on every
+   * board. Each file is read once. A block is judged against the hash its install recorded, not the
+   * version accepted now, so a block that is merely waiting for a run to end is intact, and one
+   * that was edited, or whose file or markers are gone, is not. A file that cannot be read keeps
+   * the flag it had. The read
+   * takes no install lock, so a person's install landing mid-read can show one block ahead of its
+   * record for a tick; the next tick settles the flag either way.
+   */
+  const flagDrift = Effect.fn("DeliverySweep.flagDrift")(
+    function* ({ dryRun }: { readonly dryRun: boolean }) {
+      const recorded = yield* sql<RecordedRow>`
+        SELECT project_id, "key", agent, target_path AS targetPath, rendered_hash AS renderedHash
+        FROM deliveries ORDER BY project_id, "key", agent
+      `;
+      const judged = new Map<string, string | undefined>();
+      const unread = new Set<string>();
+      /** What each file read, so a file several projects have blocks in is read once. */
+      const files = new Map<string, Result.Result<string | undefined, unknown>>();
+      for (const [flag, rows] of Map.groupBy(
+        recorded,
+        (row) => `policy:${row.project_id}:${row.agent}:${row.targetPath}`,
+      )) {
+        const [first] = rows;
+        if (first === undefined) continue;
+        let read = files.get(first.targetPath);
+        if (read === undefined) {
+          read = yield* Effect.result(Blocks.read(first.targetPath));
+          files.set(first.targetPath, read);
+          if (Result.isFailure(read)) {
+            yield* Effect.logWarning("policy delivery: could not read an instruction file", {
+              path: first.targetPath,
+              cause: read.failure,
+            });
+          }
+        }
+        if (Result.isFailure(read)) {
+          unread.add(flag);
+          continue;
+        }
+        const text = read.success;
+        const changed = rows.flatMap((row) => {
+          const id = blockId(row.project_id, row.key);
+          const found =
+            text === undefined
+              ? ({ kind: "absent" } satisfies Blocks.FoundBlock)
+              : Blocks.findBlock(text, policyMarkers(id));
+          if (found.kind === "found" && found.hash === row.renderedHash) return [];
+          return [
+            { id, change: found.kind === "absent" ? ("removed" as const) : ("edited" as const) },
+          ];
+        });
+        const ids = changed.map((block) => block.id);
+        judged.set(
+          flag,
+          changed.length === 0
+            ? undefined
+            : DeliveryDrift.flagText({
+                what: `The ${DeliveryDrift.quoted(ids)} policy block${ids.length > 1 ? "s" : ""}`,
+                path: first.targetPath,
+                change: changed.every((block) => block.change === "removed")
+                  ? "removed"
+                  : changed.every((block) => block.change === "edited")
+                    ? "edited"
+                    : "edited or removed",
+                plural: ids.length > 1,
+              }),
+        );
+      }
+      return yield* DeliveryDrift.reconcile(attention, {
+        pluginId: "policy",
+        dryRun,
+        judged,
+        leave: (flag) => unread.has(flag),
+      });
+    },
+    (effect) => Effect.provideContext(effect, services),
+  );
+
+  const run = Effect.fn("DeliverySweep.run")(function* (input: { readonly dryRun: boolean }) {
+    const installs = yield* installDue(input);
+    const drift = yield* flagDrift(input);
+    return {
+      examined: installs.examined,
+      acted: installs.acted + drift.changes,
+      flags: installs.flags + drift.standing,
+    };
+  });
 
   return { plugin: "policy", name: "delivery", run };
 });
