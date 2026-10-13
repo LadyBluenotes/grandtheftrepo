@@ -14,9 +14,9 @@ import * as Cause from "effect/Cause";
 import { AsyncResult } from "effect/reactivity";
 
 import { connectionAtomRuntime } from "~/connection/runtime";
-import { usePrimaryEnvironmentId } from "~/state/environments";
 import { useEnvironmentQuery } from "~/state/query";
 import { useAtomCommand } from "~/state/use-atom-command";
+import { usePluginEnvironmentId } from "../pluginState";
 
 const cavemanStatus = createPluginRpcQueryAtomFamily(connectionAtomRuntime, {
   label: "environment-data:plugins:caveman",
@@ -47,17 +47,17 @@ const notConnected = () =>
     ),
   );
 
-/** Caveman's install state, proxy and per-instance routes on the primary environment. */
+/** Caveman's install state, proxy and per-instance routes on the Plugins page's environment. */
 export function useCavemanStatus() {
-  const environmentId = usePrimaryEnvironmentId();
+  const environmentId = usePluginEnvironmentId();
   return useEnvironmentQuery(
     environmentId === null ? null : cavemanStatus({ environmentId, input: {} }),
   );
 }
 
-/** Switches one instance's route on the primary environment; `canWrite` follows the settings grant. */
+/** Switches one instance's route on the Plugins page's environment; `canWrite` follows the settings grant. */
 export function useCavemanSetRoute() {
-  const environmentId = usePrimaryEnvironmentId();
+  const environmentId = usePluginEnvironmentId();
   const run = useAtomCommand(cavemanSetRoute, { reportFailure: false });
   const canWrite = useAtomValue(cavemanSetRoute.permissionAtom(environmentId));
   return {
@@ -67,17 +67,17 @@ export function useCavemanSetRoute() {
   };
 }
 
-/** The newest `caveman learn` plan on the primary environment, with its top `limit` sinks and the scan's state. */
+/** The newest `caveman learn` plan on the Plugins page's environment, with its top `limit` sinks and the scan's state. */
 export function useCavemanLearnPlan(limit: number) {
-  const environmentId = usePrimaryEnvironmentId();
+  const environmentId = usePluginEnvironmentId();
   return useEnvironmentQuery(
     environmentId === null ? null : cavemanLearnPlan({ environmentId, input: { limit } }),
   );
 }
 
-/** Starts a `caveman learn` scan on the primary environment; `canWrite` follows the settings grant. */
+/** Starts a `caveman learn` scan on the Plugins page's environment; `canWrite` follows the settings grant. */
 export function useCavemanLearnRefresh() {
-  const environmentId = usePrimaryEnvironmentId();
+  const environmentId = usePluginEnvironmentId();
   const run = useAtomCommand(cavemanLearnRefresh, { reportFailure: false });
   const canWrite = useAtomValue(cavemanLearnRefresh.permissionAtom(environmentId));
   return {

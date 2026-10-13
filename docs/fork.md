@@ -11,7 +11,9 @@ directories and never edit an upstream file. Upstream is merged nightly by
 - `packages/contracts/src/plugins/` holds each plugin's schemas and method definitions.
 - `apps/web/src/plugins/` holds each plugin's screens.
   A plugin with a screen is registered in `apps/web/src/plugins/registry.ts` and reached at
-  `/plugins/<id>`; every plugin is listed, with an on/off switch, at `/plugins`.
+  `/plugins/<id>`; every plugin is listed, with an on/off switch, at `/plugins`. That page shows
+  the primary environment, or the one its `machine` search names; settings panels read
+  `usePluginEnvironmentId` so they follow it.
 
 Enabled state is `plugins.json` under the server state directory. A missing entry means enabled.
 Changes apply on the next server start.
@@ -58,6 +60,7 @@ them is resolved by keeping the line.
 | `apps/web/src/components/sidebar/mainAppLocation.ts`         | `/board` and the `/plugins` paths in `isSidebarUtilityPage`                                                                                                            |
 | `apps/web/src/components/sidebar/SidebarChrome.tsx`          | the board's `SidebarUtilityItem`, gated on `kanbanSupportedAtom`, and `<PluginSidebarEntries />` after the Usage entry, plus imports; `SidebarUtilityItem` is exported |
 | `apps/web/src/components/CommandPalette.tsx`                 | the board's `actionItems.push` block, gated the same way, plus imports                                                                                                 |
+| `third-party-licenses.config.json`                           | the `Caveman reply rules` entry at the end of `customNotices`, so the adapted policy text is credited in the app's license list                                        |
 
 ## Plugin services and the type system
 
@@ -90,9 +93,11 @@ them half-evaluated. The host hands `toolkitRegistration` to `ServerPlugin.mcp` 
   `<T3 home>/wiki/<project-slug>/`; the folder is changeable per project from the board.
   Its own database, `plugins/kanban.sqlite`, holds the emergency stop (`StopGate`, which a sweep
   that starts a thread must ask first; no launcher calls it yet). The `writers` sweep raises an
-  attention flag when two agents write one project. Mobile shows the board as a read-only list
-  grouped by column, from the Board row on a project's overview; it and the web board share the
-  board and active-plugin atoms in `packages/client-runtime/src/plugins/kanban.ts`. Server:
+  attention flag when two agents write one project. `kanban.attention.list` feeds the strip above
+  the board from the project's open host flags, its threads' pending questions and permission
+  requests, and, while routing runs, its routing mismatches. Mobile shows the board as a read-only
+  list grouped by column, from the Board row on a project's overview; it and the web board share
+  the board and active-plugin atoms in `packages/client-runtime/src/plugins/kanban.ts`. Server:
   `apps/server/src/plugins/kanban/`. Contracts: `packages/contracts/src/plugins/kanban.ts`. Web:
   `apps/web/src/plugins/kanban/`. Mobile: `apps/mobile/src/features/kanban/`. User guide:
   [Kanban board](./user/kanban.md).
@@ -152,9 +157,10 @@ them half-evaluated. The host hands `toolkitRegistration` to `ServerPlugin.mcp` 
   block. `policy.create`, `.accept`, `.install` and `.verify` are gateway methods, and the
   `policy_list` MCP tool reads. A supervisor sweep installs and verifies accepted policies an
   agent lacks or holds under older rules, but only while no run is active on the project (any
-  run, for `*`). The first start seeds `*` / `ponytail`, the six-question ladder, unless a policy of
-  that key exists in any state; the review plugin refuses a `convention` summary that starts with
-  `rung:` and names none of the six rung ids. Server: `apps/server/src/plugins/policy/`. Contracts:
+  run, for `*`). The first start seeds `*` / `ponytail`, the six-question ladder, and `*` /
+  `caveman`, the terse reply rules, each unless a policy of that key exists in any state; the
+  review plugin refuses a `convention` summary that starts with `rung:` and names none of the six
+  rung ids. Server: `apps/server/src/plugins/policy/`. Contracts:
   `packages/contracts/src/plugins/policy.ts`. No screen.
 - **review**: a reviewing agent's typed verdict on one checkpoint of another thread: `approve`, or
   `changes_requested` with one of six failure modes (`defect`, `incomplete`, `scope_drift`,

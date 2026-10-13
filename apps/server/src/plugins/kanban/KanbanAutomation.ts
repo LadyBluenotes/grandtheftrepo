@@ -7,6 +7,7 @@ import * as Stream from "effect/Stream";
 
 import * as ThreadManagementService from "../../orchestration-v2/ThreadManagementService.ts";
 import { forkParked } from "../../serverActivation.ts";
+import * as AttentionService from "./AttentionService.ts";
 import * as KanbanStore from "./KanbanStore.ts";
 import * as StopGate from "./StopGate.ts";
 import * as WriterSweep from "./WriterSweep.ts";
@@ -68,7 +69,7 @@ const start = Effect.gen(function* () {
   );
 });
 
-/** The store and the stop gate plus the automation, for the plugin's layer. */
+/** The store, the stop gate and the attention rows plus the automation, for the plugin's layer. */
 export const layer = Layer.effectDiscard(start).pipe(
-  Layer.provideMerge(Layer.merge(KanbanStore.layer, StopGate.layer)),
+  Layer.provideMerge(Layer.mergeAll(KanbanStore.layer, StopGate.layer, AttentionService.layer)),
 );

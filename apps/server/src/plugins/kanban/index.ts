@@ -8,7 +8,8 @@ import { migrations } from "./migrations.ts";
  * project's wiki folder, status automation from thread events, and MCP tools
  * so agents can file and read tickets. Its own database holds the emergency
  * stop; a sweep raises a host attention flag when two agents write the same
- * project.
+ * project, and `kanban.attention.list` shows a project's flags with its
+ * threads' pending requests above the board.
  */
 export const plugin = {
   id: "kanban",

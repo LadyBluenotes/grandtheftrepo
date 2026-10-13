@@ -30,6 +30,17 @@ card panel clears it.
 Done cards are archived after seven days. **Archived** at the top shows them; from the card panel
 you can unarchive or delete an archived card.
 
+## Waiting on you
+
+A strip above the columns lists what in the project is waiting on you, oldest first: questions and
+permission requests agents are waiting on, and flags other plugins raise, such as two agents
+writing the project at once, a stale review, a budget breach, or a thread that ran another model
+than routing recommended in the past seven days. Each row names its thread, or the
+project for a budget, and has a button that takes you there, or to the Plugins page for a budget.
+Rows cannot be dismissed: a row leaves on its own once its request is answered or its cause clears.
+Requests on settled or archived threads are not listed. A new flag shows up when you come back to
+the window or the board changes, and the strip is hidden while nothing waits.
+
 ## Cards
 
 Click a card to open it. The panel holds the title, status, priority (P0 to P5), verification,
