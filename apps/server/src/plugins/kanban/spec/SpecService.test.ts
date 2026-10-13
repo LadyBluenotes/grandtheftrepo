@@ -17,6 +17,7 @@ import {
   type RoutingEntry,
 } from "@t3tools/contracts";
 import * as Context from "effect/Context";
+import * as Deferred from "effect/Deferred";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -261,6 +262,7 @@ const start = Effect.gen(function* () {
           Layer.mock(ThreadManagementService.ThreadManagementService)({
             getThreadRecords: (threadId, fields, filter) =>
               projections.getThreadRecords(threadId, fields, filter).pipe(Effect.orDie),
+            getThreadShell: (threadId) => projections.getThreadShell(threadId).pipe(Effect.orDie),
           }),
           Layer.mock(ProjectService.ProjectService)({
             getById: (id) =>
@@ -378,6 +380,7 @@ const start = Effect.gen(function* () {
 
   return {
     spec,
+    sql,
     store,
     gate,
     launched,
@@ -694,6 +697,54 @@ describe("SpecService", () => {
         assert.strictEqual(attempt.status, "malformed");
         assert.strictEqual(attempt.reason, "The issue was deleted while the spec was drafted.");
         assert.deepEqual(yield* attempts, [{ status: "malformed", reason: attempt.reason }]);
+      }),
+    ).pipe(Effect.provide(layerTest)),
+  );
+
+  it.effect("starting the plugin closes an attempt whose thread was never created", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { spec, sql, launched, specify, file } = yield* start;
+        const lost = yield* file("Login loops", rough);
+        const alive = yield* file("Logout loops", rough);
+        yield* specify({ projectId, id: lost.id });
+        yield* specify({ projectId, id: alive.id });
+        // The process exited after storing both attempts; only the second thread got created.
+        yield* (yield* EventSink.EventSinkV2).write({
+          events: [threadCreated(launched[1]!.threadId!)],
+        });
+
+        // The plugin starts later, and the layer runs the reconciliation once, after activation.
+        yield* TestClock.adjust("1 second");
+        const reconciled = yield* Deferred.make<void>();
+        const withSignal = Layer.succeed(
+          SpecService.SpecService,
+          SpecService.SpecService.of({
+            ...spec,
+            reconcile: Effect.ensuring(spec.reconcile, Deferred.succeed(reconciled, undefined)),
+          }),
+        );
+        yield* Layer.build(
+          SpecReactor.layer.pipe(
+            Layer.provide(withSignal),
+            Layer.provide(Layer.succeed(SqlClient.SqlClient, sql)),
+          ),
+        );
+        yield* Deferred.await(reconciled);
+
+        const closed = yield* spec.latest({ projectId, id: lost.id });
+        assert.strictEqual(closed?.attempt.status, "malformed");
+        assert.strictEqual(
+          closed?.attempt.reason,
+          "The drafting thread was never started. Run specify again.",
+        );
+        assert.isNotNull(closed?.attempt.completedAt);
+        assert.strictEqual(closed?.issueStatus, "triage");
+        // Its run's end still reaches the reactor through the saved cursor.
+        assert.strictEqual(
+          (yield* spec.latest({ projectId, id: alive.id }))?.attempt.status,
+          "running",
+        );
       }),
     ).pipe(Effect.provide(layerTest)),
   );

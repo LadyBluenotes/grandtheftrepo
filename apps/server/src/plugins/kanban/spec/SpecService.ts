@@ -40,6 +40,9 @@ const ISSUE_CHANGED = "The issue changed while the spec was drafted. Run specify
 /** Why one is closed when the issue is gone: there is nothing to run specify on again. */
 const ISSUE_DELETED = "The issue was deleted while the spec was drafted.";
 
+/** Why a restart closes an attempt: no run exists that could ever end it. */
+const NEVER_STARTED = "The drafting thread was never started. Run specify again.";
+
 /** The run statuses that end a drafting thread's attempt. `waiting` still has a person to answer. */
 const ENDED = new Set<OrchestrationV2Run["status"]>([
   "completed",
@@ -101,6 +104,13 @@ export class SpecService extends Context.Service<
     ) => Effect.Effect<KanbanSpecReport | null, KanbanError>;
     /** Decides the running attempt whose drafting thread `run` belongs to, once the run has ended. */
     readonly finish: (run: OrchestrationV2Run) => Effect.Effect<void, KanbanError>;
+    /**
+     * For when the plugin starts. An attempt is stored before its thread is created, so a process
+     * that exited in between left one `running` that no run will ever end: this closes each
+     * attempt stored before this call whose thread does not exist as `malformed`. One whose thread
+     * exists is left to the reactor, which resumes from its saved cursor.
+     */
+    readonly reconcile: Effect.Effect<void, KanbanError>;
   }
 >()("t3/plugins/kanban/spec/SpecService") {}
 
@@ -473,7 +483,32 @@ const make = Effect.gen(function* () {
     });
   });
 
-  return SpecService.of({ specify, latest, finish });
+  const reconcile: SpecService["Service"]["reconcile"] = Effect.gen(function* () {
+    // Only attempts older than this call: a request that arrives while it runs is not stranded.
+    const startedAt = yield* nowIso;
+    const rows = yield* sql<AttemptRow>`SELECT * FROM spec_attempt
+        WHERE status = 'running' AND created_at < ${startedAt}`.pipe(
+      Effect.catchTags({ SqlError: io }),
+    );
+    for (const row of rows) {
+      const created =
+        row.child_thread_id === null
+          ? false
+          : yield* threads.getThreadShell(row.child_thread_id).pipe(
+              Effect.map((shell) => shell !== null),
+              // A thread that cannot be read is not proven missing, so its attempt stays.
+              Effect.catch((cause) =>
+                Effect.logWarning("kanban: could not look up a drafting thread", { cause }).pipe(
+                  Effect.as(true),
+                ),
+              ),
+            );
+      if (!created)
+        yield* close({ id: row.id, status: "malformed", text: null, reason: NEVER_STARTED });
+    }
+  }).pipe(Effect.withSpan("SpecService.reconcile"));
+
+  return SpecService.of({ specify, latest, finish, reconcile });
 });
 
 /** Over the plugin's `SqlClient`, which the host binds to `plugins/kanban.sqlite`. */

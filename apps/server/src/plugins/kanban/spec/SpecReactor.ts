@@ -2,6 +2,7 @@ import type { KanbanError } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 
+import { forkParked } from "../../../serverActivation.ts";
 import * as PluginReactor from "../../PluginReactor.ts";
 import * as SpecService from "./SpecService.ts";
 
@@ -16,12 +17,21 @@ export const handlers = (spec: SpecService.SpecService["Service"]) =>
 
 /**
  * The kanban plugin's one reactor. A new cursor starts at the newest event: no attempt can be
- * older than the plugin's first run, so nothing earlier is worth replaying.
+ * older than the plugin's first run, so nothing earlier is worth replaying. After activation, as
+ * the reactor's own replay does, it also closes the attempts an earlier process left `running`
+ * with no thread behind them.
  */
 export const layer = Layer.effectDiscard(
   Effect.gen(function* () {
     const spec = yield* SpecService.SpecService;
     yield* PluginReactor.start({ plugin: "kanban", from: "now", handlers: handlers(spec) });
+    yield* forkParked(
+      spec.reconcile.pipe(
+        Effect.catchCause((cause) =>
+          Effect.logWarning("kanban: could not reconcile spec attempts", { cause }),
+        ),
+      ),
+    );
   }).pipe(
     // A database that cannot take the reactor's tables is a defect, not a state the plugin runs in.
     Effect.orDie,
