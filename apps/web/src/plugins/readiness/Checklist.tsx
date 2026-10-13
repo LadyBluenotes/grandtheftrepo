@@ -18,6 +18,7 @@ import {
   SelectValue,
 } from "~/components/ui/select";
 import { useProjects } from "~/state/entities";
+import { usePrimaryEnvironmentId } from "~/state/environments";
 import { usePluginEnvironmentId } from "../pluginState";
 import { pluginRegistry } from "../registry";
 import {
@@ -49,6 +50,7 @@ export function ReadinessChecklist() {
 
 function Checklist({ environmentId }: { readonly environmentId: EnvironmentId }) {
   const projects = useProjects().filter((project) => project.environmentId === environmentId);
+  const primary = usePrimaryEnvironmentId() === environmentId;
   const [projectId, setProjectId] = useState<string | null>(null);
   const selected = projects.find((project) => project.id === projectId) ?? projects[0];
   const report = usePluginReadiness(environmentId, selected?.id ?? null);
@@ -56,7 +58,7 @@ function Checklist({ environmentId }: { readonly environmentId: EnvironmentId })
 
   // A failed re-read keeps the last data, so the error is checked first and stale checks never show.
   if (report.error === null && report.data === null) return null;
-  const context = { environmentId, projectId: selected?.id ?? null };
+  const context = { environmentId, primary, projectId: selected?.id ?? null };
 
   return (
     <SettingsSection

@@ -114,8 +114,10 @@ export type ReadinessLink =
 export const pluginRowId = (plugin: string) => `plugin-${plugin}`;
 
 /**
- * A check's link. `plugin` opens the plugin's own screen when it has one and is otherwise its row,
- * as `plugins` always is.
+ * A check's link. `plugin` opens the plugin's own screen when it has one and the checklist shows
+ * the primary environment: `/plugins/<id>` takes no `machine` yet, so for another environment it
+ * would open the primary one's. Otherwise it is the plugin's row on this page, as `plugins` always
+ * is, which keeps the page's environment.
  */
 export function readinessLink(
   target: ReadinessTarget | null,
@@ -123,6 +125,8 @@ export function readinessLink(
     readonly plugin: string;
     readonly title: string;
     readonly hasScreen: boolean;
+    /** The checklist's environment is the primary one, the one plugin screens show. */
+    readonly primary: boolean;
     readonly environmentId: EnvironmentId;
     readonly projectId: ProjectId | null;
   },
@@ -134,7 +138,7 @@ export function readinessLink(
     case "plugins":
       return row;
     case "plugin":
-      return context.hasScreen
+      return context.hasScreen && context.primary
         ? {
             kind: "screen",
             to: "/plugins/$pluginId",

@@ -54,6 +54,7 @@ describe("readinessLink", () => {
     plugin: "policy",
     title: "Policies",
     hasScreen: true,
+    primary: true,
     environmentId: EnvironmentId.make("env-1"),
     projectId: ProjectId.make("project-1"),
   };
@@ -69,6 +70,14 @@ describe("readinessLink", () => {
       label: "Policies settings",
     });
     expect(readinessLink("plugins", context)?.kind).toBe("row");
+  });
+
+  it("keeps a non-primary environment's link on its row, since plugin screens show the primary", () => {
+    expect(readinessLink("plugin", { ...context, primary: false })).toEqual({
+      kind: "row",
+      plugin: "policy",
+      label: "Policies settings",
+    });
   });
 
   it("opens the project's board in the page's environment, and has no link without a target", () => {

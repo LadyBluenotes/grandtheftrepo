@@ -37,7 +37,7 @@ export const sweepsCheck = (status: Pick<SupervisorStatus, "dryRun" | "sweeps">)
 
 const kindLabel = (kind: LearningOwnerKind) => kind.replaceAll("_", " ");
 
-/** Each owner kind that has a candidate item needs a promoter, or its candidates wait. */
+/** Each owner kind with a candidate needs a promoter whose plugin runs (`ownerKinds`), or its candidates wait. */
 export const promotersCheck = (
   candidates: ReadonlyArray<Pick<LearningItem, "ownerKind">>,
   registered: ReadonlyArray<LearningOwnerKind>,
@@ -56,7 +56,7 @@ export const promotersCheck = (
   const kinds = [...new Set(waiting)].map(kindLabel);
   return Readiness.attention(
     PROMOTERS,
-    `${waiting.length} ${waiting.length === 1 ? "candidate" : "candidates"} for ${Readiness.list(kinds)} ${waiting.length === 1 ? "waits" : "wait"}: no promoter takes ${kinds.length === 1 ? "that owner kind" : "those owner kinds"} yet.`,
+    `${waiting.length} ${waiting.length === 1 ? "candidate" : "candidates"} for ${Readiness.list(kinds)} ${waiting.length === 1 ? "waits" : "wait"}: no running promoter takes ${kinds.length === 1 ? "that owner kind" : "those owner kinds"}.`,
   );
 };
 

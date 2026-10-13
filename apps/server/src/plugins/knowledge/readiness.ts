@@ -44,7 +44,10 @@ export const filesCheck = (files: ReadonlyArray<InstructionFile>) => {
   );
 };
 
-/** Every agent in use holds the accepted pages and the index as they render now (`verify`). */
+/**
+ * Every agent in use holds the accepted pages and the index as they render now (`status`), so a page
+ * accepted but not yet installed is not delivered.
+ */
 export const deliveredCheck = (accepted: number, results: ReadonlyArray<KnowledgeVerifyResult>) => {
   const pages = `${accepted} accepted ${accepted === 1 ? "page" : "pages"}`;
   if (results.length === 0) {
@@ -98,14 +101,14 @@ export const layer = Layer.effect(
         projectId === null
           ? Effect.succeed([])
           : Effect.gen(function* () {
-              const results = yield* store.verify({ projectId });
+              const results = yield* store.status({ projectId });
               const files = yield* Effect.forEach(results, (result) =>
                 Effect.map(writable(result.path), (ok) => ({ path: result.path, writable: ok })),
               );
               const accepted = yield* store.list({ projectId, state: "accepted" });
               return [filesCheck(files), deliveredCheck(accepted.length, results)];
             }).pipe(
-              // `verify` resolves the project and its agents, so neither check stands without it.
+              // `status` resolves the project and its agents, so neither check stands without it.
               Effect.catch((error) =>
                 Effect.succeed([
                   Readiness.unreadable(FILES, error),

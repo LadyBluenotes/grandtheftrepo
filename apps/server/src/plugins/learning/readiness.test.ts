@@ -50,7 +50,7 @@ describe("promotersCheck", () => {
     assert.strictEqual(check.status, "attention");
     assert.strictEqual(
       check.sentence,
-      "2 candidates for project knowledge wait: no promoter takes that owner kind yet.",
+      "2 candidates for project knowledge wait: no running promoter takes that owner kind.",
     );
   });
 });

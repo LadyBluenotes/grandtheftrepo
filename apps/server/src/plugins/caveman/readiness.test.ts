@@ -18,7 +18,32 @@ describe("proxyCheck", () => {
     assert.strictEqual(check.status, "attention");
     assert.strictEqual(check.target, "plugins");
   });
+
+  it("tells a malformed gateway URL from one on another machine, though neither is probed", () => {
+    for (const origin of ["not a url", "localhost:8787", "ftp://127.0.0.1:8787"]) {
+      const check = Checks.proxyCheck(origin, null);
+      assert.strictEqual(check.status, "attention", origin);
+      assert.include(check.sentence, "is not a valid origin");
+    }
+    const remote = Checks.proxyCheck("https://gateway.example.com", null);
+    assert.strictEqual(remote.status, "ready");
+    assert.include(remote.sentence, "is not on this machine");
+  });
 });
+
+it.effect("reads a malformed CAVE_GATEWAY_URL as a setting to fix", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const checks = yield* Context.get(yield* Layer.build(Checks.layer), Checks.CavemanReadiness)
+        .checks(null)
+        .pipe(Effect.provideService(HostProcess.Environment, { CAVE_GATEWAY_URL: "not a url" }));
+      assert.deepEqual(
+        checks.map((check) => check.status),
+        ["attention"],
+      );
+    }),
+  ),
+);
 
 it.effect("probes the proxy's loopback port once per request", () =>
   Effect.scoped(
