@@ -12,6 +12,7 @@
 - [Kanban board](./user/kanban.md)
 - [Policies and reviews](./user/policies-and-reviews.md)
 - [Project knowledge](./user/knowledge.md)
+- [Learning](./user/learning.md)
 - [Weekly report](./user/weekly-report.md)
 - [Appearance and themes](./user/appearance.md)
 - [Keyboard shortcuts](./user/keybindings.md)

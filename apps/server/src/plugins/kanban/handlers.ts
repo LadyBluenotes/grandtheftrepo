@@ -6,6 +6,7 @@ import * as Stream from "effect/Stream";
 import * as PluginRpc from "../PluginRpc.ts";
 import * as AttentionService from "./AttentionService.ts";
 import * as KanbanStore from "./KanbanStore.ts";
+import * as SpecService from "./spec/SpecService.ts";
 import * as StopGate from "./StopGate.ts";
 
 /** The RPC group needs every handler even when the plugin is off, so an inactive plugin answers with an error. */
@@ -18,6 +19,9 @@ const store = Effect.serviceOption(KanbanStore.KanbanStore).pipe(
   Effect.flatMap(Option.match({ onNone: inactive, onSome: Effect.succeed })),
 );
 const stopGate = Effect.serviceOption(StopGate.StopGate).pipe(
+  Effect.flatMap(Option.match({ onNone: inactive, onSome: Effect.succeed })),
+);
+const spec = Effect.serviceOption(SpecService.SpecService).pipe(
   Effect.flatMap(Option.match({ onNone: inactive, onSome: Effect.succeed })),
 );
 const attention = Effect.serviceOption(AttentionService.AttentionService).pipe(
@@ -34,6 +38,8 @@ export const table = PluginRpc.defineHandlers(KANBAN_METHODS)({
   stopSet: ({ reason }) => Effect.flatMap(stopGate, (gate) => gate.set({ setBy: "user", reason })),
   stopClear: () => Effect.flatMap(stopGate, (gate) => gate.clear).pipe(Effect.as({})),
   stopGet: () => Effect.flatMap(stopGate, (gate) => gate.get),
+  ticketSpecify: (input) => Effect.flatMap(spec, (s) => s.specify(input)),
+  specGet: (input) => Effect.flatMap(spec, (s) => s.latest(input)),
   attentionList: ({ projectId }) => Effect.flatMap(attention, (rows) => rows.list(projectId)),
 });
 

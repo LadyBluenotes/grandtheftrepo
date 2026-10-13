@@ -23,8 +23,8 @@ export class StopGate extends Context.Service<
     /** Clears the stop; succeeds when it was not set. */
     readonly clear: Effect.Effect<void, KanbanError>;
     /**
-     * What any sweep that starts a thread calls first. It fails with a `gated` error while the
-     * stop is set, and the caller keeps its pending launch for the next tick.
+     * What any sweep, or spec drafting, calls before it starts a thread. It fails with a `gated`
+     * error while the stop is set; a sweep keeps its pending launch for the next tick.
      */
     readonly assertLaunchAllowed: Effect.Effect<void, KanbanError>;
   }
