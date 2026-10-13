@@ -103,6 +103,7 @@ const layerTest = Layer.mergeAll(
 );
 
 const decodeError = Schema.decodeUnknownEffect(KanbanError);
+const decodeSpecReport = Schema.decodeUnknownEffect(KANBAN_METHODS.specGet.output);
 const specInput = { projectId: "project-1", id: "some-issue" };
 
 const operate = (method: string, input: unknown) =>
@@ -175,7 +176,9 @@ it.effect("spec.get still reports an attempt once its issue is deleted", () =>
         });
         const input = { projectId, id: "gone-soon" };
         yield* operate(KANBAN_METHODS.ticketSpecify.method, { ...input, useExisting: true });
-        const before = yield* read(KANBAN_METHODS.specGet.method, input);
+        const before = yield* read(KANBAN_METHODS.specGet.method, input).pipe(
+          Effect.flatMap(decodeSpecReport),
+        );
         assert.deepEqual(
           [before?.issueStatus, before?.attempt.status, before?.attempt.reason],
           ["triage", "malformed", "Missing section: Goal."],
@@ -183,7 +186,9 @@ it.effect("spec.get still reports an attempt once its issue is deleted", () =>
 
         yield* write({ projectId, action: "issue.archive", id: "gone-soon" });
         yield* write({ projectId, action: "issue.delete", id: "gone-soon" });
-        const after = yield* read(KANBAN_METHODS.specGet.method, input);
+        const after = yield* read(KANBAN_METHODS.specGet.method, input).pipe(
+          Effect.flatMap(decodeSpecReport),
+        );
         assert.deepEqual(
           [after?.issueStatus, after?.attempt.status, after?.attempt.reason],
           [null, "malformed", "Missing section: Goal."],
