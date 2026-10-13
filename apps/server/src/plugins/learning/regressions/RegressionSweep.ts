@@ -1,4 +1,4 @@
-import type { ProjectId } from "@t3tools/contracts";
+import type { ProjectId, TelemetryMeasuresResult } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
@@ -10,15 +10,20 @@ import * as ItemStore from "../items/ItemStore.ts";
 import { compare } from "./compare.ts";
 import { thresholdFor } from "./thresholds.ts";
 
+/** Whether a window has a measure to compare; telemetry answers every one `unavailable` when it cannot trust its tables. */
+const comparable = (window: TelemetryMeasuresResult) =>
+  window.some((measure) => measure.state !== "unavailable");
+
 /**
  * Compares each project's efficiency measures over the last seven whole UTC days with the seven
  * before, once a day, and strengthens the project's `efficiency_regression:<measure>` item for
  * each measure that got worse past its threshold, keyed by measure and window so a window adds
  * evidence once. A recovery does nothing. A project's `regression_runs` row is written only after
- * all its measures were compared, so a crash or timeout compares it again on the next tick, and
- * a project whose measures cannot be read waits for the next tick too. The measures come from the
- * telemetry plugin, read where the sweep runs: while it is off the sweep does nothing. A dry run
- * counts and writes nothing.
+ * all its measures were compared, so a crash or timeout compares it again on the next tick. A
+ * project waits for the next tick too when its measures cannot be read, or when either window is
+ * unavailable in every measure, as telemetry answers while it replays the event log or holds a
+ * failed event. The measures come from the telemetry plugin, read where the sweep runs: while it
+ * is off the sweep does nothing. A dry run counts and writes nothing.
  */
 export const sweep = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
@@ -57,8 +62,9 @@ export const sweep = Effect.gen(function* () {
           });
           continue;
         }
-        examined += 1;
         const [before, after] = measured.success;
+        if (!comparable(before) || !comparable(after)) continue;
+        examined += 1;
         const earlier = new Map(before.map((measure) => [measure.measure, measure]));
         const regressions = after.flatMap((measure) => {
           const was = earlier.get(measure.measure);
@@ -79,7 +85,7 @@ export const sweep = Effect.gen(function* () {
         const ranAt = DateTime.formatIso(yield* DateTime.now);
         yield* sql`INSERT INTO regression_runs (project_id, window_from, ran_at)
           VALUES (${projectId}, ${windowFrom}, ${ranAt})
-          ON CONFLICT (project_id, window_from) DO NOTHING`;
+          ON CONFLICT (window_from, project_id) DO NOTHING`;
       }
       return { examined, acted, flags: 0 };
     });

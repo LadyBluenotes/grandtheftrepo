@@ -84,14 +84,15 @@ const promoteIndexes: PluginMigration[2] = Effect.gen(function* () {
 });
 
 // The regression sweep writes a project's row once every measure of the window starting at
-// `window_from` was compared, and skips a project that has one.
+// `window_from` was compared, and skips a project that has one. It reads by window, so the key
+// leads with it.
 const regressionRuns: PluginMigration[2] = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
   yield* sql`CREATE TABLE regression_runs (
     project_id TEXT NOT NULL,
     window_from TEXT NOT NULL,
     ran_at TEXT NOT NULL,
-    PRIMARY KEY (project_id, window_from)
+    PRIMARY KEY (window_from, project_id)
   )`;
 });
 

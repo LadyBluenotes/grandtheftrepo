@@ -219,6 +219,29 @@ it.effect(
     ),
 );
 
+it.effect("a window telemetry answers all unavailable is not marked compared", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const learning = yield* setup();
+      // As while telemetry replays the event log: every measure unavailable.
+      const replaying = { state: "unavailable", missingReason: "Still replaying." } as const;
+      learning.windows.set(day("2026-09-28"), [measure("context_efficiency", 1200)]);
+      learning.windows.set(day("2026-10-05"), [measure("context_efficiency", null, replaying)]);
+
+      assert.deepEqual(yield* learning.sweep(), { examined: 0, acted: 0, flags: 0 });
+      assert.deepEqual(yield* learning.runs, []);
+      assert.deepEqual(yield* learning.itemsOf(projectId), []);
+
+      // Caught up by a later tick the same day: compared and marked.
+      yield* TestClock.adjust("1 minute");
+      learning.windows.set(day("2026-10-05"), [measure("context_efficiency", 1700)]);
+      assert.deepEqual(yield* learning.sweep(), { examined: 1, acted: 1, flags: 0 });
+      assert.strictEqual((yield* learning.runs).length, 1);
+      assert.strictEqual((yield* learning.itemsOf(projectId)).length, 1);
+    }),
+  ),
+);
+
 it.effect("a second sweep the same day asks nothing; a retry after a crash adds no evidence", () =>
   Effect.scoped(
     Effect.gen(function* () {
