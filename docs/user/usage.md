@@ -145,7 +145,9 @@ A fourth budget caps the largest single tool result at 8,000 estimated tokens, j
 project has at least 20 tool calls in the week. It counts every run, whatever its tier, and works
 with the routing plugin off. Its flag names the tool and the thread, with a hint such as reading a
 line range or paginating. Sizes are estimates, not a tokenizer's counts: characters over four, with
-an inline image as 1,500.
+an inline image as 1,500. Shell commands group by the program they run, such as `command:git`; a
+Windows `cmd` or PowerShell wrapper groups under the wrapper (`command:cmd`, `command:pwsh`), and a
+heredoc or an alias under its first word.
 
 Edit each budget's threshold, minimum sample and on/off switch under **Plugins → Telemetry**.
 Turn a budget off to pause it; **Remove** deletes it and its history.

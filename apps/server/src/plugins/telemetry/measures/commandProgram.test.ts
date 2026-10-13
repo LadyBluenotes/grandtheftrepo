@@ -109,3 +109,18 @@ it("follows nested shell scripts only so far", () => {
   assert.strictEqual(programName("sh -c 'git status'", 3), "git");
   assert.strictEqual(programName("sh -c 'git status'", 4), null);
 });
+
+it("groups what the client parser follows beyond POSIX under the wrapper or the first word", () => {
+  assert.deepEqual(
+    [
+      "cmd /c cd C:\\work && npm test",
+      'pwsh -Command "npm test"',
+      "powershell -NoProfile -Command npm test",
+      "ll -la",
+      "cat <<EOF\nhello\nEOF",
+      "npm test > out.txt",
+      "> out.txt echo hi",
+    ].map((command) => programName(command)),
+    ["cmd", "pwsh", "powershell", "ll", "cat", "npm", null],
+  );
+});

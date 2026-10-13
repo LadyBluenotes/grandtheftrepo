@@ -1,9 +1,16 @@
 /*
- * The rules of `commandProgramName` in `packages/client-runtime/src/work-log/commandLabel.ts`,
- * which names the program a command ran in the work log, for POSIX shells: the server cannot
- * import that package. PowerShell and cmd launchers, heredocs, aliases and array assignments are
- * not followed; a command like that is named by its first word or, when it has none, by nothing.
- * Keep the two in step when the client's rules change.
+ * A POSIX subset of `commandProgramName` in `packages/client-runtime/src/work-log/commandLabel.ts`,
+ * which names the program a command ran in the work log. The server cannot import that package,
+ * so the rules for `sh -c` and `bash -lc` wrappers, `env`, `sudo`, setup builtins, control flow
+ * and compound commands are copied, and nothing keeps the two in step. It is not the same parser:
+ * the client also follows `cmd /c`, `pwsh -Command` and other PowerShell forms, heredocs, aliases
+ * and redirections, and this one does not.
+ *
+ * The measures group tool output by this name, so the difference only moves a call between
+ * buckets: a Windows wrapper groups under the wrapper (`command:cmd`, `command:pwsh`), a heredoc
+ * or an alias under its first word (`command:cat`), and a command that begins with a redirection,
+ * having no program, under `command:unknown`. Full parity would mean copying or relocating
+ * upstream code for a label that only groups costs.
  */
 
 /** Nested `<shell> -c <script>` wrappers followed, and top-level segments looked through. */

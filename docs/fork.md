@@ -157,7 +157,8 @@ them half-evaluated. The host hands `toolkitRegistration` to `ServerPlugin.mcp` 
   drop a repeat; no promoter is registered yet, so records wait. A third sweep compares each
   project's telemetry measures over the last seven whole UTC days with the seven before, once a
   day, and opens or strengthens an `efficiency_regression:<measure>` item, with no owner kind, for
-  each measure worse by its threshold in `regressions/thresholds.ts`; with telemetry off it does
+  each measure worse by its threshold in `regressions/thresholds.ts`, except a volume measure
+  such as `tool_output_total`, which that file lists as not compared; with telemetry off it does
   nothing. Server:
   `apps/server/src/plugins/learning/`. Contracts:
   `packages/contracts/src/plugins/learning.ts`. No screen yet.
