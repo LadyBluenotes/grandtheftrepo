@@ -13,7 +13,10 @@ import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/sql/SqlClient";
 
 import * as CheckpointDiffQuery from "../../../checkpointing/CheckpointDiffQuery.ts";
-import { CheckpointRefUnavailableError } from "../../../checkpointing/Errors.ts";
+import {
+  CheckpointRefUnavailableError,
+  CheckpointWorkspacePathMissingError,
+} from "../../../checkpointing/Errors.ts";
 import * as EventSink from "../../../orchestration-v2/EventSink.ts";
 import * as EventStore from "../../../orchestration-v2/EventStore.ts";
 import * as ProjectionStore from "../../../orchestration-v2/ProjectionStore.ts";
@@ -90,18 +93,31 @@ const refFrom = (turnCount: number, checkpoint: "from" | "to") =>
     checkpoint,
   });
 
+/** A diff the turn cannot have: its workspace is gone. */
+const workspaceGone = new CheckpointWorkspacePathMissingError({
+  operation: "CheckpointDiffQuery.getTurnDiff",
+  threadId: reviewed,
+});
+
 /**
  * The review harness with the scan's reactor over the real event sink and a turn diff per
- * `from->to` pair from `diffs` (an empty diff for any other), plus the security sweep with the
- * learning plugin's corrections. Without `diffs` the reactor's context has no diff query.
+ * `from->to` pair from `diffs`, read when asked (an empty diff for any other), plus the security
+ * sweep with the learning plugin's corrections and the reactor's retry. Without `diffs` neither the
+ * reactor's context nor the sweep's has a diff query.
  */
-const boot = (diffs?: Readonly<Record<string, string | CheckpointRefUnavailableError>>) =>
+const boot = (
+  diffs?: Readonly<
+    Record<string, string | CheckpointRefUnavailableError | CheckpointWorkspacePathMissingError>
+  >,
+) =>
   Effect.gen(function* () {
     const kit = yield* harness;
     const asked = yield* Ref.make<ReadonlyArray<string>>([]);
     const diffQuery = CheckpointDiffQuery.CheckpointDiffQuery.of({
       getFullThreadDiff: () => Effect.die("unused"),
-      getTurnDiff: ({ threadId, fromTurnCount, toTurnCount }) => {
+      getTurnDiff: ({ threadId, fromTurnCount, toTurnCount, ignoreWhitespace }) => {
+        // The scan reads the diff as written: whitespace-only changes can matter.
+        if (ignoreWhitespace !== false) return Effect.die("the scan must not ignore whitespace");
         const key = `${fromTurnCount}->${toTurnCount}`;
         const diff = diffs?.[key] ?? "";
         return Ref.update(asked, (all) => [...all, key]).pipe(
@@ -124,12 +140,15 @@ const boot = (diffs?: Readonly<Record<string, string | CheckpointRefUnavailableE
     const started = PluginReactor.start({ plugin: "review", from: "start", handlers }).pipe(
       Effect.provideService(SqlClient.SqlClient, kit.review),
     );
-    const startReactor =
+    const withDiffs = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
       diffs === undefined
-        ? started
-        : started.pipe(Effect.provideService(CheckpointDiffQuery.CheckpointDiffQuery, diffQuery));
+        ? effect
+        : effect.pipe(Effect.provideService(CheckpointDiffQuery.CheckpointDiffQuery, diffQuery));
+    const startReactor = withDiffs(started);
     const reactor = yield* startReactor;
-    const sweep = yield* SecurityScanReactor.sweep.pipe(Effect.provide(layerDeps));
+    const sweep = yield* SecurityScanReactor.sweep(reactor.retryFailed()).pipe(
+      Effect.provide(layerDeps),
+    );
     const publish = (...events: ReadonlyArray<OrchestrationV2DomainEvent>) =>
       Effect.flatMap(EventSink.EventSinkV2, (sink) => sink.write({ events })).pipe(
         Effect.andThen(reactor.drain),
@@ -145,9 +164,13 @@ const boot = (diffs?: Readonly<Record<string, string | CheckpointRefUnavailableE
           Effect.flatMap((again) => again.drain),
         ),
       ),
-      sweep: sweep
-        .run({ dryRun: false })
-        .pipe(Effect.provideService(CorrectionStore.CorrectionStore, kit.corrections)),
+      // A retried event reads the diff query from the sweep's context, as from the supervisor's.
+      sweep: withDiffs(sweep.run({ dryRun: false })).pipe(
+        Effect.provideService(CorrectionStore.CorrectionStore, kit.corrections),
+      ),
+      failures: kit.review<{
+        readonly attempts: number;
+      }>`SELECT attempts FROM host_reactor_failure ORDER BY sequence`,
       holdFlags: kit.attention.listOpen({ pluginId: "review", kind: "security_hold" }),
     };
   });
@@ -315,7 +338,58 @@ it.effect("without a diff query the scan skips the event and records no failure"
       const kit = yield* boot();
       yield* kit.publish(captured(turnCheckpoint(1)));
       assert.deepEqual(yield* kit.security.findings({ threadId: reviewed }), []);
-      assert.deepEqual(yield* kit.review`SELECT sequence FROM host_reactor_failure`, []);
+      assert.deepEqual(yield* kit.failures, []);
+    }),
+  ).pipe(Effect.provide(layerSink)),
+);
+
+it.effect("block: a turn the scan cannot read holds the thread instead of passing as clean", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const kit = yield* boot({ "0->1": workspaceGone });
+      yield* kit.security.setMode({ projectId, mode: "block" });
+      yield* kit.publish(captured(turnCheckpoint(1)));
+
+      assert.deepEqual(yield* kit.failures, []);
+      const [finding, ...rest] = yield* kit.security.findings({ threadId: reviewed });
+      assert.deepEqual(rest, []);
+      assert.deepInclude(finding, { patternId: "scan_failed", file: "", line: 0 });
+      const held = yield* refusal(
+        kit.requests.request({ threadId: reviewed, requestedBy: "user" }),
+      );
+      assert.strictEqual(
+        held.message,
+        "Security hold: 1 finding needs acknowledgement. Call review_security_ack with a reason.",
+      );
+      // A failed scan is no evidence of work going wrong, so it records no correction.
+      assert.deepInclude(yield* kit.sweep, { examined: 1, acted: 0, flags: 1 });
+      assert.strictEqual(yield* kit.correctionCount, 0);
+
+      yield* kit.security.ack({ threadId: reviewed, reason: "Checked the turn by hand." });
+      const asked = yield* kit.requests.request({ threadId: reviewed, requestedBy: "user" });
+      assert.strictEqual(asked.status, "open");
+    }),
+  ).pipe(Effect.provide(layerSink)),
+);
+
+it.effect("warn: a failed scan is retried by the sweep until it reads the turn", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const diffs: Record<string, string | CheckpointWorkspacePathMissingError> = {
+        "0->1": workspaceGone,
+      };
+      const kit = yield* boot(diffs);
+      yield* kit.publish(captured(turnCheckpoint(1)));
+      assert.deepEqual(yield* kit.failures, [{ attempts: 1 }]);
+      assert.deepEqual(yield* kit.security.findings({ threadId: reviewed }), []);
+
+      diffs["0->1"] = configDiff([`+export const token = "${token}";`]);
+      yield* kit.sweep;
+      assert.deepEqual(yield* kit.failures, []);
+      assert.deepEqual(
+        (yield* kit.security.findings({ threadId: reviewed })).map((finding) => finding.patternId),
+        ["secret.token"],
+      );
     }),
   ).pipe(Effect.provide(layerSink)),
 );

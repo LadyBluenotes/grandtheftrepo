@@ -237,3 +237,34 @@ it.effect("examines at most 100 threads a tick and takes the rest on the next", 
     }),
   ),
 );
+
+it.effect("a thread under a security hold gets no new request until the hold is acknowledged", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const { requests, security, sweep, captureLater, rows, review } = yield* fixture;
+      const asked = yield* requests.request({ threadId: reviewed, requestedBy: "user" });
+      yield* captureLater;
+      // The turn that captured `later` added a finding while the project was in `block`.
+      yield* review`INSERT INTO security_finding
+          (thread_id, checkpoint_id, pattern_id, file, line, blocking, created_at)
+          VALUES (${reviewed}, ${later}, 'secret.token', 'src/config.ts', 2, 1,
+            '2026-10-04T00:00:00.000Z')`;
+
+      assert.deepEqual(yield* sweep({ dryRun: false }), { examined: 1, acted: 0, flags: 0 });
+      assert.deepEqual(
+        (yield* rows).map((row) => [row.id, row.checkpoint_id, row.status]),
+        [[asked.id, ready, "open"]],
+      );
+
+      yield* security.ack({ threadId: reviewed, reason: "A test fixture." });
+      assert.deepEqual(yield* sweep({ dryRun: false }), { examined: 1, acted: 2, flags: 1 });
+      assert.deepEqual(
+        (yield* rows).map((row) => [row.checkpoint_id, row.status]),
+        [
+          [ready, "stale"],
+          [later, "open"],
+        ],
+      );
+    }),
+  ),
+);

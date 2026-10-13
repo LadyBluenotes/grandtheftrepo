@@ -52,11 +52,13 @@ you roll the thread back to the checkpoint it reviewed.
 ### Security scan
 
 After each turn, T3 Code checks the lines the agent added for leaked secrets (AWS, GitHub and
-OpenAI-style keys, and private keys), downloaded code run with `eval` or piped into `sh` or `bash`,
+OpenAI-style keys, and private keys), downloaded code run with `eval` or piped into a shell,
 `${{ github.event.* }}` expressions in a GitHub workflow's `run:` steps, and shell commands built
 from variables. Removed and unchanged lines are never checked, and the matched text is never
 stored. Each project's security mode is `warn` unless changed: findings are recorded, and agents
 list them with the `review_security_findings` tool. In `block`, a finding also holds the thread:
 review requests are refused and the thread is flagged until someone acknowledges every finding with
-the `review_security_ack` tool and a reason, which is kept with the findings. `off` skips the check.
-A mode change applies to later turns. There is no screen to change the mode yet.
+the `review_security_ack` tool and a reason, which is kept with the findings. A turn the check could
+not read holds the thread the same way, listed as a `scan_failed` finding, so look at that turn
+yourself before acknowledging it. `off` skips the check. A mode change applies to later turns. There
+is no screen to change the mode yet.

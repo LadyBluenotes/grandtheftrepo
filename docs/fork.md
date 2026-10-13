@@ -163,7 +163,10 @@ them half-evaluated. The host hands `toolkitRegistration` to `ServerPlugin.mcp` 
   reactor tests the lines each root-run turn adds against six fixed patterns unless the project's
   security mode is `off`, and the `review/security` sweep records each finding as a `security`
   correction, because a reactor sees only its own plugin's services; in `block` a finding refuses
-  `review.request` and keeps a `security_hold` flag until `review.security.ack`. Server:
+  `review.request`, holds back the invalidation sweep's replacement request and keeps a
+  `security_hold` flag until `review.security.ack`. The same sweep calls the reactor's
+  `retryFailed` each tick, and in `block` a turn the scan cannot read is held as a `scan_failed`
+  finding rather than passed. Server:
   `apps/server/src/plugins/review/`. Contracts: `packages/contracts/src/plugins/review.ts`. No
   screen yet. User guide: [Policies and reviews](./user/policies-and-reviews.md#reviews).
 - **caveman**: whether each provider instance's model traffic goes through caveman's loopback

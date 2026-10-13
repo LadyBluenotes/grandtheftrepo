@@ -13,7 +13,7 @@ import * as Attention from "../../Attention.ts";
 import * as CorrectionStore from "../../learning/CorrectionStore.ts";
 import * as PluginReactor from "../../PluginReactor.ts";
 import * as PluginSupervisor from "../../PluginSupervisor.ts";
-import { scan } from "./patterns.ts";
+import { type Match, scan } from "./patterns.ts";
 import {
   type FindingRow,
   flagKey,
@@ -26,6 +26,9 @@ import {
 /** Findings one sweep tick records corrections for; the rest wait for the next tick. */
 const BATCH_SIZE = 100;
 
+/** What a turn the scan could not read records in a `block` project, so the thread is held. */
+const SCAN_FAILED: ReadonlyArray<Match> = [{ patternId: "scan_failed", file: "", line: 0 }];
+
 /**
  * The diff of the turn ending at `ordinal`, from the turn before it. A stopped turn has no
  * checkpoint to diff from, so the diff starts at the last one before it that has; empty when this
@@ -37,8 +40,9 @@ const turnDiff = Effect.fn("SecurityScanReactor.turnDiff")(function* (
   ordinal: number,
 ) {
   for (let from = ordinal - 1; from >= 0; from--) {
+    // Whitespace counts: an indentation change can move a line under a workflow's `run:`.
     const diff = yield* diffs
-      .getTurnDiff({ threadId, fromTurnCount: from, toTurnCount: ordinal })
+      .getTurnDiff({ threadId, fromTurnCount: from, toTurnCount: ordinal, ignoreWhitespace: false })
       .pipe(
         Effect.map((turn) => turn.diff),
         Effect.catchTags({
@@ -64,6 +68,24 @@ export const handlers = Effect.gen(function* () {
   const threads = yield* ThreadManagementService.ThreadManagementService;
   const attention = yield* Attention.Attention;
 
+  /** The matches on the lines the turn added, or none when the checkpoint is not a root run's. */
+  const scanTurn = (threadId: ThreadId, scopeId: string, ordinal: number) =>
+    Effect.gen(function* () {
+      const { checkpointScopes } = yield* threads.getThreadRecords(threadId, ["checkpointScopes"]);
+      const root = checkpointScopes.some(
+        (scope) => scope.id === scopeId && scope.kind === "root_run",
+      );
+      if (!root) return [];
+      // Read from the reactor fiber's context, which the server's chain gives it, rather than
+      // required of the layer: that would put it in every plugin's requirements for this alone.
+      const diffs = yield* Effect.serviceOption(CheckpointDiffQuery.CheckpointDiffQuery);
+      if (Option.isNone(diffs)) {
+        yield* Effect.logWarning("review: security scan skipped, no checkpoint diff query");
+        return [];
+      }
+      return scan(yield* turnDiff(diffs.value, threadId, ordinal));
+    });
+
   const result: PluginReactor.Handlers<
     SqlError.SqlError | Orchestrator.OrchestratorV2Error | CheckpointServiceError
   > = {
@@ -78,22 +100,18 @@ export const handlers = Effect.gen(function* () {
         if (shell === null || shell.deletedAt !== null) return;
         const mode = yield* modeOf(sql, shell.projectId);
         if (mode === "off") return;
-        const { checkpointScopes } = yield* threads.getThreadRecords(threadId, [
-          "checkpointScopes",
-        ]);
-        const root = checkpointScopes.some(
-          (scope) => scope.id === checkpoint.scopeId && scope.kind === "root_run",
+        // In `warn` a failed scan fails the event, which the sweep retries. In `block` it holds the
+        // thread instead, so a turn nobody could check never passes as clean.
+        const matches = yield* scanTurn(threadId, checkpoint.scopeId, ordinal).pipe(
+          Effect.catch((cause) =>
+            mode === "block"
+              ? Effect.logWarning("review: security scan failed; holding the thread", {
+                  threadId,
+                  cause,
+                }).pipe(Effect.as(SCAN_FAILED))
+              : Effect.fail(cause),
+          ),
         );
-        if (!root) return;
-        // Read from the reactor fiber's context, which the server's chain gives it, rather than
-        // required of the layer: that would put it in every plugin's requirements for this alone.
-        const diffs = yield* Effect.serviceOption(CheckpointDiffQuery.CheckpointDiffQuery);
-        if (Option.isNone(diffs)) {
-          return yield* Effect.logWarning(
-            "review: security scan skipped, no checkpoint diff query",
-          );
-        }
-        const matches = scan(yield* turnDiff(diffs.value, threadId, ordinal));
         if (matches.length === 0) return;
 
         const createdAt = DateTime.formatIso(event.occurredAt);
@@ -124,90 +142,108 @@ export const handlers = Effect.gen(function* () {
 });
 
 /**
- * Builds the security sweep. It records a `security` correction in the learning plugin for each
- * finding without one, which the reactor cannot: a reactor sees only its own plugin's services,
- * and a sweep runs with every active plugin's. The description names the pattern, file and line,
- * never the matched text, and the source key is the finding's id, so a retry finds the same
- * correction. It then reconciles each held thread's `security_hold` flag with its open findings,
- * and clears flags whose hold is gone. A dry run counts what it would do and writes nothing.
+ * Builds the security sweep. It first retries the scan's failed events with `retryFailed`, the
+ * reactor's own retry, which otherwise runs only at start. It records a `security` correction in
+ * the learning plugin for each finding without one, which the reactor cannot: a reactor sees only
+ * its own plugin's services, and a sweep runs with every active plugin's. The description names the
+ * pattern, file and line, never the matched text, and the source key is the finding's id, so a
+ * retry finds the same correction; a `scan_failed` row records none. It then reconciles each held
+ * thread's `security_hold` flag with its open findings, and clears flags whose hold is gone. A dry
+ * run counts what it would do and writes nothing.
  */
-export const sweep = Effect.gen(function* () {
-  const sql = yield* SqlClient.SqlClient;
-  const attention = yield* Attention.Attention;
+export const sweep = <E>(retryFailed: Effect.Effect<void, E, SqlClient.SqlClient>) =>
+  Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    const attention = yield* Attention.Attention;
 
-  const run = Effect.fn("SecurityScanReactor.sweep")(function* (input: {
-    readonly dryRun: boolean;
-  }) {
-    const pending = yield* sql<FindingRow>`SELECT * FROM security_finding
-      WHERE correction_id IS NULL ORDER BY id LIMIT ${BATCH_SIZE}`;
-    // Learning runs whenever this plugin does; without it there is nowhere to record.
-    const corrections = Option.getOrUndefined(
-      yield* Effect.serviceOption(CorrectionStore.CorrectionStore),
-    );
-    let acted = 0;
-    for (const row of pending) {
-      if (corrections === undefined) break;
-      if (input.dryRun) {
-        acted += 1;
-        continue;
-      }
-      const correction = yield* corrections
-        .record({
-          threadId: row.thread_id,
-          failureKind: "security",
-          description: `${row.pattern_id} at ${row.file}:${row.line}`,
-          sourceEventIds: [],
-          sourceKey: `security:${row.id}`,
-          occurredAt: DateTime.makeUnsafe(row.created_at),
-        })
-        .pipe(
-          Effect.catchTags({
-            LearningError: (cause) =>
-              Effect.logWarning("review: could not record a security correction", {
-                findingId: row.id,
-                cause,
-              }).pipe(Effect.as(undefined)),
-          }),
+    const run = Effect.fn("SecurityScanReactor.sweep")(function* (input: {
+      readonly dryRun: boolean;
+    }) {
+      if (!input.dryRun) {
+        yield* retryFailed.pipe(
+          Effect.provideService(SqlClient.SqlClient, sql),
+          Effect.catch((cause) =>
+            Effect.logWarning("review: could not retry failed security scans", { cause }),
+          ),
         );
-      if (correction === undefined) continue;
-      yield* sql`UPDATE security_finding SET correction_id = ${correction.id}
+      }
+      const pending = yield* sql<FindingRow>`SELECT * FROM security_finding
+      WHERE correction_id IS NULL AND pattern_id <> 'scan_failed'
+      ORDER BY id LIMIT ${BATCH_SIZE}`;
+      // Learning runs whenever this plugin does; without it there is nowhere to record.
+      const corrections = Option.getOrUndefined(
+        yield* Effect.serviceOption(CorrectionStore.CorrectionStore),
+      );
+      let acted = 0;
+      for (const row of pending) {
+        if (corrections === undefined) break;
+        if (input.dryRun) {
+          acted += 1;
+          continue;
+        }
+        const correction = yield* corrections
+          .record({
+            threadId: row.thread_id,
+            failureKind: "security",
+            description: `${row.pattern_id} at ${row.file}:${row.line}`,
+            sourceEventIds: [],
+            sourceKey: `security:${row.id}`,
+            occurredAt: DateTime.makeUnsafe(row.created_at),
+          })
+          .pipe(
+            Effect.catchTags({
+              LearningError: (cause) =>
+                Effect.logWarning("review: could not record a security correction", {
+                  findingId: row.id,
+                  cause,
+                }).pipe(Effect.as(undefined)),
+            }),
+          );
+        if (correction === undefined) continue;
+        yield* sql`UPDATE security_finding SET correction_id = ${correction.id}
         WHERE id = ${row.id}`;
-      acted += 1;
-    }
+        acted += 1;
+      }
 
-    const held = yield* sql<{ readonly thread_id: ThreadId; readonly open: number }>`
+      const held = yield* sql<{ readonly thread_id: ThreadId; readonly open: number }>`
       SELECT thread_id, COUNT(*) AS open FROM security_finding
       WHERE acknowledged_at IS NULL
       GROUP BY thread_id HAVING MAX(blocking) = 1`;
-    const wanted = new Map<string, string>(held.map((row) => [row.thread_id, holdText(row.open)]));
-    const raised = new Map(
-      (yield* attention.listOpen({ pluginId: "review", kind: "security_hold" })).map((flag) => [
-        flag.threadId,
-        flag.text,
-      ]),
-    );
-    for (const threadId of new Set([...wanted.keys(), ...raised.keys()])) {
-      const text = wanted.get(threadId);
-      if (text === raised.get(threadId)) continue;
-      acted += 1;
-      if (input.dryRun) continue;
-      yield* text === undefined
-        ? attention.clear(flagKey(threadId))
-        : attention.raise({ ...flagKey(threadId), text, resumeAction: RESUME_ACTION });
-    }
+      const wanted = new Map<string, string>(
+        held.map((row) => [row.thread_id, holdText(row.open)]),
+      );
+      const raised = new Map(
+        (yield* attention.listOpen({ pluginId: "review", kind: "security_hold" })).map((flag) => [
+          flag.threadId,
+          flag.text,
+        ]),
+      );
+      for (const threadId of new Set([...wanted.keys(), ...raised.keys()])) {
+        const text = wanted.get(threadId);
+        if (text === raised.get(threadId)) continue;
+        acted += 1;
+        if (input.dryRun) continue;
+        yield* text === undefined
+          ? attention.clear(flagKey(threadId))
+          : attention.raise({ ...flagKey(threadId), text, resumeAction: RESUME_ACTION });
+      }
 
-    return { examined: pending.length + held.length, acted, flags: wanted.size };
+      return { examined: pending.length + held.length, acted, flags: wanted.size };
+    });
+
+    return { plugin: "review", name: "security", run };
   });
-
-  return { plugin: "review", name: "security", run };
-});
 
 /**
  * Starts the scan from the newest event, so turns before the plugin first ran are not scanned, and
- * registers its sweep; called from the plugin's layer.
+ * registers its sweep with the reactor's retry; called from the plugin's layer.
  */
 export const start = Effect.gen(function* () {
-  yield* PluginReactor.start({ plugin: "review", from: "now", handlers: yield* handlers });
+  const reactor = yield* PluginReactor.start({
+    plugin: "review",
+    from: "now",
+    handlers: yield* handlers,
+  });
   const supervisor = yield* PluginSupervisor.PluginSupervisor;
-  yield* supervisor.register(yield* sweep);
+  yield* supervisor.register(yield* sweep(reactor.retryFailed()));
 });

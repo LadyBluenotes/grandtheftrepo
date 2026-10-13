@@ -81,7 +81,7 @@ const ReviewRequestsTool = Tool.make("review_requests", {
   .annotate(Tool.Destructive, false);
 
 const SECURITY_PATTERNS =
-  "secret.token (AWS, GitHub or OpenAI-style keys), secret.private_key, rce.eval_fetched (eval or new Function within five lines of fetch, curl or wget), rce.pipe_to_shell (curl or wget piped into sh or bash), workflow.injection (${{ github.event. under a run: key of a GitHub workflow) and shell.untrusted (exec, execSync, os.system or shell=True with a command built from ${}, an f-string or +)";
+  "secret.token (AWS, GitHub or OpenAI-style keys), secret.private_key, rce.eval_fetched (eval or new Function within five lines of fetch, curl or wget), rce.pipe_to_shell (curl or wget piped into sh, bash or zsh, by name or path), workflow.injection (${{ github.event. under a run: key of a GitHub workflow) and shell.untrusted (exec, execSync, os.system or shell=True with a command built from ${}, an f-string or +)";
 
 const ReviewSecurityAckTool = Tool.make("review_security_ack", {
   ...shared,
@@ -97,7 +97,7 @@ const ReviewSecurityAckTool = Tool.make("review_security_ack", {
 
 const ReviewSecurityFindingsTool = Tool.make("review_security_findings", {
   ...shared,
-  description: `The security scan's findings on one thread, oldest first: the pattern, file and line each matched on a line a turn added, the checkpoint of that turn, the correction it recorded, and when and why it was acknowledged. Patterns: ${SECURITY_PATTERNS}. The matched text is never stored; open the file at the line to see it.`,
+  description: `The security scan's findings on one thread, oldest first: the pattern, file and line each matched on a line a turn added, the checkpoint of that turn, the correction it recorded, and when and why it was acknowledged. Patterns: ${SECURITY_PATTERNS}. The matched text is never stored; open the file at the line to see it. In a block project a turn the scan could not read is listed as scan_failed, with no file and line 0: check that checkpoint by hand before acknowledging it.`,
   parameters: SecurityFindingsInput,
   success: Schema.Array(SecurityFinding),
 })

@@ -94,7 +94,11 @@ export const ReviewRequestInput = Schema.Struct({ threadId: ThreadId });
 export const SecurityMode = Schema.Literals(["off", "warn", "block"]);
 export type SecurityMode = typeof SecurityMode.Type;
 
-/** The fixed patterns the scan tests a turn's added lines against. */
+/**
+ * The fixed patterns the scan tests a turn's added lines against. `scan_failed` is no pattern: in a
+ * `block` project it stands for a turn the scan could not read, with an empty file and line 0, and
+ * holds the thread like a finding until someone checks the turn and acknowledges it.
+ */
 export const SecurityPatternId = Schema.Literals([
   "secret.token",
   "secret.private_key",
@@ -102,6 +106,7 @@ export const SecurityPatternId = Schema.Literals([
   "rce.pipe_to_shell",
   "workflow.injection",
   "shell.untrusted",
+  "scan_failed",
 ]);
 export type SecurityPatternId = typeof SecurityPatternId.Type;
 

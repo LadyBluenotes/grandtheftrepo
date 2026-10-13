@@ -60,7 +60,7 @@ const requests: PluginMigration[2] = Effect.gen(function* () {
 // line, so a replayed scan inserts nothing. `blocking` is whether the project was in `block` when
 // the finding was recorded: the thread is held while one such finding is unacknowledged.
 // `correction_id` points into the learning plugin's database and is written by the security sweep;
-// the partial index is that sweep's batch.
+// the partial index is that sweep's batch. A `scan_failed` row records no correction.
 const security: PluginMigration[2] = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
   yield* sql`CREATE TABLE security_mode (
@@ -85,7 +85,7 @@ const security: PluginMigration[2] = Effect.gen(function* () {
     ON security_finding (checkpoint_id, pattern_id, file, line)`;
   yield* sql`CREATE INDEX security_finding_thread ON security_finding (thread_id, acknowledged_at)`;
   yield* sql`CREATE INDEX security_finding_uncorrected ON security_finding (id)
-    WHERE correction_id IS NULL`;
+    WHERE correction_id IS NULL AND pattern_id <> 'scan_failed'`;
 });
 
 export const migrations = [
