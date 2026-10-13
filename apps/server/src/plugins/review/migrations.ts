@@ -33,7 +33,31 @@ const projectWindow: PluginMigration[2] = Effect.gen(function* () {
     ON review_verdicts (project_id, created_at, id)`;
 });
 
+// A request names the checkpoint it was made at. `stale` is final: `stale_at` and `superseded_by`
+// are set together, when the invalidation sweep opens the request that replaces it. The partial
+// index is the sweep's batch, the threads with a request still standing; `superseded_by` finds
+// the stale requests one names, for the flag that follows them.
+const requests: PluginMigration[2] = Effect.gen(function* () {
+  const sql = yield* SqlClient.SqlClient;
+  yield* sql`CREATE TABLE review_request (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    thread_id TEXT NOT NULL,
+    checkpoint_id TEXT NOT NULL,
+    status TEXT NOT NULL CHECK (status IN ('open', 'answered', 'stale')),
+    requested_by TEXT NOT NULL,
+    requested_at TEXT NOT NULL,
+    stale_at TEXT,
+    superseded_by INTEGER REFERENCES review_request (id),
+    CHECK ((status = 'stale') = (stale_at IS NOT NULL AND superseded_by IS NOT NULL))
+  )`;
+  yield* sql`CREATE INDEX review_request_thread ON review_request (thread_id, requested_at)`;
+  yield* sql`CREATE INDEX review_request_standing ON review_request (thread_id)
+    WHERE status IN ('open', 'answered')`;
+  yield* sql`CREATE INDEX review_request_superseded ON review_request (superseded_by)`;
+});
+
 export const migrations = [
   [1, "Verdicts", verdicts],
   [2, "ProjectWindow", projectWindow],
+  [3, "Requests", requests],
 ] as const satisfies ReadonlyArray<PluginMigration>;

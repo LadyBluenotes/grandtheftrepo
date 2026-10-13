@@ -10,11 +10,9 @@ import {
 import { ProviderInstanceId } from "../providerInstance.ts";
 import { definePluginMethods } from "./method.ts";
 import { TelemetryMeasure } from "./telemetry.ts";
+import { RoutingTier } from "./tier.ts";
 
-/** How much model a task needs. */
-export const RoutingTier = Schema.Literals(["cheap", "standard", "strong"]);
-export type RoutingTier = typeof RoutingTier.Type;
-export const ROUTING_TIERS = RoutingTier.literals;
+export { ROUTING_TIERS, RoutingTier } from "./tier.ts";
 
 /** A provider instance and one of its models, the model id as the catalog lists it. */
 export const RoutingEntry = Schema.Struct({

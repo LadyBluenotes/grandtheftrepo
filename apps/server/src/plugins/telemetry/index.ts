@@ -6,6 +6,8 @@ import { forkParked } from "../../serverActivation.ts";
 import type { ServerPlugin } from "../Plugin.ts";
 import * as PluginReactor from "../PluginReactor.ts";
 import * as PluginSupervisor from "../PluginSupervisor.ts";
+import * as BudgetStore from "./budgets/BudgetStore.ts";
+import * as BudgetSweep from "./budgets/BudgetSweep.ts";
 import * as Mcp from "./mcp.ts";
 import { migrations } from "./migrations.ts";
 import * as Reactor from "./reactor.ts";
@@ -23,7 +25,8 @@ const make = Effect.gen(function* () {
     from: "start",
     handlers: Reactor.handlers,
   });
-  yield* (yield* PluginSupervisor.PluginSupervisor).register(heartbeat);
+  const supervisor = yield* PluginSupervisor.PluginSupervisor;
+  yield* supervisor.register(heartbeat);
   // Once the server is up, so the task service and projects are ready.
   yield* forkParked(
     WeeklyReportSeed.seed.pipe(
@@ -34,6 +37,7 @@ const make = Effect.gen(function* () {
   );
   // The measures and the report read the reactor's tables, so each request waits for it to catch up.
   const telemetry = yield* Telemetry.make(reactor.drain);
+  yield* supervisor.register(yield* BudgetSweep.sweep(telemetry.measures));
   return Context.make(Telemetry.Telemetry, telemetry).pipe(
     Context.add(ReportService.ReportService, yield* ReportService.make(telemetry, reactor.drain)),
   );
@@ -41,16 +45,16 @@ const make = Effect.gen(function* () {
 
 /**
  * Efficiency measures over a project's window, computed from the plugin's own
- * tables, which its reactor fills from the event log, and an activity report
- * over a range that a weekly scheduled task posts in each project. The template
- * plugin: it uses each host seam (database, reactor, sweep, RPC, MCP tool,
- * settings panel).
+ * tables, which its reactor fills from the event log, budgets on them that a
+ * sweep checks, and an activity report over a range that a weekly scheduled task
+ * posts in each project. The template plugin: it uses each host seam (database,
+ * reactor, sweep, RPC, MCP tool, settings panel).
  */
 export const plugin = {
   id: "telemetry",
   dependsOn: [],
   migrations,
-  layer: Layer.effectContext(make),
+  layer: Layer.effectContext(make).pipe(Layer.provideMerge(BudgetStore.layer)),
   mcp: (register) =>
     Layer.merge(
       register(Mcp.TelemetryToolkit, Mcp.handlers),

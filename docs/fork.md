@@ -101,8 +101,13 @@ them half-evaluated. The host hands `toolkitRegistration` to `ServerPlugin.mcp` 
   for the reactor to catch up, and past that every measure answers `unavailable`. Where
   compaction before the upgrade kept a later thread event in place of a `thread.settled`, who
   settled is lost, and a thread settled by hand that way counts as an accepted outcome only if a
-  pull request merged. `telemetry.report` and the `telemetry_report` MCP tool fold a project's
-  range into ten sections, from the thread records, the learning and review plugins and the host's
+  pull request merged. With a `tier`, only the runs on that routing tier's provider instance and
+  model count, and `context_efficiency` (output tokens per turn) answers only then; migration 3
+  replays the log to record each run's instance. The `telemetry/budgets` sweep judges each budget,
+  one measure for one tier, over the last seven whole UTC days per project, writes a
+  `budget_events` row only when its state changes, and raises or clears a `budget_breach`
+  attention flag. `telemetry.report` and the `telemetry_report` MCP tool fold a project's range
+  into ten sections, from the thread records, the learning and review plugins and the host's
   attention flags, with the same report as one self-contained HTML page; at start the plugin gives
   each project with a default model a `Weekly report` thread and a scheduled task that posts that
   page there every Monday, and never touches a task that already exists. The template plugin: it
@@ -154,8 +159,14 @@ them half-evaluated. The host hands `toolkitRegistration` to `ServerPlugin.mcp` 
   correction is recorded first and the verdict row second; the verdict id is derived from the
   reviewer thread and checkpoint, so a retry finds the same correction. Agents give a verdict with
   the `review_verdict` MCP tool, from a thread only, and read them with `review_verdicts`;
-  `review.verdicts` reads them over the gateway. Server: `apps/server/src/plugins/review/`.
-  Contracts: `packages/contracts/src/plugins/review.ts`. No screen yet.
+  `review.verdicts` reads them over the gateway. A review request (`review_request`,
+  `review.request`) names the thread's latest ready root checkpoint and a verdict on it answers
+  the request; once the thread's latest is another checkpoint, the `review/invalidation` sweep marks
+  the request stale for good, invalidates the verdicts on its checkpoint, opens a request at the
+  latest, and keeps a `stale_review` attention flag until that one is answered. `ReviewGate.check`
+  is the completion gate a ticket asks before it finishes; nothing calls it yet. Server:
+  `apps/server/src/plugins/review/`. Contracts: `packages/contracts/src/plugins/review.ts`. No
+  screen yet. User guide: [Policies and reviews](./user/policies-and-reviews.md#reviews).
 - **caveman**: whether each provider instance's model traffic goes through caveman's loopback
   proxy, `routed`, `direct`, `other` or `unsupported`, read from the Claude `settings.json` and
   Codex `config.toml` the instance starts with, and a switch that runs caveman's own `enable` and

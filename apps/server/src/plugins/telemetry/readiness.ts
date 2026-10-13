@@ -20,7 +20,7 @@ const failWith =
  * Why the reactor's tables cannot be read yet, or null when they hold every committed event.
  *
  * The tables trail the event log, by all of it while the reactor replays from the first event (as
- * after migration 2), and a value read from half-filled tables is wrong rather than missing; so a
+ * after migrations 2 and 3), and a value read from half-filled tables is wrong rather than missing; so a
  * read waits for `caughtUp`, the reactor's drain, for up to `CATCH_UP_WAIT`. The reactor also
  * advances past an event whose handler failed, leaving a row in `host_reactor_failure`; a table
  * missing that event reads as complete, so any such row makes the tables unready too, until a
