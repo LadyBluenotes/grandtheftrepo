@@ -11,7 +11,9 @@ directories and never edit an upstream file. Upstream is merged nightly by
 - `packages/contracts/src/plugins/` holds each plugin's schemas and method definitions.
 - `apps/web/src/plugins/` holds each plugin's screens.
   A plugin with a screen is registered in `apps/web/src/plugins/registry.ts` and reached at
-  `/plugins/<id>`; every plugin is listed, with an on/off switch, at `/plugins`.
+  `/plugins/<id>`; every plugin is listed, with an on/off switch, at `/plugins`. That page shows
+  the primary environment, or the one its `machine` search names; settings panels read
+  `usePluginEnvironmentId` so they follow it.
 
 Enabled state is `plugins.json` under the server state directory. A missing entry means enabled.
 Changes apply on the next server start.
@@ -91,9 +93,11 @@ them half-evaluated. The host hands `toolkitRegistration` to `ServerPlugin.mcp` 
   `<T3 home>/wiki/<project-slug>/`; the folder is changeable per project from the board.
   Its own database, `plugins/kanban.sqlite`, holds the emergency stop (`StopGate`, which a sweep
   that starts a thread must ask first; no launcher calls it yet). The `writers` sweep raises an
-  attention flag when two agents write one project. Mobile shows the board as a read-only list
-  grouped by column, from the Board row on a project's overview; it and the web board share the
-  board and active-plugin atoms in `packages/client-runtime/src/plugins/kanban.ts`. Server:
+  attention flag when two agents write one project. `kanban.attention.list` feeds the strip above
+  the board from the project's open host flags, its threads' pending questions and permission
+  requests, and, while routing runs, its routing mismatches. Mobile shows the board as a read-only
+  list grouped by column, from the Board row on a project's overview; it and the web board share
+  the board and active-plugin atoms in `packages/client-runtime/src/plugins/kanban.ts`. Server:
   `apps/server/src/plugins/kanban/`. Contracts: `packages/contracts/src/plugins/kanban.ts`. Web:
   `apps/web/src/plugins/kanban/`. Mobile: `apps/mobile/src/features/kanban/`. User guide:
   [Kanban board](./user/kanban.md).

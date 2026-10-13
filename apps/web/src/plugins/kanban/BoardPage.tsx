@@ -62,6 +62,7 @@ import { cn } from "~/lib/utils";
 import { useProjects } from "~/state/entities";
 import { useEnvironmentQuery } from "~/state/query";
 import { useAtomCommand } from "~/state/use-atom-command";
+import { AttentionStrip } from "./AttentionStrip";
 import { DecisionsView } from "./DecisionsView";
 import { IssuePanel } from "./IssuePanel";
 import { ReopenDialog } from "./ReopenDialog";
@@ -540,19 +541,24 @@ export function BoardPage({ search }: { readonly search: BoardSearch }) {
             canWrite={canWrite}
           />
         ) : (
-          <DndContext sensors={sensors} onDragEnd={onDragEnd}>
-            <div className="flex min-h-0 flex-1 gap-3 overflow-x-auto px-5 pt-4 pb-5 sm:px-6">
-              {KANBAN_STATUSES.map((status) => (
-                <Column
-                  key={status}
-                  status={status}
-                  issues={columns.get(status) ?? []}
-                  onOpen={openIssue}
-                  onCreate={onCreate}
-                />
-              ))}
-            </div>
-          </DndContext>
+          <>
+            {environmentId !== null && projectId !== null && active === true ? (
+              <AttentionStrip environmentId={environmentId} projectId={projectId} />
+            ) : null}
+            <DndContext sensors={sensors} onDragEnd={onDragEnd}>
+              <div className="flex min-h-0 flex-1 gap-3 overflow-x-auto px-5 pt-4 pb-5 sm:px-6">
+                {KANBAN_STATUSES.map((status) => (
+                  <Column
+                    key={status}
+                    status={status}
+                    issues={columns.get(status) ?? []}
+                    onOpen={openIssue}
+                    onCreate={onCreate}
+                  />
+                ))}
+              </div>
+            </DndContext>
+          </>
         )}
       </div>
       <ReopenDialog

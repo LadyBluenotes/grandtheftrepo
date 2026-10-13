@@ -1,6 +1,7 @@
+import { EnvironmentId, ProjectId, ThreadId } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
-import { buildIssuePrompt } from "./state";
+import { attentionResumeTarget, buildIssuePrompt } from "./state";
 
 const issue = {
   id: "fix-login-redirect",
@@ -74,5 +75,36 @@ describe("buildIssuePrompt", () => {
     expect(prompt).toContain("Decisions on this ticket: none.");
     expect(prompt).toContain("Decision categories: none yet.");
     expect(prompt).not.toContain("\n\n\n");
+  });
+});
+
+describe("attentionResumeTarget", () => {
+  // A board on an environment that is not the primary one.
+  const board = {
+    environmentId: EnvironmentId.make("remote"),
+    projectId: ProjectId.make("project-1"),
+  };
+  const row = (target: "thread" | "board" | "settings", threadId: string | null = null) => ({
+    resumeAction: { label: "Go", target },
+    threadId: threadId === null ? null : ThreadId.make(threadId),
+  });
+
+  it("opens the Plugins page of the board's environment for a settings action", () => {
+    expect(attentionResumeTarget(row("settings"), board)).toEqual({
+      to: "/plugins",
+      search: { machine: "remote" },
+    });
+  });
+
+  it("opens the row's thread, or the board, on the board's environment", () => {
+    expect(attentionResumeTarget(row("thread", "thread-1"), board)).toEqual({
+      to: "/$environmentId/$threadId",
+      params: { environmentId: "remote", threadId: "thread-1" },
+    });
+    expect(attentionResumeTarget(row("board"), board)).toEqual({ to: "/board", search: board });
+  });
+
+  it("has nowhere to go for a thread action without a thread", () => {
+    expect(attentionResumeTarget(row("thread"), board)).toBeNull();
   });
 });
