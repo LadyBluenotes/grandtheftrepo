@@ -188,28 +188,35 @@ const make = Effect.gen(function* () {
     if (path.extname(file) !== extension) return;
     const id = path.basename(file, extension);
     if (!isSlug(id)) return;
-    if (!(yield* fs.exists(file))) {
-      if (kind === "issue") state.issues.delete(id);
-      else state.decisions.delete(id);
-      return;
-    }
-    const text = yield* fs.readFileString(file);
-    if (kind === "issue") {
-      const parsed = Files.parseIssue(id, text);
-      if (parsed === null)
-        return yield* Effect.logWarning("kanban: unreadable issue file", { file });
-      if (parsed.project !== null && parsed.project !== state.slug)
-        yield* Effect.logWarning("kanban: issue names another project", {
-          file,
-          project: parsed.project,
-        });
-      state.issues.set(id, parsed.issue);
-    } else {
-      const parsed = Files.parseDecisions(id, text);
-      if (parsed === null)
-        return yield* Effect.logWarning("kanban: unreadable decision file", { file });
-      state.decisions.set(id, [...parsed]);
-    }
+    // Under the lock every write takes. An event is handled after the write behind it, so a refresh
+    // that had read an issue file could resume after the store deleted it and index it again, and a
+    // card filed under the same title got a "-2" slug.
+    yield* state.lock.withPermits(1)(
+      Effect.gen(function* () {
+        if (!(yield* fs.exists(file))) {
+          if (kind === "issue") state.issues.delete(id);
+          else state.decisions.delete(id);
+          return;
+        }
+        const text = yield* fs.readFileString(file);
+        if (kind === "issue") {
+          const parsed = Files.parseIssue(id, text);
+          if (parsed === null)
+            return yield* Effect.logWarning("kanban: unreadable issue file", { file });
+          if (parsed.project !== null && parsed.project !== state.slug)
+            yield* Effect.logWarning("kanban: issue names another project", {
+              file,
+              project: parsed.project,
+            });
+          state.issues.set(id, parsed.issue);
+        } else {
+          const parsed = Files.parseDecisions(id, text);
+          if (parsed === null)
+            return yield* Effect.logWarning("kanban: unreadable decision file", { file });
+          state.decisions.set(id, [...parsed]);
+        }
+      }),
+    );
   });
 
   const watch = (projectId: ProjectId, state: Loaded, dir: string) =>
