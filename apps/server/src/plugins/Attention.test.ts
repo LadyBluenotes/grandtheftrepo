@@ -93,3 +93,29 @@ it.effect("clear closes only its own flag, and a later raise opens a new row", (
     }),
   ),
 );
+
+it.effect("without a plugin or kind, lists every open flag, oldest first", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const { attention } = yield* fixture;
+      yield* attention.raise({ ...key, text: "Over budget.", resumeAction });
+      yield* attention.raise({
+        pluginId: "kanban",
+        threadId: "thread-2",
+        kind: "two_writers",
+        text: "Two writers.",
+        resumeAction,
+      });
+      yield* attention.raise({ ...key, threadId: "thread-3", text: "Cleared.", resumeAction });
+      yield* attention.clear({ ...key, threadId: "thread-3" });
+
+      assert.deepEqual(yield* attention.listOpen({}), [
+        { threadId: "thread-1", text: "Over budget." },
+        { threadId: "thread-2", text: "Two writers." },
+      ]);
+      assert.deepEqual(yield* attention.listOpen({ kind: "two_writers" }), [
+        { threadId: "thread-2", text: "Two writers." },
+      ]);
+    }),
+  ),
+);

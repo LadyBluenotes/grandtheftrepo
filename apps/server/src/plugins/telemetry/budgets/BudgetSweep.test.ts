@@ -225,6 +225,9 @@ it.effect("an over-threshold window writes one breach and raises one flag", () =
         label: "Open budgets",
         target: "settings",
       });
+      // The report finds the flag's project from its key; a thread's id names none.
+      assert.strictEqual(BudgetSweep.budgetFlagProject(flag?.thread_id ?? ""), projectA);
+      assert.isUndefined(BudgetSweep.budgetFlagProject("thread:1"));
       const [, standard] = yield* budgets.store.list({});
       assert.deepEqual([standard?.id, standard?.state], [STANDARD, "breach"]);
     }),
