@@ -1,4 +1,5 @@
 import type { KanbanError } from "@t3tools/contracts";
+import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 
@@ -24,13 +25,18 @@ export const handlers = (spec: SpecService.SpecService["Service"]) =>
 export const layer = Layer.effectDiscard(
   Effect.gen(function* () {
     const spec = yield* SpecService.SpecService;
+    // Taken while the layer builds, before activation lets commands in: an attempt stored before
+    // this belongs to an earlier process, however late the forked reconciliation runs.
+    const cutoff = DateTime.formatIso(yield* DateTime.now);
     yield* PluginReactor.start({ plugin: "kanban", from: "now", handlers: handlers(spec) });
     yield* forkParked(
-      spec.reconcile.pipe(
-        Effect.catchCause((cause) =>
-          Effect.logWarning("kanban: could not reconcile spec attempts", { cause }),
+      spec
+        .reconcile(cutoff)
+        .pipe(
+          Effect.catchCause((cause) =>
+            Effect.logWarning("kanban: could not reconcile spec attempts", { cause }),
+          ),
         ),
-      ),
     );
   }).pipe(
     // A database that cannot take the reactor's tables is a defect, not a state the plugin runs in.

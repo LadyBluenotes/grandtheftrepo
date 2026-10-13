@@ -28,6 +28,7 @@ import * as SqlClient from "effect/sql/SqlClient";
 import * as TestClock from "effect/testing/TestClock";
 
 import * as ServerConfig from "../../../config.ts";
+import * as ServerActivation from "../../../serverActivation.ts";
 import * as EventSink from "../../../orchestration-v2/EventSink.ts";
 import * as EventStore from "../../../orchestration-v2/EventStore.ts";
 import * as ProjectionStore from "../../../orchestration-v2/ProjectionStore.ts";
@@ -709,7 +710,7 @@ describe("SpecService", () => {
   it.effect("useExisting: a card deleted before the admission is malformed too", () =>
     Effect.scoped(
       Effect.gen(function* () {
-        const { store, specify, file, attempts, editBeforeAdmit } = yield* start;
+        const { spec, store, specify, file, attempts, editBeforeAdmit } = yield* start;
         const { id } = yield* file("Login loops", validSpec);
 
         editBeforeAdmit(
@@ -721,6 +722,7 @@ describe("SpecService", () => {
         assert.strictEqual(attempt.status, "malformed");
         assert.strictEqual(attempt.reason, "The issue was deleted while the spec was drafted.");
         assert.deepEqual(yield* attempts, [{ status: "malformed", reason: attempt.reason }]);
+        assert.deepEqual((yield* spec.latest({ projectId, id }))?.attempt, attempt);
       }),
     ).pipe(Effect.provide(layerTest)),
   );
@@ -756,7 +758,8 @@ describe("SpecService", () => {
             SpecService.SpecService,
             SpecService.SpecService.of({
               ...spec,
-              reconcile: Effect.ensuring(spec.reconcile, Deferred.succeed(reconciled, undefined)),
+              reconcile: (cutoff) =>
+                Effect.ensuring(spec.reconcile(cutoff), Deferred.succeed(reconciled, undefined)),
             }),
           );
           yield* Layer.build(
@@ -860,6 +863,60 @@ describe("SpecService", () => {
     ).pipe(Effect.provide(layerTest)),
   );
 
+  it.effect(
+    "an attempt stored after the layer was built is not closed by a late reconciliation",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const { spec, sql, specify, file } = yield* start;
+          const early = yield* file("Login loops", rough);
+          const late = yield* file("Logout loops", rough);
+          yield* specify({ projectId, id: early.id });
+
+          // The layer is built, and the reconciliation parked until activation.
+          yield* TestClock.adjust("1 second");
+          const activation = yield* Deferred.make<void>();
+          const reconciled = yield* Deferred.make<void>();
+          const withSignal = Layer.succeed(
+            SpecService.SpecService,
+            SpecService.SpecService.of({
+              ...spec,
+              reconcile: (cutoff) =>
+                Effect.ensuring(spec.reconcile(cutoff), Deferred.succeed(reconciled, undefined)),
+            }),
+          );
+          yield* Layer.build(
+            SpecReactor.layer.pipe(
+              Layer.provide(withSignal),
+              Layer.provide(Layer.succeed(SqlClient.SqlClient, sql)),
+              Layer.provide(
+                Layer.succeed(ServerActivation.ServerActivation, Deferred.await(activation)),
+              ),
+            ),
+          );
+
+          // A request is accepted after the build; its thread is not created yet. Activation, and so
+          // the reconciliation, comes later still.
+          yield* TestClock.adjust("1 second");
+          yield* specify({ projectId, id: late.id });
+          yield* TestClock.adjust("1 second");
+          yield* Deferred.succeed(activation, undefined);
+          yield* Deferred.await(reconciled);
+
+          const closed = yield* spec.latest({ projectId, id: early.id });
+          assert.strictEqual(closed?.attempt.status, "malformed");
+          assert.strictEqual(
+            closed?.attempt.reason,
+            "The drafting thread was never started. Run specify again.",
+          );
+          assert.strictEqual(
+            (yield* spec.latest({ projectId, id: late.id }))?.attempt.status,
+            "running",
+          );
+        }),
+      ).pipe(Effect.provide(layerTest)),
+  );
+
   it.effect("six Approach items: malformed with the reason, the ticket untouched", () =>
     Effect.scoped(
       Effect.gen(function* () {
@@ -953,13 +1010,18 @@ describe("SpecService", () => {
         const { spec, store, specify, file, fileText, editBeforeAdmit } = yield* start;
         const { id } = yield* file("Login loops", validSpec);
 
-        // The edit lands after `specify` has read and validated the issue.
+        // The edit lands after `specify` has read and validated the issue, and time passes before
+        // the attempt is moved to malformed.
         editBeforeAdmit(
-          store.write(projectId, "user", {
-            action: "issue.update",
-            id,
-            description: `${validSpec}\n- [ ] A late addition.`,
-          }),
+          TestClock.adjust("1 second").pipe(
+            Effect.andThen(
+              store.write(projectId, "user", {
+                action: "issue.update",
+                id,
+                description: `${validSpec}\n- [ ] A late addition.`,
+              }),
+            ),
+          ),
         );
         const attempt = yield* specify({ projectId, id, useExisting: true });
         assert.strictEqual(attempt.status, "malformed");
@@ -971,6 +1033,9 @@ describe("SpecService", () => {
         const report = yield* spec.latest({ projectId, id });
         assert.strictEqual(report?.attempt.status, "malformed");
         assert.strictEqual(report?.attempt.reason, attempt.reason);
+        // The reply is the row that was written, completion time included.
+        assert.deepEqual(report?.attempt, attempt);
+        assert.notStrictEqual(attempt.completedAt, attempt.createdAt);
         assert.strictEqual(report?.issueStatus, "triage");
         assert.lengthOf((yield* store.getIssue({ projectId, id })).criteria, 0);
 

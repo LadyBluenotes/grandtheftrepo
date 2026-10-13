@@ -112,11 +112,14 @@ export class SpecService extends Context.Service<
      * For when the plugin starts. An attempt is stored before its thread is created, and the
      * launcher creates the thread and then dispatches its first message, which creates the run. A
      * process that exited before the run exists left an attempt `running` that no run will ever
-     * end: this closes each attempt stored before this call whose thread, or whose thread's first
+     * end: this closes each attempt stored before `cutoff` whose thread, or whose thread's first
      * run, does not exist as `malformed`. One whose run exists is left to the reactor, which
      * resumes from its saved cursor.
+     *
+     * `cutoff` is an ISO time taken before the server accepted commands: an attempt stored since
+     * then belongs to this process, whose launch may still be creating its thread.
      */
-    readonly reconcile: Effect.Effect<void, KanbanError>;
+    readonly reconcile: (cutoff: string) => Effect.Effect<void, KanbanError>;
   }
 >()("t3/plugins/kanban/spec/SpecService") {}
 
@@ -215,8 +218,9 @@ const make = Effect.gen(function* () {
 
   /**
    * Moves an attempt from `from` (`running` unless said otherwise) to its outcome, and answers
-   * whether it did. The launch's error, the run's end and the startup reconciliation can all reach
-   * the same attempt; the first to get there decides it, and the others change nothing.
+   * with the row it wrote, or nothing when it was no longer in that state. The launch's error, the
+   * run's end and the startup reconciliation can all reach the same attempt; the first to get
+   * there decides it, and the others change nothing.
    */
   const close = (input: {
     readonly id: number;
@@ -228,20 +232,20 @@ const make = Effect.gen(function* () {
     Effect.flatMap(
       nowIso,
       (completedAt) =>
-        sql<{ readonly id: number }>`UPDATE spec_attempt
+        sql<AttemptRow>`UPDATE spec_attempt
           SET status = ${input.status}, text = ${input.text}, reason = ${input.reason},
             completed_at = ${completedAt}
           WHERE id = ${input.id} AND status = ${input.from ?? "running"}
-          RETURNING id`,
+          RETURNING *`,
     ).pipe(
-      Effect.map((rows) => rows.length > 0),
+      Effect.map((rows) => (rows[0] === undefined ? undefined : toAttempt(rows[0]))),
       Effect.catchTags({ SqlError: io }),
     );
 
   /**
    * Admits the issue a valid spec was checked against. When it has changed or is gone, moves the
-   * attempt, already stored as `valid`, to `malformed` and returns why; otherwise returns nothing.
-   * Any other failure propagates: the reactor retries it.
+   * attempt, already stored as `valid`, to `malformed` and returns the row it wrote; otherwise
+   * returns nothing. Any other failure propagates: the reactor retries it.
    */
   const admit = (input: {
     readonly attemptId: number;
@@ -257,7 +261,7 @@ const make = Effect.gen(function* () {
           error.code === "not_found" ? Effect.succeed("deleted" as const) : Effect.fail(error),
       }),
       Effect.flatMap((outcome) => {
-        if (outcome !== "changed" && outcome !== "deleted") return Effect.void;
+        if (outcome !== "changed" && outcome !== "deleted") return Effect.succeed(undefined);
         const reason = outcome === "changed" ? ISSUE_CHANGED : ISSUE_DELETED;
         return close({
           id: input.attemptId,
@@ -265,7 +269,7 @@ const make = Effect.gen(function* () {
           status: "malformed",
           text: input.text,
           reason,
-        }).pipe(Effect.as(reason));
+        });
       }),
     );
 
@@ -292,7 +296,8 @@ const make = Effect.gen(function* () {
       sourceHash,
     ).pipe(Effect.catchTags({ SqlError: io }));
     if (!check.valid) return attempt;
-    const reason = yield* admit({
+    // What was written, so the reply and `latest` agree on the completion time.
+    const downgraded = yield* admit({
       attemptId: attempt.id,
       projectId,
       issueId: issue.id,
@@ -300,9 +305,7 @@ const make = Effect.gen(function* () {
       acceptance: check.acceptance,
       sourceHash,
     });
-    return reason === undefined
-      ? attempt
-      : ({ ...attempt, status: "malformed", reason } satisfies KanbanSpecAttempt);
+    return downgraded ?? attempt;
   });
 
   const draft = Effect.fn("SpecService.draft")(function* (
@@ -494,7 +497,7 @@ const make = Effect.gen(function* () {
       reason: check.valid ? null : check.reason,
     });
     // Another writer closed the attempt since it was read: it decided, and the issue is its to admit.
-    if (!decided || !check.valid) return;
+    if (decided === undefined || !check.valid) return;
     yield* admit({
       attemptId: attempt.id,
       projectId: attempt.project_id,
@@ -505,43 +508,43 @@ const make = Effect.gen(function* () {
     });
   });
 
-  const reconcile: SpecService["Service"]["reconcile"] = Effect.gen(function* () {
-    // Only attempts older than this call: a request that arrives while it runs is not stranded.
-    const startedAt = yield* nowIso;
-    const rows = yield* sql<AttemptRow>`SELECT * FROM spec_attempt
-        WHERE status = 'running' AND created_at < ${startedAt}`.pipe(
-      Effect.catchTags({ SqlError: io }),
-    );
-    for (const row of rows) {
-      const threadId = row.child_thread_id;
-      const started =
-        threadId === null
-          ? false
-          : yield* threads.getThreadShell(threadId).pipe(
-              Effect.flatMap((shell) =>
-                shell === null
-                  ? Effect.succeed(false)
-                  : Effect.map(
-                      threads.getThreadRecords(threadId, ["runs"]),
-                      ({ runs }) => runs.length > 0,
-                    ),
-              ),
-              // A thread that cannot be read is not proven unstarted, so its attempt stays.
-              Effect.catch((cause) =>
-                Effect.logWarning("kanban: could not look up a drafting thread", { cause }).pipe(
-                  Effect.as(true),
+  const reconcile: SpecService["Service"]["reconcile"] = (cutoff) =>
+    Effect.gen(function* () {
+      // Only attempts from before the cutoff: one accepted since is not stranded.
+      const rows = yield* sql<AttemptRow>`SELECT * FROM spec_attempt
+        WHERE status = 'running' AND created_at < ${cutoff}`.pipe(
+        Effect.catchTags({ SqlError: io }),
+      );
+      for (const row of rows) {
+        const threadId = row.child_thread_id;
+        const started =
+          threadId === null
+            ? false
+            : yield* threads.getThreadShell(threadId).pipe(
+                Effect.flatMap((shell) =>
+                  shell === null
+                    ? Effect.succeed(false)
+                    : Effect.map(
+                        threads.getThreadRecords(threadId, ["runs"]),
+                        ({ runs }) => runs.length > 0,
+                      ),
                 ),
-              ),
-            );
-      if (!started)
-        yield* close({
-          id: row.id,
-          status: "malformed",
-          text: null,
-          reason: NEVER_STARTED,
-        });
-    }
-  }).pipe(Effect.withSpan("SpecService.reconcile"));
+                // A thread that cannot be read is not proven unstarted, so its attempt stays.
+                Effect.catch((cause) =>
+                  Effect.logWarning("kanban: could not look up a drafting thread", { cause }).pipe(
+                    Effect.as(true),
+                  ),
+                ),
+              );
+        if (!started)
+          yield* close({
+            id: row.id,
+            status: "malformed",
+            text: null,
+            reason: NEVER_STARTED,
+          });
+      }
+    }).pipe(Effect.withSpan("SpecService.reconcile"));
 
   return SpecService.of({ specify, latest, finish, reconcile });
 });
