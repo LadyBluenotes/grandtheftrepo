@@ -34,7 +34,10 @@ the `supervisor.json` interval, in registry order, and records each tick in `plu
 
 A sweep that finds something waiting on a person raises a flag with `Attention.raise` and clears it
 with `Attention.clear` once the cause is gone. Flags live in the host's `attention` table in that
-same file, so any plugin can raise one without depending on the plugin that shows them.
+same file, so any plugin can raise one without depending on the plugin that shows them. The strip
+above the kanban board lists a flag whose key is not a thread when the key ends in `:<projectId>`,
+has the project id between colons, or starts with `policy:*:` (`kanban/attentionRows.ts`); a flag
+keyed by none of these is on no board.
 
 ## Upstream seams
 
@@ -186,7 +189,13 @@ them half-evaluated. The host hands `toolkitRegistration` to `ServerPlugin.mcp` 
   verified; `policy.create`, `.accept`, `.install` and `.verify` are operate methods, and the
   `policy_list` MCP tool reads. A supervisor sweep installs and verifies accepted policies an
   agent lacks or holds under older rules, but only while no run is active on the project (any
-  run, for `*`). The first start seeds `*` / `ponytail`, the six-question ladder, and `*` /
+  run, for `*`). After its installs the same sweep reads each recorded delivery's file once, even
+  while a run is active, and keeps one `delivery_drift` flag, `policy:<projectId>:<agent>:<path>`,
+  for every project and file whose block was edited or deleted since its install, naming the
+  project's blocks; it never writes the block, and an install makes the next tick clear the flag. A
+  `*` policy affects every project, so its flag is on every board. It reads the files itself because
+  `verify` stamps `verified_at`, which a dry run must not. The first start seeds `*` /
+  `ponytail`, the six-question ladder, and `*` /
   `caveman`, the terse reply rules, each unless a policy of that key exists in any state; the
   review plugin refuses a `convention` summary that starts with `rung:` and names none of the six
   rung ids. `PolicyService.createForPromotion` is `create` for a learning promotion: the draft and
@@ -249,10 +258,15 @@ them half-evaluated. The host hands `toolkitRegistration` to `ServerPlugin.mcp` 
   index block, the hash of what it wrote. The `knowledge/delivery` sweep writes only a component
   whose record differs from what the accepted pages render to and whose file still holds what was
   recorded, even with no agent in use, and only while no thread in the project has a run; a file
-  edited by hand stays `drifted` in `verify` until a person installs. The learning plugin's
-  promoter calls `proposeForPromotion`, which looks for a page whose source names the promotion
-  and saves the draft with source `item` in one transaction: overlapping deliveries save one
-  draft, and a repeat, whatever became of the draft, answers with it. Server:
+  edited by hand stays `drifted` in `verify` until a person installs. After the catch-ups the sweep
+  keeps a `delivery_drift` flag, `knowledge:<project>:<delivery>:<path>` (the delivery being
+  `page:<key>` or the agent), for each recorded page file and index block of an agent in use that
+  `KnowledgeStore.drift` finds edited or deleted against its recorded hash, whether or not a run
+  is active; it writes nothing, a file it cannot read keeps its own flag while the rest are still
+  judged, and an install makes the next tick clear the flag. The learning plugin's promoter calls
+  `proposeForPromotion`, which looks for a page whose source names the promotion and saves the
+  draft with source `item` in one transaction: overlapping deliveries save one draft, and a
+  repeat, whatever became of the draft, answers with it. Server:
   `apps/server/src/plugins/knowledge/`. Contracts: `packages/contracts/src/plugins/knowledge.ts`.
   Web: `apps/web/src/plugins/knowledge/`, at `/plugins/knowledge`. User guide:
   [Project knowledge](./user/knowledge.md).

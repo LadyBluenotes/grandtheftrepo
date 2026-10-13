@@ -34,6 +34,14 @@ agent reads now or the file lost it. **Reinstall** writes the accepted version a
 directory does not exist is skipped. The screen re-reads when you come back to it, so a change an
 agent made through the `policy_*` tools shows then.
 
+You do not have to open the screen to find out. On each regular check, T3 Code reads the blocks it
+installed, and when one was edited or deleted, or its file or directory went away, it raises one
+Delivery drift flag for that file and project. It shows under Waiting on you on that project's
+board, and on every board for the environment's own policies (`*`), which apply to every project.
+It leaves the file as it is, since you may have edited the block on purpose. **Reinstall**
+the policy to put it back, and the flag clears on the next check. If an agent's directory is gone, a
+reinstall skips that agent, so its flag stays until the directory is back.
+
 ### The ponytail policy
 
 The first time the policy plugin starts, it adds a policy named `ponytail` to `*` and accepts it, so

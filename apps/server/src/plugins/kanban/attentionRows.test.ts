@@ -142,6 +142,74 @@ describe("attentionRows", () => {
     );
   });
 
+  it("keeps a delivery drift flag whose key has the project as a segment, for that project only", () => {
+    const drift = {
+      kind: "delivery_drift",
+      resumeAction: { label: "Reinstall", target: "settings" },
+    } as const;
+    const result = rows({
+      flags: [
+        flag({
+          id: 1,
+          pluginId: "policy",
+          threadId: `policy:${projectA}:claude:/home/me/.claude/CLAUDE.md`,
+          text: 'The "review" policy block was edited.',
+          ...drift,
+        }),
+        flag({
+          id: 2,
+          pluginId: "knowledge",
+          threadId: `knowledge:${projectA}:page:tests:/work/a/.knowledge/tests.md`,
+          text: 'The knowledge page "tests" was removed.',
+          ...drift,
+        }),
+        flag({
+          id: 3,
+          pluginId: "policy",
+          threadId: `policy:${projectB}:claude:/home/me/.claude/CLAUDE.md`,
+          text: "Another project's block.",
+          ...drift,
+        }),
+        flag({
+          id: 4,
+          pluginId: "knowledge",
+          threadId: `knowledge:${projectB}:page:tests:/work/b/.knowledge/tests.md`,
+          text: "Another project's page.",
+          ...drift,
+        }),
+      ],
+    });
+    assert.deepEqual(
+      result.map((row) => [row.id, row.threadId, row.threadTitle, row.kind, row.text]),
+      [
+        ["flag:1", null, null, "delivery_drift", 'The "review" policy block was edited.'],
+        ["flag:2", null, null, "delivery_drift", 'The knowledge page "tests" was removed.'],
+      ],
+    );
+  });
+
+  it("lists a drift flag of an environment-wide policy on every project's board", () => {
+    const environmentWide = flag({
+      id: 1,
+      pluginId: "policy",
+      kind: "delivery_drift",
+      threadId: "policy:*:claude:/home/me/.claude/CLAUDE.md",
+      text: 'The "ponytail" policy block was edited.',
+      resumeAction: { label: "Reinstall", target: "settings" },
+    });
+    for (const projectId of [projectA, projectB]) {
+      assert.deepEqual(
+        rows({ projectId, flags: [environmentWide] }).map((row) => [
+          row.id,
+          row.threadId,
+          row.kind,
+          row.text,
+        ]),
+        [["flag:1", null, "delivery_drift", 'The "ponytail" policy block was edited.']],
+      );
+    }
+  });
+
   it("shows a routing mismatch on one of the project's threads as a flag naming the thread", () => {
     const result = rows({
       threads: [thread("a")],
