@@ -199,6 +199,20 @@ export const usage: OrchestrationV2ProviderTurnTokenUsage = {
 
 export const providerTurnId = ProviderTurnId.make("provider-turn:telemetry-1");
 
+/** A Claude `Grep` a provider's subagent ran: it has no run, and its provider turn groups it. */
+export const subagentGrepItem: Extract<OrchestrationV2TurnItem, { readonly type: "dynamic_tool" }> =
+  {
+    ...itemBase,
+    id: TurnItemId.make("item:subagent-grep"),
+    runId: null,
+    providerTurnId,
+    ordinal: 108,
+    type: "dynamic_tool",
+    toolName: "Grep",
+    input: { pattern: "useEffect", path: "src", output_mode: "content" },
+    output: "src/a.ts:3:  useEffect(() => {",
+  };
+
 /** `provider-turn.updated` for one provider turn of the run, carrying `tokenUsage` when given. */
 export const turnUpdated = (
   tokenUsage: OrchestrationV2ProviderTurnTokenUsage | undefined,

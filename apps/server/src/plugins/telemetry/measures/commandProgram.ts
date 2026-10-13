@@ -181,6 +181,20 @@ const segmentProgram = (
   return undefined;
 };
 
+/** Where the script of a shell's `-c` option is in `tokens`, or -1 when the shell runs no such script. */
+const scriptIndex = (tokens: ReadonlyArray<string>, shell: number) => {
+  for (let index = shell + 1; index < tokens.length; index += 1) {
+    const option = tokens[index]!;
+    if (option === "--" || !option.startsWith("-")) break;
+    if (SHELL_OPTIONS_WITH_VALUE.has(option)) {
+      index += 1;
+    } else if (option === "--command" || SHELL_COMMAND_OPTION.test(option)) {
+      return index + 1;
+    }
+  }
+  return -1;
+};
+
 /** A shell with `-c` names what its script runs; a shell without it, such as `bash run.sh`, names itself. */
 const shellScriptProgram = (
   tokens: ReadonlyArray<string>,
@@ -188,17 +202,25 @@ const shellScriptProgram = (
   name: string,
   depth: number,
 ) => {
-  for (let index = shell + 1; index < tokens.length; index += 1) {
-    const option = tokens[index]!;
-    if (option === "--" || !option.startsWith("-")) break;
-    if (SHELL_OPTIONS_WITH_VALUE.has(option)) {
-      index += 1;
-    } else if (option === "--command" || SHELL_COMMAND_OPTION.test(option)) {
-      const script = tokens[index + 1];
-      return script === undefined || depth >= MAX_DEPTH ? null : programName(script, depth + 1);
-    }
-  }
-  return name;
+  const index = scriptIndex(tokens, shell);
+  if (index === -1) return name;
+  const script = tokens[index];
+  return script === undefined || depth >= MAX_DEPTH ? null : programName(script, depth + 1);
+};
+
+/**
+ * The script a command line runs inside its `<shell> -c` wrappers, followed as `programName`
+ * follows them: `cd app && git status` for `/bin/bash -lc 'cd app && git status'`. A command line
+ * that is not one such wrapper, such as `bash run.sh` or `bash -c x; ls`, is itself.
+ */
+export const unwrapShell = (command: string, depth = 0): string => {
+  const segments = segmentsOf(command);
+  const tokens = segments[0];
+  if (segments.length !== 1 || tokens === undefined || depth >= MAX_DEPTH) return command;
+  const name = programOf(tokens[0]!);
+  if (name === null || !SHELLS.has(name)) return command;
+  const script = tokens[scriptIndex(tokens, 0)];
+  return script === undefined ? command : unwrapShell(script, depth + 1);
 };
 
 /**

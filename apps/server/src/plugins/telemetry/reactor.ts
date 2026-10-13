@@ -10,6 +10,7 @@ import {
   settledFields,
   threadFields,
   toolCallFields,
+  toolInputFields,
   toolOutputFields,
   turnUsageFields,
 } from "./fields.ts";
@@ -145,24 +146,34 @@ export const handlers: PluginReactor.Handlers<SqlError.SqlError> = {
       // A provider's subagent makes calls that belong to no run, and they are kept with the time
       // that places them: the tool output measures count them, and the per-run ones cannot.
       const output = toolOutputFields(event.payload);
+      const input = toolInputFields(event.payload);
       const sql = yield* SqlClient.SqlClient;
       yield* sql`
         INSERT INTO telemetry_tool_calls
-          (item_id, run_id, thread_id, ordinal, item_type, tool_name, path, command, output_tokens,
-           item_at, status, event_sequence)
+          (item_id, run_id, provider_turn_id, thread_id, ordinal, item_type, tool_name, path,
+           command, pattern, input_keys, input_tokens, input_digest, output_tokens, item_at, status,
+           event_sequence)
         VALUES
-          (${f["turnItem.id"]}, ${f["turnItem.runId"]}, ${f["turnItem.threadId"]},
-           ${f["turnItem.ordinal"]}, ${f["turnItem.type"]}, ${f["turnItem.toolName"]},
-           ${f["turnItem.input"] ?? f["turnItem.fileName"]}, ${output["turnItem.input"]},
+          (${f["turnItem.id"]}, ${f["turnItem.runId"]}, ${f["turnItem.providerTurnId"]},
+           ${f["turnItem.threadId"]}, ${f["turnItem.ordinal"]}, ${f["turnItem.type"]},
+           ${f["turnItem.toolName"]}, ${f["turnItem.input"] ?? f["turnItem.fileName"]},
+           ${output["turnItem.input"]}, ${input["turnItem.pattern"]},
+           ${input["turnItem.input"]?.keys ?? null}, ${input["turnItem.input"]?.tokens ?? null},
+           ${input["turnItem.input"]?.digest ?? null},
            ${output["turnItem.output"] ?? output["turnItem.results"]},
            ${output["turnItem.startedAt"] ?? output["turnItem.updatedAt"]}, ${f["turnItem.status"]},
            ${sequence})
         ON CONFLICT (item_id) DO UPDATE SET
           run_id = excluded.run_id,
+          provider_turn_id = excluded.provider_turn_id,
           ordinal = excluded.ordinal,
           tool_name = excluded.tool_name,
           path = excluded.path,
           command = excluded.command,
+          pattern = excluded.pattern,
+          input_keys = excluded.input_keys,
+          input_tokens = excluded.input_tokens,
+          input_digest = excluded.input_digest,
           output_tokens = excluded.output_tokens,
           item_at = excluded.item_at,
           status = excluded.status,

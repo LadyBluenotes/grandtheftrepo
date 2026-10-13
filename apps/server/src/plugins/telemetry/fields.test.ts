@@ -8,6 +8,7 @@ import {
   settledFields,
   threadFields,
   toolCallFields,
+  toolInputFields,
   toolOutputFields,
   turnUsageFields,
   verdictFields,
@@ -29,6 +30,9 @@ const accessed: ReadonlyArray<Readonly<Record<string, unknown>>> = [
   toolOutputFields(Fixtures.mcpItem),
   toolOutputFields(Fixtures.fileSearchItem),
   toolOutputFields(Fixtures.webSearchItem),
+  toolCallFields(Fixtures.subagentGrepItem),
+  toolInputFields(Fixtures.subagentGrepItem),
+  toolInputFields(Fixtures.fileSearchItem),
   threadFields(Fixtures.thread),
   settledFields(settled),
   pinnedFields(pinned),
@@ -51,6 +55,7 @@ const roots: ReadonlyArray<readonly [string, ReadonlyArray<unknown>]> = [
       Fixtures.mcpItem,
       Fixtures.fileSearchItem,
       Fixtures.webSearchItem,
+      Fixtures.subagentGrepItem,
     ],
   ],
   ["thread.settled", [settled]],
@@ -92,6 +97,8 @@ it("lists every measure in the issue's order", () => {
       "supervision_burden",
       "tool_output_total",
       "tool_output_max_per_call",
+      "deterministic_work_share",
+      "extraction_candidates",
     ],
   );
 });
@@ -132,4 +139,25 @@ it("the tool output measures cite what the accessors read of a tool call", () =>
       );
     }
   }
+});
+
+it("the repeated work measures cite what the reactor reads of a call's input and its turn", () => {
+  const repeated = computeMeasures(input()).filter((measure) =>
+    ["deterministic_work_share", "extraction_candidates"].includes(measure.measure),
+  );
+  assert.strictEqual(repeated.length, 2);
+  for (const measure of repeated) {
+    assert.includeMembers(
+      [...measure.provenance],
+      ["turnItem.input", "turnItem.pattern", "turnItem.providerTurnId", "turnItem.output"],
+    );
+  }
+  // A dynamic tool's pattern comes from its input; a file search's is its own.
+  assert.strictEqual(toolInputFields(Fixtures.subagentGrepItem)["turnItem.pattern"], "useEffect");
+  assert.strictEqual(toolInputFields(Fixtures.fileSearchItem)["turnItem.pattern"], "TODO");
+  assert.strictEqual(
+    toolInputFields(Fixtures.subagentGrepItem)["turnItem.input"]?.keys,
+    "output_mode,path,pattern",
+  );
+  assert.isNull(toolInputFields(Fixtures.editItem)["turnItem.input"]);
 });

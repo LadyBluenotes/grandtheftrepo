@@ -18,6 +18,7 @@ import * as ProjectionStore from "../../orchestration-v2/ProjectionStore.ts";
 import * as SqlitePersistence from "../../persistence/Sqlite.ts";
 import * as PluginDatabase from "../PluginDatabase.ts";
 import * as PluginReactor from "../PluginReactor.ts";
+import { digest } from "./digest.ts";
 import * as Fixtures from "./eventFixtures.ts";
 import { input } from "./measures/fixtures.ts";
 import { acceptedOutcomes, type ThreadRow } from "./measures/input.ts";
@@ -376,6 +377,130 @@ const retryOlderAfterNewer = <Row>(
     assert.deepEqual(yield* sql`SELECT sequence FROM host_reactor_failure`, []);
     return { newest, retried: yield* rows };
   });
+
+it.effect("keeps what the repeated work measures shape a call by, and no input itself", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const { sql, drain } = yield* react;
+      const otherRead = {
+        ...Fixtures.readItem,
+        id: TurnItemId.make("item:read-other"),
+        input: { file_path: "src/b.ts" },
+      };
+      const sameRead = { ...Fixtures.readItem, id: TurnItemId.make("item:read-same") };
+      yield* write(
+        [
+          Fixtures.readItem,
+          sameRead,
+          otherRead,
+          Fixtures.editItem,
+          Fixtures.commandItem,
+          Fixtures.subagentGrepItem,
+          Fixtures.fileSearchItem,
+          Fixtures.webSearchItem,
+        ].map(Fixtures.itemEvent),
+      );
+      yield* drain;
+      const rows = yield* sql<{
+        readonly item_id: string;
+        readonly run_id: string | null;
+        readonly provider_turn_id: string | null;
+        readonly path: string | null;
+        readonly pattern: string | null;
+        readonly input_keys: string | null;
+        readonly input_tokens: number | null;
+        readonly input_digest: string | null;
+      }>`SELECT item_id, run_id, provider_turn_id, path, pattern, input_keys, input_tokens,
+        input_digest FROM telemetry_tool_calls ORDER BY item_id`;
+      const byId = new Map(rows.map((row) => [row.item_id, row]));
+      // Characters over four: a command line as it is, a tool's input as its JSON, a search's
+      // pattern(s). A file change has no input to size.
+      assert.deepEqual(
+        rows.map((row) => [row.item_id, row.input_tokens, row.pattern, row.input_keys]),
+        [
+          ["item:command", Math.ceil(Fixtures.commandItem.input.length / 4), null, null],
+          ["item:edit", null, null, null],
+          ["item:file-search", 1, "TODO", null],
+          ["item:read", 6, null, "file_path"],
+          ["item:read-other", 6, null, "file_path"],
+          ["item:read-same", 6, null, "file_path"],
+          ["item:subagent-grep", 15, "useEffect", "output_mode,path,pattern"],
+          ["item:web-search", 5, null, null],
+        ],
+      );
+      // A subagent's call has no run; its provider turn groups it with the rest of its turn.
+      assert.deepEqual(
+        [byId.get("item:subagent-grep")?.run_id, byId.get("item:subagent-grep")?.path],
+        [null, "src"],
+      );
+      assert.strictEqual(byId.get("item:subagent-grep")?.provider_turn_id, Fixtures.providerTurnId);
+      // Equal inputs have equal digests; the input itself is not stored.
+      assert.strictEqual(
+        byId.get("item:read")?.input_digest,
+        byId.get("item:read-same")?.input_digest,
+      );
+      assert.notStrictEqual(
+        byId.get("item:read")?.input_digest,
+        byId.get("item:read-other")?.input_digest,
+      );
+      assert.strictEqual(
+        byId.get("item:command")?.input_digest,
+        digest(Fixtures.commandItem.input),
+      );
+      assert.isNull(byId.get("item:edit")?.input_digest);
+    }),
+  ).pipe(Effect.provide(layerSink)),
+);
+
+it.effect("upgrading to migration 5 adds the input columns empty, and the replay fills them", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const { sql } = yield* PluginDatabase.open({
+        id: "telemetry",
+        filename: ":memory:",
+        migrations: migrations.slice(0, 4),
+      });
+      yield* write([Fixtures.itemEvent(Fixtures.subagentGrepItem)]);
+      // The reactor before the upgrade had handled the call and kept it without its input.
+      yield* Effect.scoped(
+        Effect.flatMap(
+          PluginReactor.start({ plugin: "telemetry", from: "now", handlers: {} }),
+          (reactor) => reactor.drain,
+        ).pipe(Effect.provideService(SqlClient.SqlClient, sql)),
+      );
+      yield* sql`INSERT INTO telemetry_tool_calls
+          (item_id, run_id, thread_id, ordinal, item_type, tool_name, path, status, event_sequence)
+          VALUES ('item:subagent-grep', NULL, ${Fixtures.threadId}, 1, 'dynamic_tool', 'Grep',
+            'src', 'failed', 1)`;
+      const [, , upgrade] = migrations[4]!;
+      yield* upgrade.pipe(Effect.provideService(SqlClient.SqlClient, sql));
+      const calls = sql`SELECT item_id, provider_turn_id, pattern, input_keys, input_tokens,
+          input_digest IS NOT NULL AS digested FROM telemetry_tool_calls`;
+      assert.deepEqual(yield* calls, [
+        {
+          item_id: "item:subagent-grep",
+          provider_turn_id: null,
+          pattern: null,
+          input_keys: null,
+          input_tokens: null,
+          digested: 0,
+        },
+      ]);
+
+      yield* startReactor(sql, Reactor.handlers);
+      assert.deepEqual(yield* calls, [
+        {
+          item_id: "item:subagent-grep",
+          provider_turn_id: Fixtures.providerTurnId,
+          pattern: "useEffect",
+          input_keys: "output_mode,path,pattern",
+          input_tokens: 15,
+          digested: 1,
+        },
+      ]);
+    }),
+  ).pipe(Effect.provide(layerSink)),
+);
 
 it.effect("a run event retried after a newer one leaves the newer state", () =>
   Effect.scoped(
@@ -810,6 +935,10 @@ it.effect(
           1,
         );
 
+        // Today's reactor writes the columns later migrations add.
+        for (const [, , later] of migrations.slice(4)) {
+          yield* later.pipe(Effect.provideService(SqlClient.SqlClient, sql));
+        }
         yield* startReactor(sql, Reactor.handlers);
         const at = DateTime.formatIso(Fixtures.at);
         assert.deepEqual(yield* calls, [

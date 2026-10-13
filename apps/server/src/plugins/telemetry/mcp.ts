@@ -3,6 +3,8 @@ import {
   type TelemetryError,
   TelemetryBudgetsInput,
   TelemetryBudgetsResult,
+  TelemetryExtractionCandidatesInput,
+  TelemetryExtractionCandidatesResult,
   TelemetryMeasuresInput,
   TelemetryMeasuresResult,
   TelemetryToolOutputInput,
@@ -14,6 +16,7 @@ import { Tool, Toolkit } from "effect/ai";
 
 import * as McpToolAccess from "../../mcp/McpToolAccess.ts";
 import * as BudgetStore from "./budgets/BudgetStore.ts";
+import { extractionCandidatesOf } from "./measures/repeatedWork.ts";
 import { toolOutputOf } from "./measures/toolOutput.ts";
 import * as Telemetry from "./Telemetry.ts";
 
@@ -50,10 +53,22 @@ const TelemetryToolOutputTool = Tool.make("telemetry_tool_output", {
   .annotate(Tool.Readonly, true)
   .annotate(Tool.Destructive, false);
 
+const TelemetryExtractionCandidatesTool = Tool.make("telemetry_extraction_candidates", {
+  description:
+    "List the deterministic work a project's agents repeat, which a script, a hook, an MCP tool, a scheduled task, a context file or a skill could do instead of model tokens, over a window: from (inclusive) and to (exclusive), ISO instants in UTC, every run and a provider's subagent's calls counted. Each candidate is one tool call shape, or two to six in a row, that runs in at least three threads repeated: its steps (a command line with paths relative to the project, integers as <n> and quoted strings as <str>; a tool's name with its pattern and path, or its input's keys; <path> and <pattern> where the occurrences differ), threads, occurrences, the share whose raw inputs were identical, estimated tokens (characters over four, output and input), the form it suits, and one example's thread, run (null for a subagent's calls) and items. Most estimated tokens first; limit, 1 to 20, defaults to 20. Read this to propose a script, hook or skill in a thread; it changes nothing. With fewer than three threads in the window the list is empty and missingReason says why.",
+  parameters: TelemetryExtractionCandidatesInput,
+  success: TelemetryExtractionCandidatesResult,
+  failure: OrchestratorMcpFailure,
+  failureMode: "return",
+})
+  .annotate(Tool.Readonly, true)
+  .annotate(Tool.Destructive, false);
+
 export const TelemetryToolkit = Toolkit.make(
   TelemetryMeasuresTool,
   TelemetryBudgetsTool,
   TelemetryToolOutputTool,
+  TelemetryExtractionCandidatesTool,
 );
 
 const inactive = Effect.fail(
@@ -93,6 +108,12 @@ export const handlers = McpToolAccess.toLayer(
       telemetry_tool_output: McpToolAccess.reads((input) =>
         Effect.flatMap(telemetry, (t) => t.measures(input)).pipe(
           Effect.map(toolOutputOf),
+          Effect.catchTags(failure),
+        ),
+      ),
+      telemetry_extraction_candidates: McpToolAccess.reads(({ limit, ...window }) =>
+        Effect.flatMap(telemetry, (t) => t.measures(window)).pipe(
+          Effect.map((measures) => extractionCandidatesOf(measures, limit)),
           Effect.catchTags(failure),
         ),
       ),

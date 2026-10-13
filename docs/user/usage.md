@@ -158,6 +158,16 @@ is getting agents to read the pages, so it needs the knowledge plugin and at lea
 page. Reads of the instruction files themselves do not count, since an agent loads those without a
 tool call.
 
+Two more measures look for work your agents keep doing by hand across a project's threads: the same
+commands in the same order, the same files read at the start of a thread, the same kind of search
+with a different pattern each time. Anything seen in at least three threads is a candidate, ranked
+by the estimated tokens it cost, with where it could live instead: a script in the repository, a
+hook that runs after edits, an MCP tool, a scheduled task, a few lines in the project's instruction
+file, or a skill. Deterministic work share is the part of the tool calls' tokens those candidates
+cover. The weekly report lists the top five under Efficiency, and an agent can list up to twenty,
+each with an example thread, with the `telemetry_extraction_candidates` tool. Nothing is changed for
+you; a candidate is a suggestion. A window with fewer than three threads has no candidates.
+
 ## Subscription usage widget
 
 Add **Subscription usage** from your iOS or Android widget gallery to see remaining Codex and

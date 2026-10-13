@@ -47,12 +47,58 @@ export const TelemetryLargestOutput = Schema.Struct({
 });
 export type TelemetryLargestOutput = typeof TelemetryLargestOutput.Type;
 
+/**
+ * Where repeated deterministic work should live instead of in model tokens. `script`: a command
+ * sequence in the repo. `hook`: a command the provider runs after an edit. `mcp_tool`: one server
+ * tool returning what several reads or searches gather. `scheduled_task`: a prompt on a timer.
+ * `context_file`: facts written once into the project's instruction file. `skill`: a written
+ * procedure the agent follows.
+ */
+export const TelemetryExtractionForm = Schema.Literals([
+  "script",
+  "hook",
+  "mcp_tool",
+  "scheduled_task",
+  "context_file",
+  "skill",
+]);
+export type TelemetryExtractionForm = typeof TelemetryExtractionForm.Type;
+
+/**
+ * A tool call shape, or two to six in a row, that runs of at least three threads repeated. A step
+ * is the command line with paths made relative to the project, integers as `<n>` and quoted
+ * strings as `<str>`, or a dynamic tool's name with its pattern and path, or its input's keys.
+ * `<path>` and `<pattern>` in a step mean the occurrences differ there.
+ */
+export const TelemetryExtractionCandidate = Schema.Struct({
+  /** The same for the same steps in any window. */
+  id: Schema.String,
+  kind: Schema.Literals(["step", "procedure"]),
+  steps: Schema.Array(Schema.String),
+  threads: NonNegativeInt,
+  occurrences: NonNegativeInt,
+  /** The share of occurrences whose raw inputs match the most common ones exactly. */
+  deterministicRatio: Schema.Finite,
+  /** Output and input of every occurrence, in estimated tokens: characters over four. */
+  estimatedTokens: NonNegativeInt,
+  form: TelemetryExtractionForm,
+  /** One occurrence to look at. `runId` is null for a provider's subagent's calls. */
+  example: Schema.Struct({
+    threadId: Schema.String,
+    runId: Schema.NullOr(Schema.String),
+    itemIds: Schema.Array(Schema.String),
+  }),
+});
+export type TelemetryExtractionCandidate = typeof TelemetryExtractionCandidate.Type;
+
 /** The rows behind a measure's value, for the measures that have them. */
 export const TelemetryMeasureDetail = Schema.Struct({
   /** Every tool in the window, largest total first. */
   byTool: Schema.optional(Schema.Array(TelemetryToolOutput)),
   /** The window's ten largest single results, largest first. */
   largest: Schema.optional(Schema.Array(TelemetryLargestOutput)),
+  /** The window's twenty costliest extraction candidates, most estimated tokens first. */
+  candidates: Schema.optional(Schema.Array(TelemetryExtractionCandidate)),
 });
 export type TelemetryMeasureDetail = typeof TelemetryMeasureDetail.Type;
 
@@ -99,6 +145,25 @@ export const TelemetryToolOutputResult = Schema.Struct({
   missingReason: Schema.NullOr(Schema.String),
 });
 export type TelemetryToolOutputResult = typeof TelemetryToolOutputResult.Type;
+
+/** A project's window, every run counted, and how many candidates to list: 1 to 20, 20 when left out. */
+export const TelemetryExtractionCandidatesInput = Schema.Struct({
+  projectId: ProjectId,
+  from: IsoDateTime,
+  to: IsoDateTime,
+  limit: Schema.optional(Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 20 }))),
+});
+export type TelemetryExtractionCandidatesInput = typeof TelemetryExtractionCandidatesInput.Type;
+
+/**
+ * Repeated deterministic work over a window, most estimated tokens first. Empty with the reason
+ * when the window has fewer than three threads or the tables are not ready.
+ */
+export const TelemetryExtractionCandidatesResult = Schema.Struct({
+  candidates: Schema.Array(TelemetryExtractionCandidate),
+  missingReason: Schema.NullOr(Schema.String),
+});
+export type TelemetryExtractionCandidatesResult = typeof TelemetryExtractionCandidatesResult.Type;
 
 /** A limit on one measure for one routing tier, judged over the last seven whole UTC days. */
 export const TelemetryBudget = Schema.Struct({

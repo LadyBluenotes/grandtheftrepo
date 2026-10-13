@@ -99,7 +99,7 @@ it.effect("measures wait for the reactor, and answer unavailable while it is sti
       const waiting = yield* Effect.forkChild(measures(window));
       yield* TestClock.adjust("3 seconds");
       const replaying = yield* Fiber.join(waiting);
-      assert.strictEqual(replaying.length, 16);
+      assert.strictEqual(replaying.length, 18);
       assert.deepEqual(
         [...new Set(replaying.map((measure) => `${measure.state}: ${measure.missingReason}`))],
         ["unavailable: Telemetry is still replaying the event log."],
@@ -136,7 +136,7 @@ it.effect("any failed replay makes every measure unavailable, until the failure 
       yield* sql`INSERT INTO host_reactor_failure (sequence, type, attempts, last_error, failed_at)
         VALUES (1, 'thread.created', 5, 'database is locked', '2026-10-02T12:00:00.000Z')`;
       const failed = yield* measures(window);
-      assert.strictEqual(failed.length, 16);
+      assert.strictEqual(failed.length, 18);
       assert.deepEqual(
         [...new Set(failed.map((measure) => `${measure.state}: ${measure.missingReason}`))],
         [
@@ -260,7 +260,7 @@ it.effect("with a tier, only the runs on the tier's provider instance and model 
 
       // The routing plugin is off: nothing says which runs a tier ran.
       const routingOff = yield* measures({ ...window, tier: "standard" });
-      assert.strictEqual(routingOff.length, 16);
+      assert.strictEqual(routingOff.length, 18);
       assert.deepEqual(
         [...new Set(routingOff.map((measure) => `${measure.state}: ${measure.missingReason}`))],
         ["unavailable: Tiers come from the routing plugin, which is not running."],

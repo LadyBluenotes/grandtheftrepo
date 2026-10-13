@@ -12,6 +12,8 @@ import type { PluginMigration } from "../Plugin.ts";
  * 4: the size of each tool call's output, the head of a command's command line and the time of
  * its item, which the tool output measures read, tool calls with no run, which a provider's
  * subagent makes, and the budget on the largest single result.
+ * 5: what the repeated work measures shape a tool call by: the provider turn that groups a call
+ * with no run, a search's pattern, a dynamic tool's input keys, and the input's size and digest.
  */
 export const migrations: ReadonlyArray<PluginMigration> = [
   [
@@ -192,6 +194,25 @@ export const migrations: ReadonlyArray<PluginMigration> = [
       // As in migration 2: without its cursor the reactor replays from the first event, and
       // every tool call upsert fills the new columns, including the calls it used to skip for want
       // of a run.
+      yield* sql`DROP TABLE IF EXISTS host_reactor_cursor`;
+      yield* sql`DROP TABLE IF EXISTS host_reactor_failure`;
+    }),
+  ],
+  [
+    5,
+    "repeated_work",
+    Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      // NULL until the replay below rewrites the row from its event, and for good on a call whose
+      // event a compaction has removed; the measures leave such a call unshaped. `input_digest` is
+      // the sha256 of the call's input, which tells two equal inputs apart without keeping either.
+      yield* sql`ALTER TABLE telemetry_tool_calls ADD COLUMN provider_turn_id TEXT`;
+      yield* sql`ALTER TABLE telemetry_tool_calls ADD COLUMN pattern TEXT`;
+      yield* sql`ALTER TABLE telemetry_tool_calls ADD COLUMN input_keys TEXT`;
+      yield* sql`ALTER TABLE telemetry_tool_calls ADD COLUMN input_tokens INTEGER`;
+      yield* sql`ALTER TABLE telemetry_tool_calls ADD COLUMN input_digest TEXT`;
+      // As in migration 2: without its cursor the reactor replays from the first event, and
+      // every tool call upsert fills the new columns.
       yield* sql`DROP TABLE IF EXISTS host_reactor_cursor`;
       yield* sql`DROP TABLE IF EXISTS host_reactor_failure`;
     }),

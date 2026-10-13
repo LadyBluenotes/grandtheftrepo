@@ -12,12 +12,13 @@ import { recoveryEfficiency } from "./recovery_efficiency.ts";
 import { repeatedFailedApproaches } from "./repeated_failed_approaches.ts";
 import { repeatedReads } from "./repeated_reads.ts";
 import { repeatedRediscovery } from "./repeated_rediscovery.ts";
+import { CANDIDATES, deterministicWorkShare, extractionCandidates, SHARE } from "./repeatedWork.ts";
 import { scopeStability } from "./scope_stability.ts";
 import { supervisionBurden } from "./supervision_burden.ts";
 import { timeToAcceptedOutcome } from "./time_to_accepted_outcome.ts";
-import { toolOutputMaxPerCall, toolOutputTotal } from "./toolOutput.ts";
+import { MAX_PER_CALL, TOTAL, toolOutputMaxPerCall, toolOutputTotal } from "./toolOutput.ts";
 
-/** Every measure, in the order issue #1 lists them, then the tool output ones. */
+/** Every measure, in the order issue #1 lists them, then the tool output and repeated work ones. */
 const measures = [
   firstReviewAcceptance,
   materialCorrectionBurden,
@@ -35,7 +36,22 @@ const measures = [
   supervisionBurden,
   toolOutputTotal,
   toolOutputMaxPerCall,
+  deterministicWorkShare,
+  extractionCandidates,
 ];
+
+/**
+ * Measures that read no routing tier: they look at what a project's tool calls do, whatever model
+ * ran them, and count a provider's subagent's calls, which no tier claims. A budget on one still
+ * names a tier, because a budget needs one, so the sweep asks for these without it and the budget
+ * judges every run.
+ */
+export const TIER_INDEPENDENT_MEASURES: ReadonlySet<string> = new Set([
+  TOTAL,
+  MAX_PER_CALL,
+  SHARE,
+  CANDIDATES,
+]);
 
 export const computeMeasures = (input: MeasureInput): TelemetryMeasuresResult =>
   measures.map((measure) => measure(input));
@@ -44,6 +60,7 @@ const NO_ROWS: MeasureInput = {
   from: "",
   to: "",
   tier: undefined,
+  projectDirectory: null,
   threads: [],
   runs: [],
   toolCalls: [],

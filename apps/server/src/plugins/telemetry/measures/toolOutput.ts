@@ -8,24 +8,17 @@ import type {
 import type { FieldPath } from "../fields.ts";
 import { programName } from "./commandProgram.ts";
 import {
-  inWindow,
   type Measure,
   type MeasureInput,
   ok,
   type Spec,
   type ToolCallRow,
   unavailable,
-  windowRuns,
+  windowCalls,
 } from "./input.ts";
 
-const TOTAL = "tool_output_total";
+export const TOTAL = "tool_output_total";
 export const MAX_PER_CALL = "tool_output_max_per_call";
-
-/**
- * Measures that read no routing tier. A budget on one still names a tier, because a budget needs
- * one, so the sweep asks for these without it and the budget judges every run.
- */
-export const TIER_INDEPENDENT_MEASURES: ReadonlySet<string> = new Set([TOTAL, MAX_PER_CALL]);
 
 const PROVENANCE = [
   "run.id",
@@ -88,22 +81,15 @@ export const toolOutputFlagText = (largest: TelemetryLargestOutput, threadTitle:
 };
 
 /**
- * The window's calls with an output size, of the item types that return something. A call of a
- * run is in the window when its run started in it, as for every per-run measure. A call with no
- * run, which a provider's subagent makes, is in it when the item itself started or last changed
- * in it, and its `runId` stays null. A call whose size is not recorded yet is left out, not read
- * as zero.
+ * The window's calls (see `windowCalls`) with an output size, of the item types that return
+ * something. A call whose size is not recorded yet is left out, not read as zero.
  */
-const outputCalls = (input: MeasureInput) => {
-  const runs = new Set(windowRuns(input).map((run) => run.run_id));
-  return input.toolCalls.flatMap((call) =>
-    (call.run_id === null ? inWindow(input, call.item_at) : runs.has(call.run_id)) &&
-    OUTPUT_TYPES.has(call.item_type) &&
-    call.output_tokens !== null
+const outputCalls = (input: MeasureInput) =>
+  windowCalls(input).flatMap((call) =>
+    OUTPUT_TYPES.has(call.item_type) && call.output_tokens !== null
       ? [{ call, tool: toolKey(call), tokens: call.output_tokens }]
       : [],
   );
-};
 
 /** Nearest-rank percentile of an ascending list, in whole percent. */
 const nearestRank = (sorted: ReadonlyArray<number>, percentile: number) =>

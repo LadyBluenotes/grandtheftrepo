@@ -1,6 +1,6 @@
 import type { OrchestrationV2TurnItem } from "@t3tools/contracts";
 
-import { toolCallFields, toolOutputFields } from "../fields.ts";
+import { toolCallFields, toolInputFields, toolOutputFields } from "../fields.ts";
 import type { MeasureInput, RunRow, ThreadRow, ToolCallRow, TurnUsageRow } from "./input.ts";
 
 /** Rows for the measure tests. The window is the first week of October 2026. */
@@ -46,12 +46,17 @@ export const call = (overrides: Partial<ToolCallRow> = {}): ToolCallRow => {
   return {
     item_id: `item:${sequence}`,
     run_id: "run:1",
+    provider_turn_id: null,
     thread_id: "thread:1",
     ordinal: sequence,
     item_type: "dynamic_tool",
     tool_name: "Read",
     path: "src/a.ts",
     command: null,
+    pattern: null,
+    input_keys: null,
+    input_tokens: null,
+    input_digest: null,
     output_tokens: null,
     item_at: null,
     status: "completed",
@@ -94,15 +99,21 @@ export const ran = (command: string, tokens: number | null, overrides: Partial<T
 export const rowOf = (item: OrchestrationV2TurnItem): ToolCallRow => {
   const calls = toolCallFields(item);
   const output = toolOutputFields(item);
+  const input = toolInputFields(item);
   return {
     item_id: calls["turnItem.id"],
     run_id: calls["turnItem.runId"],
+    provider_turn_id: calls["turnItem.providerTurnId"],
     thread_id: calls["turnItem.threadId"],
     ordinal: calls["turnItem.ordinal"],
     item_type: calls["turnItem.type"],
     tool_name: calls["turnItem.toolName"],
     path: calls["turnItem.input"] ?? calls["turnItem.fileName"],
     command: output["turnItem.input"],
+    pattern: input["turnItem.pattern"],
+    input_keys: input["turnItem.input"]?.keys ?? null,
+    input_tokens: input["turnItem.input"]?.tokens ?? null,
+    input_digest: input["turnItem.input"]?.digest ?? null,
     output_tokens: output["turnItem.output"] ?? output["turnItem.results"],
     item_at: output["turnItem.startedAt"] ?? output["turnItem.updatedAt"],
     status: calls["turnItem.status"],
@@ -126,6 +137,7 @@ export const input = (overrides: Partial<MeasureInput> = {}): MeasureInput => ({
   from: FROM,
   to: TO,
   tier: undefined,
+  projectDirectory: null,
   threads: [],
   runs: [],
   toolCalls: [],

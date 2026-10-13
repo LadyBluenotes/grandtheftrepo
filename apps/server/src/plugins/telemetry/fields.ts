@@ -13,6 +13,7 @@ import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 
 import type { ItemDelivery } from "../learning/items/ItemStore.ts";
+import { digest } from "./digest.ts";
 import { outputTokens } from "./outputTokens.ts";
 
 /*
@@ -27,6 +28,7 @@ const iso = (value: DateTime.Utc | null | undefined) =>
 const ToolInputPath = Schema.Struct({
   file_path: Schema.optional(Schema.String),
   filePath: Schema.optional(Schema.String),
+  notebook_path: Schema.optional(Schema.String),
   path: Schema.optional(Schema.String),
 });
 const decodeToolInputPath = Schema.decodeUnknownOption(ToolInputPath);
@@ -35,8 +37,28 @@ const decodeToolInputPath = Schema.decodeUnknownOption(ToolInputPath);
 const inputPath = (input: unknown) =>
   Option.match(decodeToolInputPath(input), {
     onNone: () => null,
-    onSome: (fields) => fields.file_path ?? fields.filePath ?? fields.path ?? null,
+    onSome: (fields) =>
+      fields.file_path ?? fields.filePath ?? fields.notebook_path ?? fields.path ?? null,
   });
+
+const ToolInputPattern = Schema.Struct({
+  pattern: Schema.optional(Schema.String),
+  glob: Schema.optional(Schema.String),
+});
+const decodeToolInputPattern = Schema.decodeUnknownOption(ToolInputPattern);
+
+/** What a search tool's input looks for: its `pattern`, else its `glob`. */
+const inputPattern = (input: unknown) =>
+  Option.match(decodeToolInputPattern(input), {
+    onNone: () => null,
+    onSome: (fields) => fields.pattern ?? fields.glob ?? null,
+  });
+
+const encodeJson = Schema.encodeUnknownOption(Schema.fromJsonString(Schema.Unknown));
+
+/** A tool input as one text: a string as it is, anything else as its JSON. */
+const inputText = (input: unknown) =>
+  typeof input === "string" ? input : Option.getOrElse(encodeJson(input ?? null), () => "");
 
 /** The latest merge among the thread's pull requests, normalized like every stored instant. */
 const latestMerge = (thread: OrchestrationV2AppThread) =>
@@ -88,6 +110,8 @@ export const runFields = (run: OrchestrationV2Run) => ({
 export const toolCallFields = (item: OrchestrationV2TurnItem) => ({
   "turnItem.id": item.id,
   "turnItem.runId": item.runId,
+  /** Groups a call with no run, which a provider's subagent makes, with the rest of its turn. */
+  "turnItem.providerTurnId": item.providerTurnId,
   "turnItem.threadId": item.threadId,
   "turnItem.ordinal": item.ordinal,
   "turnItem.type": item.type,
@@ -128,6 +152,57 @@ export const toolOutputFields = (item: OrchestrationV2TurnItem) => ({
   "turnItem.startedAt": iso(item.startedAt),
   "turnItem.updatedAt": iso(item.updatedAt),
 });
+
+/**
+ * A tool call's input: a command's command line, a dynamic tool's input, a file search's pattern
+ * or a web search's patterns. A file change, or an item that is no tool call, has none.
+ */
+const toolInput = (item: OrchestrationV2TurnItem): { readonly input: unknown } | null => {
+  switch (item.type) {
+    case "command_execution":
+    case "dynamic_tool":
+      return { input: item.input };
+    case "file_search":
+      return { input: item.pattern };
+    case "web_search":
+      return { input: item.patterns };
+    default:
+      return null;
+  }
+};
+
+/** An object input's keys, sorted and joined with commas; none for anything else. */
+const inputKeys = (input: unknown) =>
+  typeof input === "object" && input !== null && !Array.isArray(input)
+    ? Object.keys(input).toSorted().join(",")
+    : "";
+
+/**
+ * What the repeated work measures read of a tool call's input to shape it and to compare two
+ * calls. The input itself is not kept: `turnItem.input` holds a dynamic tool's input keys (null
+ * for other items), the input's size in estimated tokens, sized as `outputTokens` sizes an
+ * output, and its sha256, which tells two equal inputs apart.
+ */
+export const toolInputFields = (item: OrchestrationV2TurnItem) => {
+  const tool = toolInput(item);
+  return {
+    /** A file search's pattern, or the `pattern`, else the `glob`, in a dynamic tool's input. */
+    "turnItem.pattern":
+      item.type === "file_search"
+        ? (item.pattern ?? null)
+        : item.type === "dynamic_tool"
+          ? inputPattern(item.input)
+          : null,
+    "turnItem.input":
+      tool === null
+        ? null
+        : {
+            keys: item.type === "dynamic_tool" ? inputKeys(item.input) : null,
+            tokens: outputTokens(tool.input),
+            digest: digest(inputText(tool.input)),
+          },
+  };
+};
 
 export const threadFields = (thread: OrchestrationV2AppThread) => ({
   "thread.id": thread.id,
@@ -185,6 +260,7 @@ export type FieldPath =
   | keyof ReturnType<typeof runFields>
   | keyof ReturnType<typeof toolCallFields>
   | keyof ReturnType<typeof toolOutputFields>
+  | keyof ReturnType<typeof toolInputFields>
   | keyof ReturnType<typeof threadFields>
   | keyof ReturnType<typeof settledFields>
   | keyof ReturnType<typeof pinnedFields>

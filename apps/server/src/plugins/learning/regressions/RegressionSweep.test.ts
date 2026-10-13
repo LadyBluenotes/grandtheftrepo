@@ -396,6 +396,33 @@ it.effect(
 );
 
 it.effect(
+  "extraction candidates doubling opens nothing, while the deterministic work share worsening does",
+  () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const learning = yield* setup();
+        const ratio = { unit: "ratio", direction: "lower_is_better" } as const;
+        const count = { unit: "count", direction: "lower_is_better" } as const;
+        learning.windows.set(day("2026-09-28"), [
+          measure("extraction_candidates", 4, count),
+          measure("deterministic_work_share", 0.2, ratio),
+        ]);
+        learning.windows.set(day("2026-10-05"), [
+          measure("extraction_candidates", 8, count),
+          measure("deterministic_work_share", 0.3, ratio),
+        ]);
+
+        // The count grows with activity and is not compared; the share is a rate and is.
+        assert.deepEqual(yield* learning.sweep(), { examined: 1, acted: 1, flags: 0 });
+        assert.deepEqual(
+          (yield* learning.itemsOf(projectId)).map(([failureMode]) => failureMode),
+          ["efficiency_regression:deterministic_work_share"],
+        );
+      }),
+    ),
+);
+
+it.effect(
   "a window where the tool output total doubles and the largest result does not opens no item",
   () =>
     Effect.scoped(

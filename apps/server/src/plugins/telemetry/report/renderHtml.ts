@@ -51,6 +51,22 @@ const largestResults = (measure: TelemetryMeasure) => {
     : `<table><thead><tr><th>Largest result</th><th>Tokens</th><th>Thread</th></tr></thead><tbody>${rows.join("")}</tbody></table>`;
 };
 
+/**
+ * A measure's five costliest extraction candidates as a table of their own, or nothing for a
+ * measure without them.
+ */
+const topCandidates = (measure: TelemetryMeasure) => {
+  const rows = (measure.detail?.candidates ?? [])
+    .slice(0, 5)
+    .map(
+      (row) =>
+        `<tr><td>${row.steps.map(escape).join(" &rarr; ")}</td><td>${row.threads}</td><td>~${row.estimatedTokens}</td><td>${escape(row.form)}</td></tr>`,
+    );
+  return rows.length === 0
+    ? ""
+    : `<table><thead><tr><th>Repeated steps</th><th>Threads</th><th>Tokens</th><th>Form</th></tr></thead><tbody>${rows.join("")}</tbody></table>`;
+};
+
 const STYLE = [
   "body{color:var(--foreground);font-family:var(--font-sans)}",
   "h1{font-size:1.25rem;margin:0 0 4px}",
@@ -171,7 +187,7 @@ export const renderHtml = (report: TelemetryReport) =>
       escape(item.measure),
       escape(measureValue(item)),
       String(item.sampleSize),
-      escape(item.missingReason ?? "") + largestResults(item),
+      escape(item.missingReason ?? "") + largestResults(item) + topCandidates(item),
     ]),
     "</body></html>",
   ].join("");
