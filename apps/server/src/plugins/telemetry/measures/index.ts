@@ -51,6 +51,7 @@ const NO_ROWS: MeasureInput = {
   corrections: undefined,
   deliveries: undefined,
   verdicts: undefined,
+  knowledgePages: undefined,
   pricing: { rates: new Map(), overrides: new Map(), aliases: new Map() },
 };
 

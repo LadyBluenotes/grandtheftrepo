@@ -10,6 +10,7 @@ import {
   TelemetryBudget,
   TelemetryBudgetsResult,
   TelemetryError,
+  type TelemetryMeasure,
   TelemetryMeasuresResult,
   TelemetryReportResult,
   TelemetryToolOutputResult,
@@ -328,17 +329,21 @@ const seedLearning = (sql: SqlClient.SqlClient) =>
     yield* give(8, "convention", "2026-10-07T00:00:00.000Z");
   });
 
-/** `telemetry.measures` through the gateway and through the MCP tool, which must agree. */
-const answers = Effect.gen(function* () {
-  const fromGateway = yield* measures().pipe(Effect.flatMap(decodeMeasures));
-  const call = yield* mcp;
-  const called = yield* call("tools/call", {
-    name: "telemetry_measures",
-    arguments: measuresInput,
+/**
+ * `telemetry.measures` through the gateway and through the MCP tool, which must agree. One MCP
+ * server answers per test, so a test that asks twice builds `call` once and uses `answersWith`.
+ */
+const answersWith = (call: Effect.Success<typeof mcp>) =>
+  Effect.gen(function* () {
+    const fromGateway = yield* measures().pipe(Effect.flatMap(decodeMeasures));
+    const called = yield* call("tools/call", {
+      name: "telemetry_measures",
+      arguments: measuresInput,
+    });
+    assert.deepEqual(decodeMeasuresJson(called.content?.[0]?.text ?? ""), fromGateway);
+    return new Map(fromGateway.map((measure) => [measure.measure, measure]));
   });
-  assert.deepEqual(decodeMeasuresJson(called.content?.[0]?.text ?? ""), fromGateway);
-  return new Map(fromGateway.map((measure) => [measure.measure, measure]));
-});
+const answers = Effect.flatMap(mcp, answersWith);
 
 it.effect(
   "enabled: its file is migrated, the reactor and sweep run, and the tool and RPC agree",
@@ -531,6 +536,109 @@ it.effect("review off: its measure names the review plugin, and learning's still
         );
         assert.match(review?.missingReason ?? "", /review plugin/);
         assert.strictEqual(byName.get("known_error_recurrence")?.state, "ok");
+      }).pipe(Effect.provide(layerHost(fakes.layer)));
+    }),
+  ).pipe(Effect.provide(layerTest)),
+);
+
+/**
+ * Four runs in the window that edited a file, two of which read `.knowledge/testing.md` first, one
+ * of them after its edit instead; and a fifth that only read the page.
+ */
+const seedKnowledgeRuns = (sql: SqlClient.SqlClient) =>
+  Effect.gen(function* () {
+    yield* sql`INSERT INTO telemetry_threads (thread_id, project_id, created_at)
+      VALUES ('thread:1', ${measuresInput.projectId}, '2026-10-02T00:00:00.000Z')`;
+    for (const [index, name] of ["a", "b", "c", "d", "e"].entries()) {
+      yield* sql`INSERT INTO telemetry_runs
+          (run_id, thread_id, turn_id, ordinal, status, model, started_at, completed_at,
+           event_sequence)
+        VALUES (${`run:${name}`}, 'thread:1', ${`message:${name}`}, ${index + 1}, 'completed',
+          'test-model', '2026-10-02T00:00:00.000Z', '2026-10-02T00:10:00.000Z', 1)`;
+    }
+    const call = (
+      item: string,
+      run: string,
+      ordinal: number,
+      type: "Read" | "Edit",
+      path: string,
+    ) =>
+      sql`INSERT INTO telemetry_tool_calls
+          (item_id, run_id, thread_id, ordinal, item_type, tool_name, path, status, event_sequence)
+        VALUES (${item}, ${`run:${run}`}, 'thread:1', ${ordinal},
+          ${type === "Read" ? "dynamic_tool" : "file_change"},
+          ${type === "Read" ? "Read" : null}, ${path}, 'completed', 1)`;
+    yield* call("item:1", "a", 1, "Read", ".knowledge/testing.md");
+    yield* call("item:2", "a", 2, "Edit", "src/a.ts");
+    yield* call("item:3", "b", 3, "Read", "/work/project/.knowledge/testing.md");
+    yield* call("item:4", "b", 4, "Edit", "src/a.ts");
+    yield* call("item:5", "c", 5, "Read", "src/b.ts");
+    yield* call("item:6", "c", 6, "Edit", "src/a.ts");
+    yield* call("item:7", "d", 7, "Edit", "src/a.ts");
+    yield* call("item:8", "d", 8, "Read", ".knowledge/testing.md");
+    yield* call("item:9", "e", 9, "Read", ".knowledge/testing.md");
+  });
+
+const givePage = (sql: SqlClient.SqlClient, state: string) =>
+  sql`INSERT INTO knowledge_entry
+      (project_id, "key", title, body, state, source, created_at, accepted_at, retired_at)
+    VALUES (${measuresInput.projectId}, 'testing', 'Testing', 'Run vp test.', ${state},
+      '{"kind":"person"}', '2026-10-01T00:00:00.000Z', NULL, NULL)`;
+
+it.effect(
+  "knowledge on: knowledge_reuse answers from the page reads before an edit, and the tool agrees",
+  () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        yield* writeStateFile("plugins.json", onlyPlugins(["telemetry", "knowledge"]));
+        const fakes = yield* core;
+        yield* Effect.gen(function* () {
+          const host = yield* PluginHost.PluginHost;
+          assert.deepEqual([...host.activeIds], ["telemetry", "knowledge"]);
+          const answered = answersWith(yield* mcp);
+          const pick = (byName: ReadonlyMap<string, TelemetryMeasure>) => {
+            const measure = byName.get("knowledge_reuse");
+            return [measure?.state, measure?.value, measure?.sampleSize, measure?.missingReason];
+          };
+
+          const telemetryDb = host.databases.get("telemetry")!;
+          const knowledgeDb = host.databases.get("knowledge")!;
+
+          // A draft is not a page the index lists.
+          yield* givePage(knowledgeDb, "draft");
+          assert.deepEqual(pick(yield* answered), [
+            "unavailable",
+            null,
+            0,
+            "The project has no knowledge page yet.",
+          ]);
+
+          yield* knowledgeDb`UPDATE knowledge_entry SET state = 'accepted'`;
+          assert.deepEqual(pick(yield* answered), [
+            "unavailable",
+            null,
+            0,
+            "No run in the window edited a file.",
+          ]);
+
+          yield* seedKnowledgeRuns(telemetryDb);
+          assert.deepEqual(pick(yield* answered), ["ok", 0.5, 4, null]);
+        }).pipe(Effect.provide(layerHost(fakes.layer)));
+      }),
+    ).pipe(Effect.provide(layerTest)),
+);
+
+it.effect("knowledge off: its measure names the knowledge plugin", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      yield* writeStateFile("plugins.json", onlyPlugins(["telemetry"]));
+      const fakes = yield* core;
+      yield* Effect.gen(function* () {
+        const host = yield* PluginHost.PluginHost;
+        yield* seedKnowledgeRuns(host.databases.get("telemetry")!);
+        const reuse = (yield* answers).get("knowledge_reuse");
+        assert.deepEqual([reuse?.state, reuse?.value, reuse?.sampleSize], ["unavailable", null, 0]);
+        assert.match(reuse?.missingReason ?? "", /knowledge plugin/);
       }).pipe(Effect.provide(layerHost(fakes.layer)));
     }),
   ).pipe(Effect.provide(layerTest)),
