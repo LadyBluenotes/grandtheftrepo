@@ -1,7 +1,14 @@
 import { expect, it } from "@effect/vitest";
 import { NodeHttpServer } from "@effect/platform-node";
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import { EnvironmentId, ProjectId, type Project } from "@t3tools/contracts";
+import {
+  EnvironmentId,
+  ProjectId,
+  ProviderInstanceId,
+  ThreadId,
+  type Project,
+  type RoutingEntry,
+} from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
@@ -14,6 +21,7 @@ import * as ServerConfig from "../../config.ts";
 import * as McpHttpServer from "../../mcp/McpHttpServer.ts";
 import type * as McpInvocationContext from "../../mcp/McpInvocationContext.ts";
 import * as McpSessionRegistry from "../../mcp/McpSessionRegistry.ts";
+import * as ThreadLaunchService from "../../orchestration-v2/ThreadLaunchService.ts";
 import * as ThreadManagementService from "../../orchestration-v2/ThreadManagementService.ts";
 import * as ProjectService from "../../project/ProjectService.ts";
 import * as ProviderRegistry from "../../provider/ProviderRegistry.ts";
@@ -21,6 +29,7 @@ import * as ServerSettings from "../../serverSettings.ts";
 import * as PluginDatabase from "../PluginDatabase.ts";
 import * as PluginHost from "../PluginHost.ts";
 import * as PluginSupervisor from "../PluginSupervisor.ts";
+import * as TierSelectionService from "../routing/TierSelectionService.ts";
 import * as KanbanStore from "./KanbanStore.ts";
 import { migrations } from "./migrations.ts";
 import * as SpecService from "./spec/SpecService.ts";
@@ -76,6 +85,45 @@ function listedTools(body: string): ReadonlyArray<{
     []
   );
 }
+
+const cheap: RoutingEntry = {
+  providerInstanceId: ProviderInstanceId.make("codex"),
+  model: "gpt-5.4-mini",
+};
+/** What the server's request context holds: a launcher that records, and routing's tier service. */
+const launched: Array<ThreadLaunchService.ThreadLaunchInput> = [];
+const layerRequestServices = Layer.mergeAll(
+  Layer.succeed(
+    ThreadLaunchService.ThreadLaunchService,
+    ThreadLaunchService.ThreadLaunchService.of({
+      launch: (input) =>
+        Effect.sync(() => {
+          launched.push(input);
+          return {
+            threadId: input.threadId ?? ThreadId.make("unused"),
+            resumed: false,
+            projection: {} as never,
+          };
+        }),
+      checkWorktreeBase: () => Effect.void,
+      retryPreparation: () => Effect.die("unused"),
+    }),
+  ),
+  Layer.succeed(
+    TierSelectionService.TierSelectionService,
+    TierSelectionService.TierSelectionService.of({
+      recommend: (work) =>
+        Effect.succeed({
+          taskClass: work.taskClass,
+          tier: "cheap",
+          reason: "rule",
+          failedRuns: 0,
+          entry: cheap,
+        }),
+      record: () => Effect.void,
+    }),
+  ),
+);
 
 /**
  * The plugin registers its tools through the host the way the server does:
@@ -268,6 +316,38 @@ it.effect("registers kanban tools through the plugin host and files an issue ove
       expect(waiting).toContain("valid. The spec passed, but the issue is still in triage");
       expect(waiting).not.toContain("the issue is in todo");
 
+      // A drafting thread starts from the MCP route too. `SpecService` reads the launcher and the
+      // tier service from the calling fiber, and the tool declares neither. They are the server's
+      // environment: the tool runner provides the context the toolkit was registered in on top of
+      // the request's, so what the server provides reaches the handler. The emergency stop set
+      // above holds back drafting, so clear it first.
+      yield* callStop(29, { action: "clear" });
+      yield* rpc(30, "tools/call", {
+        name: "kanban_write",
+        arguments: { projectId, action: "issue.create", title: "Draft me", description: "Rough." },
+      });
+      const drafting = resultText(
+        yield* rpc(31, "tools/call", {
+          name: "kanban_ticket_specify",
+          arguments: { projectId, id: "draft-me" },
+        }),
+      );
+      expect(drafting).toContain("Spec attempt");
+      expect(drafting).toContain(": running.");
+      expect(launched).toHaveLength(1);
+      expect(launched[0]).toMatchObject({
+        projectId,
+        title: "Spec: Draft me",
+        modelSelection: { instanceId: cheap.providerInstanceId, model: cheap.model },
+        runtimeMode: "approval-required",
+        interactionMode: "plan",
+      });
+      expect(launched[0]?.initialMessage?.text).toContain("Rough.");
+      expect(specified.at(-1)?.modes).toEqual({
+        runtimeMode: "approval-required",
+        interactionMode: "plan",
+      });
+
       const fs = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
       const { baseDir } = yield* ServerConfig.ServerConfig;
@@ -281,6 +361,7 @@ it.effect("registers kanban tools through the plugin host and files an issue ove
     Effect.provide(
       Layer.mergeAll(
         NodeHttpServer.layerTest,
+        layerRequestServices,
         Layer.fresh(ServerConfig.layerTest(process.cwd(), { prefix: "t3code-kanban-mcp-" })).pipe(
           Layer.provide(NodeServices.layer),
         ),
