@@ -219,6 +219,50 @@ it.effect(
     ),
 );
 
+it.effect("lists a project's verdicts in [from, to), oldest first with ties by id", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const { store, review } = yield* harness;
+      const give = (id: string, project: string, createdAt: string) =>
+        review`INSERT INTO review_verdicts
+          (id, project_id, reviewed_thread_id, reviewer_thread_id, checkpoint_id, outcome, summary,
+           created_at)
+          VALUES (${id}, ${project}, ${reviewed}, ${reviewer}, ${ready}, 'approve', 'Fine.',
+           ${createdAt})`;
+      yield* give("before", projectId, "2026-09-30T23:59:59.999Z");
+      yield* give("later", projectId, "2026-10-02T00:00:00.000Z");
+      yield* give("earlier-tied", projectId, "2026-10-02T00:00:00.000Z");
+      yield* give("at-from", projectId, "2026-10-01T00:00:00.000Z");
+      yield* give("at-to", projectId, "2026-10-08T00:00:00.000Z");
+      yield* give("elsewhere", "project:elsewhere", "2026-10-03T00:00:00.000Z");
+
+      const window = yield* store.listWindow({
+        projectId,
+        from: "2026-10-01T00:00:00.000Z",
+        to: "2026-10-08T00:00:00.000Z",
+      });
+      assert.deepEqual(
+        window.map((verdict) => verdict.id),
+        ["at-from", "earlier-tied", "later"],
+      );
+      // The same rows `list` reads for the thread, in the same shape.
+      const ofThread = yield* store.list({ threadId: reviewed });
+      assert.deepEqual(
+        window,
+        ofThread.filter((verdict) => window.some((inside) => inside.id === verdict.id)),
+      );
+      assert.deepEqual(
+        yield* store.listWindow({
+          projectId,
+          from: "2026-10-09T00:00:00.000Z",
+          to: "2026-10-10T00:00:00.000Z",
+        }),
+        [],
+      );
+    }),
+  ),
+);
+
 /**
  * A learning store that takes turns with other fibers, as two requests on a busy server do. Both
  * callers get past the leftover check before either writes, and the first one to write a

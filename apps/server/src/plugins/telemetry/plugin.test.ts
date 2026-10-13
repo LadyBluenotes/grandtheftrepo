@@ -37,11 +37,22 @@ const measuresInput = {
 };
 
 /** `telemetry.measures` through the read gateway, as a client calls it. */
-const measures = PluginHost.handlers[PLUGIN_GATEWAY_WS_METHODS.read]({
-  method: TELEMETRY_METHODS.measures.method,
-  input: measuresInput,
-});
+const measures = (input = measuresInput) =>
+  PluginHost.handlers[PLUGIN_GATEWAY_WS_METHODS.read]({
+    method: TELEMETRY_METHODS.measures.method,
+    input,
+  });
+const decodeMeasures = Schema.decodeUnknownEffect(TelemetryMeasuresResult);
+const decodeMeasuresJson = Schema.decodeUnknownSync(Schema.fromJsonString(TelemetryMeasuresResult));
 const decodeTelemetryError = Schema.decodeUnknownEffect(TelemetryError);
+
+/** The `TelemetryError` a gateway call failed with. */
+const refusal = (call: ReturnType<typeof measures>) =>
+  Effect.gen(function* () {
+    const refused = yield* call.pipe(Effect.andThen(Effect.die("expected a failure")), Effect.flip);
+    if (refused._tag !== "PluginMethodError") return assert.fail(refused.message);
+    return yield* decodeTelemetryError(refused.error);
+  });
 
 const environmentId = EnvironmentId.make("env-1");
 const clientToken = "client-payload.client-signature";
@@ -57,7 +68,7 @@ const clientScope: McpInvocationContext.McpInvocationScope = {
 /** The JSON-RPC result of an MCP call, from a JSON or SSE response body. */
 function mcpResult(body: string): {
   readonly tools?: ReadonlyArray<{ readonly name: string }>;
-  readonly structuredContent?: unknown;
+  readonly content?: ReadonlyArray<{ readonly text?: string }>;
 } {
   const json = body.startsWith("{")
     ? body
@@ -184,42 +195,161 @@ const layerTest = Layer.mergeAll(
   NodeServices.layer,
 );
 
+/**
+ * One window's rows, as the reactor would have stored them: a thread settled by hand in the
+ * window, one run in it that read the same file twice.
+ */
+const seed = (sql: SqlClient.SqlClient) =>
+  Effect.gen(function* () {
+    yield* sql`INSERT INTO telemetry_threads
+        (thread_id, project_id, created_at, settled_at, settled_by_sweep)
+      VALUES ('thread:1', ${measuresInput.projectId}, '2026-10-02T00:00:00.000Z',
+        '2026-10-03T00:00:00.000Z', 0)`;
+    yield* sql`INSERT INTO telemetry_runs
+        (run_id, thread_id, turn_id, ordinal, status, model, started_at, completed_at,
+         event_sequence)
+      VALUES ('run:1', 'thread:1', 'message:1', 1, 'completed', 'test-model',
+        '2026-10-02T00:00:00.000Z', '2026-10-02T00:10:00.000Z', 1)`;
+    yield* sql`INSERT INTO telemetry_tool_calls
+        (item_id, run_id, thread_id, ordinal, item_type, tool_name, path, status, event_sequence)
+      VALUES
+        ('item:1', 'run:1', 'thread:1', 1, 'dynamic_tool', 'Read', 'src/a.ts', 'completed', 1),
+        ('item:2', 'run:1', 'thread:1', 2, 'dynamic_tool', 'Read', 'src/a.ts', 'completed', 1)`;
+  });
+
+/**
+ * The review plugin's rows for the window. Four threads count: thread:b was sent back before it
+ * was approved, so three of the four were approved the first time. thread:d was first reviewed
+ * before the window, so its approval inside it is not a first review.
+ */
+const seedReview = (sql: SqlClient.SqlClient) =>
+  Effect.gen(function* () {
+    const give = (id: string, thread: string, outcome: string, createdAt: string) =>
+      sql`INSERT INTO review_verdicts
+          (id, project_id, reviewed_thread_id, reviewer_thread_id, checkpoint_id, outcome,
+           failure_mode, summary, created_at)
+        VALUES (${id}, ${measuresInput.projectId}, ${thread}, 'thread:reviewer',
+          ${`checkpoint:${id}`}, ${outcome}, ${outcome === "approve" ? null : "defect"},
+          'Reviewed.', ${createdAt})`;
+    yield* give("1", "thread:a", "approve", "2026-10-02T00:00:00.000Z");
+    yield* give("2", "thread:b", "changes_requested", "2026-10-03T00:00:00.000Z");
+    yield* give("3", "thread:b", "approve", "2026-10-04T00:00:00.000Z");
+    yield* give("4", "thread:c", "approve", "2026-10-05T00:00:00.000Z");
+    yield* give("5", "thread:d", "changes_requested", "2026-09-30T00:00:00.000Z");
+    yield* give("6", "thread:d", "approve", "2026-10-06T00:00:00.000Z");
+    yield* give("7", "thread:e", "approve", "2026-10-07T00:00:00.000Z");
+  });
+
+/**
+ * The learning plugin's rows for the window. The `defect` item was handed over on 10-04, then a
+ * person closed it, and a later piece of evidence moved its own `updated_at` to 10-09, so only
+ * the promotion says when, and a closed item still counts as known.
+ * Of the six corrections with a declared mode in the window, two are `defect` after 10-04.
+ */
+const seedLearning = (sql: SqlClient.SqlClient) =>
+  Effect.gen(function* () {
+    const { projectId } = measuresInput;
+    const item = (id: number, project: string, mode: string, state: string, updatedAt: string) =>
+      sql`INSERT INTO learning_items
+          (id, project_id, failure_mode, occurrences, state, owner_kind, disposition_by, reason,
+           created_at, updated_at)
+        VALUES (${id}, ${project}, ${mode}, 2, ${state}, 'prompt', 'rule', 'Routed by rule.',
+          '2026-10-01T00:00:00.000Z', ${updatedAt})`;
+    yield* item(1, projectId, "defect", "closed", "2026-10-09T00:00:00.000Z");
+    yield* item(2, projectId, "incomplete", "open", "2026-10-09T00:00:00.000Z");
+    // Another project's promoted item for a mode this project has not handed over.
+    yield* item(3, "project:elsewhere", "convention", "promoted", "2026-10-02T00:00:00.000Z");
+    yield* sql`INSERT INTO learning_promotions
+        (id, item_id, project_id, failure_mode, owner_kind, state, attempts, created_at, updated_at)
+      VALUES (1, 1, ${projectId}, 'defect', 'prompt', 'delivered', 0, '2026-10-02T00:00:00.000Z',
+        '2026-10-04T00:00:00.000Z'),
+        (2, 3, 'project:elsewhere', 'convention', 'prompt', 'delivered', 0,
+        '2026-10-02T00:00:00.000Z', '2026-10-02T00:00:00.000Z')`;
+
+    const give = (id: number, mode: string | null, createdAt: string) =>
+      sql`INSERT INTO corrections
+          (id, project_id, thread_id, failure_kind, cause_class, declared_mode, description,
+           source_event_ids, created_at, updated_at)
+        VALUES (${id}, ${projectId}, 'thread:a', 'review_verdict', 'unclassified', ${mode},
+          'Wrong.', '[]', ${createdAt}, ${createdAt})`;
+    yield* give(1, "defect", "2026-10-03T00:00:00.000Z");
+    yield* give(2, "defect", "2026-10-05T00:00:00.000Z");
+    // At the moment of the promotion, which is not before it.
+    yield* give(3, "defect", "2026-10-04T00:00:00.000Z");
+    yield* give(4, "incomplete", "2026-10-06T00:00:00.000Z");
+    yield* give(5, "defect", "2026-10-08T00:00:00.000Z");
+    yield* give(6, null, "2026-10-06T00:00:00.000Z");
+    // At the window's end, which the window excludes and the learning plugin lists.
+    yield* give(7, "defect", measuresInput.to);
+    yield* give(8, "convention", "2026-10-07T00:00:00.000Z");
+  });
+
+/** `telemetry.measures` through the gateway and through the MCP tool, which must agree. */
+const answers = Effect.gen(function* () {
+  const fromGateway = yield* measures().pipe(Effect.flatMap(decodeMeasures));
+  const call = yield* mcp;
+  const called = yield* call("tools/call", {
+    name: "telemetry_measures",
+    arguments: measuresInput,
+  });
+  assert.deepEqual(decodeMeasuresJson(called.content?.[0]?.text ?? ""), fromGateway);
+  return new Map(fromGateway.map((measure) => [measure.measure, measure]));
+});
+
 it.effect(
   "enabled: its file is migrated, the reactor and sweep run, and the tool and RPC agree",
   () =>
     Effect.scoped(
       Effect.gen(function* () {
-        yield* writeStateFile("plugins.json", onlyPlugins(["telemetry"]));
+        yield* writeStateFile("plugins.json", onlyPlugins(["telemetry", "learning"]));
         yield* Effect.gen(function* () {
           const host = yield* PluginHost.PluginHost;
-          assert.deepEqual([...host.activeIds], ["telemetry"]);
+          assert.deepEqual([...host.activeIds], ["telemetry", "learning"]);
           assert.isTrue(yield* telemetryFileExists);
-          // The reactor made its cursor table in the plugin's own file next to the migrated one.
+          // The reactor made its cursor table in the plugin's own file next to the migrated ones.
           assert.deepEqual(yield* tableNames(host.databases.get("telemetry")!), [
             "effect_sql_migrations",
             "host_reactor_cursor",
             "host_reactor_failure",
+            "telemetry_runs",
+            "telemetry_threads",
+            "telemetry_tool_calls",
             "telemetry_turn_usage",
           ]);
 
           const supervisor = yield* PluginSupervisor.PluginSupervisor;
           const tick = yield* supervisor.tick;
           assert.isFalse(tick.dryRun);
+          // The learning plugin registers sweeps of its own; only telemetry's are checked here.
           assert.deepEqual(
-            tick.sweeps.map((s) => [s.plugin, s.name, s.status, s.examined, s.acted, s.flags]),
+            tick.sweeps
+              .filter((s) => s.plugin === "telemetry")
+              .map((s) => [s.plugin, s.name, s.status, s.examined, s.acted, s.flags]),
             [["telemetry", "heartbeat", "ok", 0, 0, 0]],
           );
-          assert.deepEqual((yield* supervisor.status).sweeps, [
-            { plugin: "telemetry", name: "heartbeat" },
-          ]);
-
-          const fromHandler = yield* measures.pipe(
-            Effect.flatMap(Schema.decodeUnknownEffect(TelemetryMeasuresResult)),
+          assert.deepEqual(
+            (yield* supervisor.status).sweeps.filter((s) => s.plugin === "telemetry"),
+            [{ plugin: "telemetry", name: "heartbeat" }],
           );
-          assert.deepEqual(fromHandler, {
-            state: "unavailable",
-            missingReason: "Measures are not built yet (#1).",
-          });
+
+          yield* seed(host.databases.get("telemetry")!);
+          const fromHandler = yield* measures().pipe(Effect.flatMap(decodeMeasures));
+          const byName = new Map(fromHandler.map((measure) => [measure.measure, measure]));
+          assert.strictEqual(fromHandler.length, 14);
+          assert.deepEqual(
+            ["time_to_accepted_outcome", "repeated_reads", "material_correction_burden"].map(
+              (name) => [byName.get(name)?.state, byName.get(name)?.value],
+            ),
+            // The learning plugin runs and has no corrections: zero is its answer.
+            [
+              ["ok", 86_400],
+              ["ok", 0.5],
+              ["ok", 0],
+            ],
+          );
+          const invalid = yield* refusal(measures({ ...measuresInput, from: "last week" }));
+          assert.strictEqual(invalid.message, "The window's from and to must be ISO instants.");
+
           const call = yield* mcp;
           const tools = (yield* call("tools/list", {})).tools?.map((tool) => tool.name) ?? [];
           assert.include(tools, "telemetry_measures");
@@ -227,10 +357,68 @@ it.effect(
             name: "telemetry_measures",
             arguments: measuresInput,
           });
-          assert.deepEqual(called.structuredContent, fromHandler);
+          // MCP carries a list as JSON text; the server keeps `structuredContent` for objects.
+          assert.deepEqual(decodeMeasuresJson(called.content?.[0]?.text ?? ""), fromHandler);
         }).pipe(Effect.provide(layerHost));
       }),
     ).pipe(Effect.provide(layerTest)),
+);
+
+it.effect("review and learning on: both review measures answer ok on a fixture", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      yield* writeStateFile("plugins.json", onlyPlugins(["telemetry", "learning", "review"]));
+      yield* Effect.gen(function* () {
+        const host = yield* PluginHost.PluginHost;
+        yield* seedReview(host.databases.get("review")!);
+        yield* seedLearning(host.databases.get("learning")!);
+        const byName = yield* answers;
+        const pick = (name: string) => {
+          const measure = byName.get(name);
+          return [measure?.state, measure?.value, measure?.sampleSize, measure?.missingReason];
+        };
+        assert.deepEqual(pick("first_review_acceptance"), ["ok", 0.75, 4, null]);
+        assert.deepEqual(pick("known_error_recurrence"), ["ok", 2 / 6, 6, null]);
+      }).pipe(Effect.provide(layerHost));
+    }),
+  ).pipe(Effect.provide(layerTest)),
+);
+
+it.effect("review off: its measure names the review plugin, and learning's still answers", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      yield* writeStateFile("plugins.json", onlyPlugins(["telemetry", "learning"]));
+      yield* Effect.gen(function* () {
+        const host = yield* PluginHost.PluginHost;
+        yield* seedLearning(host.databases.get("learning")!);
+        const byName = yield* answers;
+        const review = byName.get("first_review_acceptance");
+        assert.deepEqual(
+          [review?.state, review?.value, review?.sampleSize],
+          ["unavailable", null, 0],
+        );
+        assert.match(review?.missingReason ?? "", /review plugin/);
+        assert.strictEqual(byName.get("known_error_recurrence")?.state, "ok");
+      }).pipe(Effect.provide(layerHost));
+    }),
+  ).pipe(Effect.provide(layerTest)),
+);
+
+it.effect("learning off: its measure names the learning plugin", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      yield* writeStateFile("plugins.json", onlyPlugins(["telemetry"]));
+      yield* Effect.gen(function* () {
+        const byName = yield* answers;
+        const learning = byName.get("known_error_recurrence");
+        assert.deepEqual(
+          [learning?.state, learning?.value, learning?.sampleSize],
+          ["unavailable", null, 0],
+        );
+        assert.match(learning?.missingReason ?? "", /learning plugin/);
+      }).pipe(Effect.provide(layerHost));
+    }),
+  ).pipe(Effect.provide(layerTest)),
 );
 
 it.effect("a dry run runs the heartbeat the same way", () =>
@@ -260,12 +448,7 @@ it.effect("disabled: no file, no sweep, no tool, and the RPC says it is not runn
         assert.isFalse(yield* telemetryFileExists);
         assert.deepEqual((yield* (yield* PluginSupervisor.PluginSupervisor).status).sweeps, []);
 
-        const refused = yield* measures.pipe(
-          Effect.andThen(Effect.die("expected a failure")),
-          Effect.flip,
-        );
-        if (refused._tag !== "PluginMethodError") return assert.fail(refused.message);
-        const error = yield* decodeTelemetryError(refused.error);
+        const error = yield* refusal(measures());
         assert.strictEqual(error._tag, "TelemetryError");
         assert.strictEqual(error.message, 'Plugin "telemetry" is not running.');
 

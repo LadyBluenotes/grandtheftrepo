@@ -43,6 +43,13 @@ const toItem = (row: Row): LearningItem => ({
   updatedAt: row.updated_at,
 });
 
+/** When a project first handed a failure mode over: its earliest delivered promotion. */
+export interface ItemDelivery {
+  readonly failureMode: string;
+  /** An ISO instant. */
+  readonly deliveredAt: string;
+}
+
 /**
  * Learning items: one per recurring failure mode per project, routed to an owner kind by rules on
  * the mode alone, or by a person, whose choice no rule overwrites.
@@ -67,6 +74,15 @@ export class ItemStore extends Context.Service<
     ) => Effect.Effect<ReadonlyArray<LearningItem>, LearningError>;
     /** One item with its evidence and promotions, oldest first. */
     readonly get: (id: number) => Effect.Effect<LearningItemDetail, LearningError>;
+    /**
+     * For each failure mode a project has handed over, when its earliest delivered promotion was
+     * delivered, by failure mode. One query over the promotion records, whatever state the item
+     * is in now: a person closing or moving an item does not undo its handover. Internal: it has
+     * no gateway method.
+     */
+    readonly deliveredAt: (
+      projectId: ProjectId,
+    ) => Effect.Effect<ReadonlyArray<ItemDelivery>, LearningError>;
     /**
      * A person sets the owner kind or closes and reopens the item. `promoted` comes only from
      * delivery and `candidate` only from the owner kind, so neither is accepted.
@@ -164,6 +180,20 @@ const make = Effect.gen(function* () {
       };
     }).pipe(Effect.provideService(SqlClient.SqlClient, sql), Effect.catchTags({ SqlError: io }));
 
+  const deliveredAt: ItemStore["Service"]["deliveredAt"] = (projectId) =>
+    sql<{
+      readonly failure_mode: string;
+      readonly delivered_at: string;
+    }>`SELECT failure_mode, MIN(updated_at) AS delivered_at FROM learning_promotions
+      WHERE project_id = ${projectId} AND state = 'delivered'
+      GROUP BY failure_mode
+      ORDER BY failure_mode`.pipe(
+      Effect.map((rows) =>
+        rows.map((row) => ({ failureMode: row.failure_mode, deliveredAt: row.delivered_at })),
+      ),
+      Effect.catchTags({ SqlError: io }),
+    );
+
   const setDisposition: ItemStore["Service"]["setDisposition"] = ({ id, ownerKind, state }) =>
     Effect.gen(function* () {
       if (state === "promoted" || state === "candidate") {
@@ -194,7 +224,7 @@ const make = Effect.gen(function* () {
       return toItem(updated!);
     }).pipe(Effect.catchTags({ SqlError: io }));
 
-  return ItemStore.of({ strengthen, list, get, setDisposition });
+  return ItemStore.of({ strengthen, list, get, deliveredAt, setDisposition });
 });
 
 export const layer = Layer.effect(ItemStore, make);

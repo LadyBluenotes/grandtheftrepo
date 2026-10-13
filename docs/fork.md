@@ -67,6 +67,10 @@ error when it is absent. Declaring it as a `Tool` dependency or yielding the tag
 whole server require it and fails to typecheck. See
 [`plugins/kanban/handlers.ts`](../apps/server/src/plugins/kanban/handlers.ts).
 
+A sweep's `run` executes in the supervisor's tick with every active plugin's services, so it can
+read a sibling plugin's service with `Effect.serviceOption` without either plugin listing the other
+in `dependsOn`. A plugin's layer still cannot see its siblings while it builds.
+
 Plugin methods go through three gateway RPCs, `plugins.read`, `plugins.operate` and
 `plugins.settingsWrite`, one per scope, because the WebSocket RPC group sits at TypeScript's
 instantiation limit: a couple more tags and `ServerWsRpcGroup.toLayer` fails with TS2589. A plugin
@@ -91,10 +95,20 @@ them half-evaluated. The host hands `toolkitRegistration` to `ServerPlugin.mcp` 
   `spec`, and the description is never edited. Server: `apps/server/src/plugins/kanban/`.
   Contracts: `packages/contracts/src/plugins/kanban.ts`. Web: `apps/web/src/plugins/kanban/`. User
   guide: [Kanban board](./user/kanban.md).
-- **telemetry**: token usage per provider turn, from `provider-turn.updated`. The template plugin:
-  it uses every host seam once (database, reactor, sweep, gateway method, MCP tool, settings
-  panel) and is the one to copy. Server: `apps/server/src/plugins/telemetry/`. Contracts:
-  `packages/contracts/src/plugins/telemetry.ts`. Web: `apps/web/src/plugins/telemetry/`.
+- **telemetry**: the fourteen efficiency measures of #1 over a project's window, from the
+  `telemetry.measures` gateway method and the `telemetry_measures` MCP tool. Its reactor keeps
+  runs, tool calls, threads and provider turn token usage from the event log in the plugin's own
+  tables, and pure functions in `measures/` compute each measure from those rows; cost is priced
+  with the rate table the Usage page saves. A measure whose input is not recorded, or comes from a
+  plugin that is off or not built yet, answers `unavailable` with the reason. Migration 2 drops
+  the reactor's cursor so the new tables fill from the first event; a request waits a few seconds
+  for the reactor to catch up, and past that every measure answers `unavailable`. Where
+  compaction before the upgrade kept a later thread event in place of a `thread.settled`, who
+  settled is lost, and a thread settled by hand that way counts as an accepted outcome only if a
+  pull request merged. The template plugin: it uses every host seam once (database, reactor,
+  sweep, gateway method, MCP tool, settings panel) and is the one to copy. Server:
+  `apps/server/src/plugins/telemetry/`. Contracts: `packages/contracts/src/plugins/telemetry.ts`.
+  Web: `apps/web/src/plugins/telemetry/`.
 - **routing**: which model does which work. Three tiers, `cheap`, `standard` and `strong`, each map
   to a provider instance and a model, set for the environment and overridable per project, in the
   plugin's own database. A tier with nothing saved falls back to the built-in: one instance's model
@@ -103,7 +117,10 @@ them half-evaluated. The host hands `toolkitRegistration` to `ServerPlugin.mcp` 
   A launcher starts work through `TierSelectionService.launch` or `delegate`: they pick a tier from
   the caller's task class, one tier up per failed run of the same work, hand the launch that tier's
   model, and append a `routing_recommended` row to `routing_events`; with the plugin off the launch
-  is unchanged. Server: `apps/server/src/plugins/routing/`. Contracts:
+  is unchanged. A reactor compares the thread's first run with its recommendation and appends one
+  `routing_observed` row; `routing.adherence` and the `routing_adherence` MCP tool report the share
+  that matched over a window, with each mismatch, and answer `unavailable` below five observed
+  launches. Server: `apps/server/src/plugins/routing/`. Contracts:
   `packages/contracts/src/plugins/routing.ts`. Web: `apps/web/src/plugins/routing/`.
 - **learning**: a record of corrections, visible instances of work going wrong, taken from
   events the server already emits: failed or interrupted provider turns, pull request wakes
@@ -111,7 +128,11 @@ them half-evaluated. The host hands `toolkitRegistration` to `ServerPlugin.mcp` 
   them over MCP. Two sweeps turn corrections with a declared failure mode into learning items, one
   per mode per project, routed by fixed rules on the mode to an owner kind, and hand each item
   over through one promotion record, at least once, keyed by the record's id so a promoter can
-  drop a repeat; no promoter is registered yet, so records wait. Server:
+  drop a repeat; no promoter is registered yet, so records wait. A third sweep compares each
+  project's telemetry measures over the last seven whole UTC days with the seven before, once a
+  day, and opens or strengthens an `efficiency_regression:<measure>` item, with no owner kind, for
+  each measure worse by its threshold in `regressions/thresholds.ts`; with telemetry off it does
+  nothing. Server:
   `apps/server/src/plugins/learning/`. Contracts:
   `packages/contracts/src/plugins/learning.ts`. No screen yet.
 - **policy**: reviewed working rules per project (`*` is the whole environment), versioned in the

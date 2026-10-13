@@ -58,7 +58,9 @@ export const sweep = Effect.gen(function* () {
             const item = yield* restore(items.get(promotion.itemId));
             const outcome = yield* Effect.result(restore(promoter.value.promote(item, key)));
             if (Result.isSuccess(outcome)) {
-              yield* PromotionStore.deliver(promotion, now);
+              // Stamped when the promoter returns, not when the tick began: a slow promoter would
+              // otherwise leave a delivery time before the lesson was handed over.
+              yield* PromotionStore.deliver(promotion, yield* DateTime.now);
               return false;
             }
             return (
