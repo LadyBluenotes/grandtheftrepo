@@ -88,9 +88,11 @@ them half-evaluated. The host hands `toolkitRegistration` to `ServerPlugin.mcp` 
   `<T3 home>/wiki/<project-slug>/`; the folder is changeable per project from the board.
   Its own database, `plugins/kanban.sqlite`, holds the emergency stop (`StopGate`, which a sweep
   that starts a thread must ask first; no launcher calls it yet). The `writers` sweep raises an
-  attention flag when two agents write one project. Server: `apps/server/src/plugins/kanban/`.
-  Contracts: `packages/contracts/src/plugins/kanban.ts`. Web: `apps/web/src/plugins/kanban/`. User
-  guide: [Kanban board](./user/kanban.md).
+  attention flag when two agents write one project. `kanban.attention.list` feeds the strip above
+  the board from the project's open host flags, its threads' pending questions and permission
+  requests, and, while routing runs, its routing mismatches. Server:
+  `apps/server/src/plugins/kanban/`. Contracts: `packages/contracts/src/plugins/kanban.ts`. Web:
+  `apps/web/src/plugins/kanban/`. User guide: [Kanban board](./user/kanban.md).
 - **telemetry**: the fourteen efficiency measures of #1 over a project's window, from the
   `telemetry.measures` gateway method and the `telemetry_measures` MCP tool. Its reactor keeps
   runs, tool calls, threads and provider turn token usage from the event log in the plugin's own

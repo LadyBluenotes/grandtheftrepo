@@ -2,6 +2,7 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import {
   KANBAN_METHODS,
+  KanbanAttentionRow,
   KanbanError,
   PLUGIN_GATEWAY_WS_METHODS,
   type OrchestrationV2ThreadShell,
@@ -23,7 +24,7 @@ import * as Attention from "../Attention.ts";
 import * as PluginHost from "../PluginHost.ts";
 import * as PluginSupervisor from "../PluginSupervisor.ts";
 import { registry } from "../registry.ts";
-import { thread } from "./writerFixtures.ts";
+import { projectA, thread } from "./writerFixtures.ts";
 
 const writers: ReadonlyArray<OrchestrationV2ThreadShell> = [
   thread("a", { startedSeconds: 10 }),
@@ -47,6 +48,8 @@ const layerHost = PluginHost.layerAll.pipe(
             threads: writers,
             archivedThreads: [],
           }),
+        listProjectThreads: ({ projectId }) =>
+          Effect.succeed(writers.filter((writer) => writer.projectId === projectId)),
       }),
       Layer.mock(ProjectService.ProjectService)({}),
       // Inactive routing still types its catalog and settings reads through `layerAll`.
@@ -86,6 +89,7 @@ const layerTest = Layer.mergeAll(
 );
 
 const decodeError = Schema.decodeUnknownEffect(KanbanError);
+const decodeRows = Schema.decodeUnknownEffect(Schema.Array(KanbanAttentionRow));
 
 const operate = (method: string, input: unknown) =>
   PluginHost.handlers[PLUGIN_GATEWAY_WS_METHODS.operate]({ method, input });
@@ -125,6 +129,13 @@ it.effect(
             flags.map((flag) => flag.threadId),
             ["a"],
           );
+          const rows = yield* decodeRows(
+            yield* read(KANBAN_METHODS.attentionList.method, { projectId: projectA }),
+          );
+          assert.deepEqual(
+            rows.map((row) => [row.source, row.kind, row.threadTitle]),
+            [["flag", "two_writers", "Thread a"]],
+          );
 
           assert.isNull(yield* read(KANBAN_METHODS.stopGet.method, {}));
           yield* operate(KANBAN_METHODS.stopSet.method, { reason: "freeze" });
@@ -162,7 +173,7 @@ it.effect("a dry run records the sweep and writes no flag", () =>
   ).pipe(Effect.provide(layerTest)),
 );
 
-it.effect("disabled: no file, no sweep, and the stop methods say the plugin is not active", () =>
+it.effect("disabled: no file, no sweep, and its methods say the plugin is not active", () =>
   Effect.scoped(
     Effect.gen(function* () {
       yield* writeStateFile("plugins.json", allOff);
@@ -172,13 +183,18 @@ it.effect("disabled: no file, no sweep, and the stop methods say the plugin is n
         assert.isFalse(yield* kanbanFileExists);
         assert.deepEqual((yield* (yield* PluginSupervisor.PluginSupervisor).status).sweeps, []);
 
-        const refused = yield* operate(KANBAN_METHODS.stopSet.method, {}).pipe(
-          Effect.andThen(Effect.die("expected a failure")),
-          Effect.flip,
-        );
-        if (refused._tag !== "PluginMethodError") return assert.fail(refused.message);
-        const error = yield* decodeError(refused.error);
-        assert.strictEqual(error.code, "inactive");
+        for (const call of [
+          operate(KANBAN_METHODS.stopSet.method, {}),
+          read(KANBAN_METHODS.attentionList.method, { projectId: projectA }),
+        ]) {
+          const refused = yield* call.pipe(
+            Effect.andThen(Effect.die("expected a failure")),
+            Effect.flip,
+          );
+          if (refused._tag !== "PluginMethodError") return assert.fail(refused.message);
+          const error = yield* decodeError(refused.error);
+          assert.strictEqual(error.code, "inactive");
+        }
       }).pipe(Effect.provide(layerHost));
     }),
   ).pipe(Effect.provide(layerTest)),

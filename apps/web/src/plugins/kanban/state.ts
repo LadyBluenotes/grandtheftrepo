@@ -2,19 +2,23 @@ import {
   createPluginRpcCommand,
   createPluginRpcQueryAtomFamily,
 } from "@t3tools/client-runtime/plugins/rpc";
+import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/models";
 import { createEnvironmentRpcSubscriptionAtomFamily } from "@t3tools/client-runtime/state/runtime";
 import {
   HOST_METHODS,
   KANBAN_METHODS,
   KANBAN_WS_METHODS,
+  type EnvironmentId,
   type KanbanDecision,
   type KanbanIssue,
+  type ProjectId,
 } from "@t3tools/contracts";
 import { AsyncResult, Atom } from "effect/reactivity";
 import * as Option from "effect/Option";
 
 import { connectionAtomRuntime } from "~/connection/runtime";
 import { environmentSummaries } from "~/state/presentation";
+import { environmentThreadShells } from "~/state/threads";
 
 /** Live board: a snapshot on subscribe, a fresh one after every change on disk or in the app. */
 export const kanbanBoard = createEnvironmentRpcSubscriptionAtomFamily(connectionAtomRuntime, {
@@ -62,6 +66,46 @@ export const kanbanStop = createPluginRpcQueryAtomFamily(connectionAtomRuntime, 
 export const kanbanStopClear = createPluginRpcCommand(connectionAtomRuntime, {
   label: "kanban:stop-clear",
   method: KANBAN_METHODS.stopClear,
+});
+
+/** Changes when a thread's pending request starts or ends, or it settles or leaves the project. */
+const pendingRequestsKey = (threads: ReadonlyArray<EnvironmentThreadShell>) =>
+  threads
+    .map(
+      (thread) =>
+        `${thread.id} ${thread.source.pendingRuntimeRequest?.id ?? "-"} ${thread.settledOverride ?? "-"} ${thread.settledAt ?? "-"}`,
+    )
+    .join("\n");
+
+/**
+ * What the attention strip refetches on: the window coming back into view, a change in the
+ * project's pending requests, and every board snapshot, which follows each board command. Any
+ * other shell update, such as streaming text, leaves it equal and refetches nothing.
+ */
+const attentionSignal = (environmentId: EnvironmentId, projectId: ProjectId) => {
+  const threads = environmentThreadShells.threadShellsForProjectRefsAtom([
+    { environmentId, projectId },
+  ]);
+  const board = kanbanBoard({ environmentId, input: { projectId } });
+  return Atom.withEquality(
+    Atom.make(
+      (get) => [get(Atom.windowFocusSignal), pendingRequestsKey(get(threads)), get(board)] as const,
+    ),
+    (left, right) => left.every((value, index) => Object.is(value, right[index])),
+  );
+};
+
+/**
+ * What waits on a person in a project, for the strip above the board. Flags are raised by sweeps
+ * and nothing pushes them, so besides the signal above it re-reads every 30 seconds while the
+ * board is open, as the stop does.
+ */
+export const kanbanAttention = createPluginRpcQueryAtomFamily(connectionAtomRuntime, {
+  label: "environment-data:kanban:attention",
+  method: KANBAN_METHODS.attentionList,
+  staleTimeMs: 5_000,
+  refreshIntervalMs: 30_000,
+  refreshTrigger: ({ environmentId, input }) => attentionSignal(environmentId, input.projectId),
 });
 
 const pluginStatuses = createPluginRpcQueryAtomFamily(connectionAtomRuntime, {

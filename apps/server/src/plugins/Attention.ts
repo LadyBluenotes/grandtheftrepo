@@ -4,6 +4,7 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 import type * as SqlError from "effect/sql/SqlError";
+import * as SqlSchema from "effect/sql/SqlSchema";
 import * as HostDatabase from "./HostDatabase.ts";
 
 /** What the person should do about a flag: a label and the screen it leads to (issue #30). */
@@ -13,13 +14,27 @@ const ResumeAction = Schema.Struct({
 });
 const encodeResumeAction = Schema.encodeSync(Schema.fromJsonString(ResumeAction));
 
-type AttentionKind =
-  | "budget_breach"
-  | "routing_mismatch"
-  | "two_writers"
-  | "stale_review"
-  | "security_hold"
-  | "unowned_finding";
+const AttentionKind = Schema.Literals([
+  "budget_breach",
+  "routing_mismatch",
+  "two_writers",
+  "stale_review",
+  "security_hold",
+  "unowned_finding",
+]);
+type AttentionKind = typeof AttentionKind.Type;
+
+/** An open flag with what a person needs to act on it; `raisedAt` is when it was first raised. */
+const OpenFlag = Schema.Struct({
+  id: Schema.Int,
+  pluginId: Schema.String,
+  threadId: Schema.String,
+  kind: AttentionKind,
+  text: Schema.String,
+  resumeAction: Schema.fromJsonString(ResumeAction),
+  raisedAt: Schema.String,
+});
+export type OpenFlag = typeof OpenFlag.Type;
 
 interface FlagKey {
   readonly pluginId: string;
@@ -51,6 +66,12 @@ export class Attention extends Context.Service<
     }) => Effect.Effect<
       ReadonlyArray<{ readonly threadId: string; readonly text: string }>,
       SqlError.SqlError
+    >;
+
+    /** Every plugin's open flags, oldest first, for the screen that shows them. */
+    readonly listAllOpen: Effect.Effect<
+      ReadonlyArray<OpenFlag>,
+      SqlError.SqlError | Schema.SchemaError
     >;
   }
 >()("t3/plugins/Attention") {}
@@ -86,7 +107,18 @@ const make = Effect.gen(function* () {
       ORDER BY id
     `.pipe(Effect.map((rows) => rows.map((row) => ({ threadId: row.thread_id, text: row.text }))));
 
-  return Attention.of({ raise, clear, listOpen });
+  const listAllOpen = SqlSchema.findAll({
+    Request: Schema.Void,
+    Result: OpenFlag,
+    execute: () => sql`
+      SELECT id, plugin_id AS "pluginId", thread_id AS "threadId", kind, text,
+        resume_action AS "resumeAction", raised_at AS "raisedAt"
+      FROM attention WHERE cleared_at IS NULL
+      ORDER BY id
+    `,
+  })(undefined);
+
+  return Attention.of({ raise, clear, listOpen, listAllOpen });
 });
 
 export const layer = Layer.effect(Attention, make);
