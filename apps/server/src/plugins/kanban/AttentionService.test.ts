@@ -164,7 +164,7 @@ it.effect("a settled or archived thread's stale request gives no row", () =>
   ),
 );
 
-it.effect("routing mismatches show while routing runs, over the last seven whole UTC days", () =>
+it.effect("routing mismatches show while routing runs, over the seven days up to now", () =>
   Effect.scoped(
     Effect.gen(function* () {
       const { list, threads } = yield* fixture;
@@ -207,7 +207,7 @@ it.effect("routing mismatches show while routing runs, over the last seven whole
       });
       assert.deepEqual(kinds(on), ["routing_mismatch", "question"]);
       assert.deepEqual(yield* Ref.get(asked), [
-        { projectId: projectA, from: "2026-10-05T00:00:00.000Z", to: "2026-10-12T00:00:00.000Z" },
+        { projectId: projectA, from: "2026-10-05T15:30:00.000Z", to: "2026-10-12T15:30:00.000Z" },
       ]);
 
       // A routing failure leaves its rows out and the strip still answers.

@@ -96,15 +96,13 @@ const attentionSignal = (environmentId: EnvironmentId, projectId: ProjectId) => 
 };
 
 /**
- * What waits on a person in a project, for the strip above the board. Flags are raised by sweeps
- * and nothing pushes them, so besides the signal above it re-reads every 30 seconds while the
- * board is open, as the stop does.
+ * What waits on a person in a project, for the strip above the board. It re-reads only on the
+ * signal above and never polls, so a flag a sweep raises shows on the next of those.
  */
 export const kanbanAttention = createPluginRpcQueryAtomFamily(connectionAtomRuntime, {
   label: "environment-data:kanban:attention",
   method: KANBAN_METHODS.attentionList,
   staleTimeMs: 5_000,
-  refreshIntervalMs: 30_000,
   refreshTrigger: ({ environmentId, input }) => attentionSignal(environmentId, input.projectId),
 });
 

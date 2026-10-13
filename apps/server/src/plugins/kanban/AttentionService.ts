@@ -13,7 +13,7 @@ import { attentionRows } from "./attentionRows.ts";
 /**
  * What waits on a person in a project, for the strip above the board: live requests from the
  * project's thread shells, open flags from the host's attention table, and, while the routing
- * plugin runs, its mismatches over the last seven whole UTC days. Nothing here is stored or
+ * plugin runs, its mismatches over the past seven days up to now. Nothing here is stored or
  * dismissed; a row leaves when its source stops reporting it.
  */
 export class AttentionService extends Context.Service<
@@ -38,7 +38,7 @@ const routingMismatches = (projectId: ProjectId) =>
   Effect.gen(function* () {
     const routing = yield* Effect.serviceOption(AdherenceService.AdherenceService);
     if (Option.isNone(routing)) return [];
-    const to = DateTime.startOf(yield* DateTime.now, "day");
+    const to = yield* DateTime.now;
     const from = DateTime.subtract(to, { days: 7 });
     const report = yield* routing.value
       .adherence({ projectId, from: DateTime.formatIso(from), to: DateTime.formatIso(to) })
