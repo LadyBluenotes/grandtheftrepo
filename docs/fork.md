@@ -35,9 +35,9 @@ the `supervisor.json` interval, in registry order, and records each tick in `plu
 A sweep that finds something waiting on a person raises a flag with `Attention.raise` and clears it
 with `Attention.clear` once the cause is gone. Flags live in the host's `attention` table in that
 same file, so any plugin can raise one without depending on the plugin that shows them. The strip
-above the kanban board lists a flag whose key is not a thread when the key ends in `:<projectId>`
-or has the project id between colons (`kanban/attentionRows.ts`); a flag keyed by neither is on no
-board.
+above the kanban board lists a flag whose key is not a thread when the key ends in `:<projectId>`,
+has the project id between colons, or starts with `policy:*:` (`kanban/attentionRows.ts`); a flag
+keyed by none of these is on no board.
 
 ## Upstream seams
 
@@ -180,7 +180,7 @@ them half-evaluated. The host hands `toolkitRegistration` to `ServerPlugin.mcp` 
   while a run is active, and keeps one `delivery_drift` flag, `policy:<projectId>:<agent>:<path>`,
   for every project and file whose block was edited or deleted since its install, naming the
   project's blocks; it never writes the block, and an install makes the next tick clear the flag. A
-  `*` policy's flag names no project, so no board lists it. It reads the files itself because
+  `*` policy affects every project, so its flag is on every board. It reads the files itself because
   `verify` stamps `verified_at`, which a dry run must not. The first start seeds `*` /
   `ponytail`, the six-question ladder, and `*` /
   `caveman`, the terse reply rules, each unless a policy of that key exists in any state; the

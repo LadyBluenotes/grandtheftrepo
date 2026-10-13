@@ -38,7 +38,8 @@ const isSettled = (thread: OrchestrationV2ThreadShell) =>
  * - the pending request on each of the project's threads that is neither archived nor settled;
  * - open flags on one of its unarchived threads, or keyed to the project itself: a key that ends in
  *   `:<projectId>`, such as a budget's `budget:<id>:<projectId>`, or has it as a segment, such as a
- *   delivery drift flag's `policy:<projectId>:<agent>:<path>`; a flag on another project's thread,
+ *   delivery drift flag's `policy:<projectId>:<agent>:<path>`, or a `policy:*:` key, a policy of
+ *   the whole environment, which every project's board lists; a flag on another project's thread,
  *   or on an archived one, is left out;
  * - routing mismatches on one of its unarchived threads.
  */
@@ -78,7 +79,8 @@ export const attentionRows = (input: {
     const thread = byId.get(flag.threadId);
     const projectKey =
       flag.threadId.endsWith(`:${input.projectId}`) ||
-      flag.threadId.includes(`:${input.projectId}:`);
+      flag.threadId.includes(`:${input.projectId}:`) ||
+      flag.threadId.startsWith("policy:*:");
     if (thread === undefined && !projectKey) return [];
     return [
       {

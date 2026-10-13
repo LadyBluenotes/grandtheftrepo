@@ -188,6 +188,28 @@ describe("attentionRows", () => {
     );
   });
 
+  it("lists a drift flag of an environment-wide policy on every project's board", () => {
+    const environmentWide = flag({
+      id: 1,
+      pluginId: "policy",
+      kind: "delivery_drift",
+      threadId: "policy:*:claude:/home/me/.claude/CLAUDE.md",
+      text: 'The "ponytail" policy block was edited.',
+      resumeAction: { label: "Reinstall", target: "settings" },
+    });
+    for (const projectId of [projectA, projectB]) {
+      assert.deepEqual(
+        rows({ projectId, flags: [environmentWide] }).map((row) => [
+          row.id,
+          row.threadId,
+          row.kind,
+          row.text,
+        ]),
+        [["flag:1", null, "delivery_drift", 'The "ponytail" policy block was edited.']],
+      );
+    }
+  });
+
   it("shows a routing mismatch on one of the project's threads as a flag naming the thread", () => {
     const result = rows({
       threads: [thread("a")],
