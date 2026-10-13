@@ -389,13 +389,24 @@ it.effect("after a stopped turn the diff starts at the last turn it can diff fro
   ).pipe(Effect.provide(layerSink)),
 );
 
-it.effect("without a diff query the scan skips the event and records no failure", () =>
+it.effect("without a diff query a turn is unreadable: passed over in warn, held in block", () =>
   Effect.scoped(
     Effect.gen(function* () {
       const kit = yield* boot();
       yield* kit.publish(captured(turnCheckpoint(1)));
       assert.deepEqual(yield* kit.security.findings({ threadId: reviewed }), []);
       assert.deepEqual(yield* kit.failures, []);
+
+      yield* kit.security.setMode({ projectId, mode: "block" });
+      yield* kit.publish(captured(turnCheckpoint(2)));
+      assert.deepEqual(yield* kit.failures, []);
+      assert.deepEqual(
+        (yield* kit.security.findings({ threadId: reviewed })).map((finding) => [
+          finding.checkpointId,
+          finding.patternId,
+        ]),
+        [[turnCheckpoint(2).id, "scan_failed"]],
+      );
     }),
   ).pipe(Effect.provide(layerSink)),
 );

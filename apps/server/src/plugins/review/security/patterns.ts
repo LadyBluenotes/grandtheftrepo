@@ -73,9 +73,15 @@ const TOKEN = /\bAKIA[0-9A-Z]{16}\b|\bghp_[A-Za-z0-9]{36}\b|\bsk-[A-Za-z0-9_-]{2
 const PRIVATE_KEY = /-----BEGIN (?:[A-Z0-9]+ )*PRIVATE KEY-----/;
 const EVAL = /\beval\s*\(|\bnew\s+Function\s*\(/;
 const FETCHED = /\b(?:fetch|curl|wget)\b/;
+/**
+ * `sudo` or `env` ahead of the command, by name or path, with its options, the values of the
+ * options that take one, and `env`'s `NAME=value` assignments. The first other word is the command.
+ */
+const WRAPPER = String.raw`(?:[\w.-]*\/)*(?:sudo(?:\s+(?:-[ugCDhprtU]\s+[^\s|]+|-\S+))*|env(?:\s+(?:-[uCS]\s+[^\s|]+|-\S+|\w+=[^\s|]*))*)\s+`;
 /** A download piped into `sh`, `bash` or `zsh`, by name or path, through `sudo` or `env` or not. */
-const PIPE_TO_SHELL =
-  /\b(?:curl|wget)\b[^|]*\|\s*(?:sudo(?:\s+-\S+)*\s+)?(?:[\w.-]*\/)*(?:env\s+(?:[\w.-]*\/)*)?(?:ba|z)?sh\b/;
+const PIPE_TO_SHELL = new RegExp(
+  String.raw`\b(?:curl|wget)\b[^|]*\|\s*(?:${WRAPPER})*(?:[\w.-]*\/)*(?:ba|z)?sh\b`,
+);
 const WORKFLOW_FILE = /^\.github\/workflows\/[^/]+\.ya?ml$/;
 const EVENT_EXPRESSION = /\$\{\{\s*github\.event\./;
 const RUN_KEY = /^\s*(?:-\s+)?run\s*:/;

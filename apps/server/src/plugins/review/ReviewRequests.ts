@@ -163,18 +163,20 @@ const make = Effect.gen(function* () {
           message: "This thread has no checkpoint to review yet.",
         });
       }
-      const held = yield* holdOf(sql, threadId);
-      if (held > 0) {
-        return yield* new ReviewVerdictError({
-          code: "gated",
-          message: `${holdText(held)} Call review_security_ack with a reason.`,
-        });
-      }
+      // The scan writes its row and its findings in one transaction, so asking whether it is done
+      // before asking for a hold means a scan that commits between the two is seen by the second.
       const shell = yield* threads.getThreadShell(threadId).pipe(Effect.catch(io));
       if (shell !== null && (yield* scanPending(sql, shell.projectId, latest))) {
         return yield* new ReviewVerdictError({
           code: "scan_pending",
           message: SCAN_PENDING_MESSAGE,
+        });
+      }
+      const held = yield* holdOf(sql, threadId);
+      if (held > 0) {
+        return yield* new ReviewVerdictError({
+          code: "gated",
+          message: `${holdText(held)} Call review_security_ack with a reason.`,
         });
       }
       const requestedAt = DateTime.formatIso(yield* DateTime.now);

@@ -79,7 +79,6 @@ export const sweep = Effect.gen(function* () {
         ),
       );
       if (latest === null || latest === undefined) continue;
-      if ((yield* holdOf(sql, threadId)) > 0) continue;
       const shell = yield* threads
         .getThreadShell(threadId)
         .pipe(
@@ -89,7 +88,10 @@ export const sweep = Effect.gen(function* () {
             ),
           ),
         );
+      // The scan writes its row and its findings in one transaction, so asking whether it is done
+      // before asking for a hold means a scan that commits between the two is seen by the second.
       if (shell === null || (yield* scanPending(sql, shell.projectId, latest))) continue;
+      if ((yield* holdOf(sql, threadId)) > 0) continue;
       const outcome = yield* sql.withTransaction(
         Effect.gen(function* () {
           const rows = yield* standing(sql, threadId);

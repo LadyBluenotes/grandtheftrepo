@@ -81,9 +81,9 @@ export const handlers = Effect.gen(function* () {
   const attention = yield* Attention.Attention;
 
   /**
-   * The matches on the lines the turn added, none when the checkpoint is not a root run's, or
-   * undefined when the turn cannot be read: its run stopped or failed, and `getTurnDiff` covers
-   * completed runs only.
+   * The matches on the lines the turn added, none when the checkpoint is not a root run's, or the
+   * warning to log when the turn cannot be read: its run stopped or failed, and `getTurnDiff`
+   * covers completed runs only, or there is no diff query to ask.
    */
   const scanTurn = (threadId: ThreadId, checkpoint: OrchestrationV2Checkpoint, ordinal: number) =>
     Effect.gen(function* () {
@@ -96,22 +96,23 @@ export const handlers = Effect.gen(function* () {
       );
       if (!root) return [];
       const run = runs.find((candidate) => candidate.id === checkpoint.runId);
-      if (run !== undefined && UNREADABLE_RUNS.has(run.status)) return undefined;
+      if (run !== undefined && UNREADABLE_RUNS.has(run.status)) {
+        return "review: security scan cannot read a turn that did not complete" as const;
+      }
       // Read from the reactor fiber's context, which the server's chain gives it, rather than
       // required of the layer: that would put it in every plugin's requirements for this alone.
       const diffs = yield* Effect.serviceOption(CheckpointDiffQuery.CheckpointDiffQuery);
       if (Option.isNone(diffs)) {
-        yield* Effect.logWarning("review: security scan skipped, no checkpoint diff query");
-        return [];
+        return "review: security scan skipped, no checkpoint diff query" as const;
       }
       return scan(yield* turnDiff(diffs.value, threadId, ordinal));
     });
 
   /**
    * Scans one ready checkpoint of `threadId` and stores what it found. A turn the scan cannot read
-   * holds the thread in `block`; in `warn` a stopped or failed turn is passed over with a warning,
-   * its lines scanned with the next completed turn's, and any other failure fails the event for the
-   * sweep to retry. The project's mode is read now, as the scan runs: the moment the turn ended,
+   * holds the thread in `block`; in `warn` a turn that stopped or failed, or one with no diff query
+   * to ask, is passed over with a warning, a stopped or failed one's lines scanned with the next
+   * completed turn's, and any other failure fails the event for the sweep to retry. The project's mode is read now, as the scan runs: the moment the turn ended,
    * unless this is a retry of a failed scan.
    */
   const scanCheckpoint = (
@@ -132,20 +133,15 @@ export const handlers = Effect.gen(function* () {
             ? Effect.logWarning("review: security scan failed; holding the thread", {
                 threadId,
                 cause,
-              }).pipe(Effect.as(undefined))
+              }).pipe(Effect.as(SCAN_FAILED))
             : Effect.fail(cause),
         ),
       );
-      if (scanned === undefined && mode === "warn") {
-        return yield* Effect.logWarning(
-          "review: security scan cannot read a turn that did not complete",
-          {
-            threadId,
-            checkpointId: checkpoint.id,
-          },
-        );
+      if (typeof scanned === "string") {
+        yield* Effect.logWarning(scanned, { threadId, checkpointId: checkpoint.id });
+        if (mode === "warn") return;
       }
-      const matches = scanned ?? SCAN_FAILED;
+      const matches = typeof scanned === "string" ? SCAN_FAILED : scanned;
       if (matches.length === 0) return;
 
       const createdAt = DateTime.formatIso(occurredAt);
@@ -218,8 +214,9 @@ export const markScanStart = Effect.gen(function* () {
  * reactor's own retry, which otherwise runs only at start. It records a `security` correction in
  * the learning plugin for each finding without one, which the reactor cannot: a reactor sees only
  * its own plugin's services, and a sweep runs with every active plugin's. The description names the
- * pattern, file and line, never the matched text, and the source key is the finding's id, so a
- * retry finds the same correction; a `scan_failed` row records none. It then reconciles each held
+ * pattern, file and line, never the matched text, and the source key is built from the finding's
+ * thread, checkpoint, pattern, file and line (`sourceKeyOf`), so a retry finds the same correction
+ * and a rebuilt review database never lands on an old one; a `scan_failed` row records none. It then reconciles each held
  * thread's `security_hold` flag with its open findings, and clears flags whose hold is gone. A dry
  * run counts what it would do and writes nothing.
  */
