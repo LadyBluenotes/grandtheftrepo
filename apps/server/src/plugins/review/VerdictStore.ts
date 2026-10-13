@@ -21,6 +21,7 @@ import type * as SqlError from "effect/sql/SqlError";
 
 import type * as Orchestrator from "../../orchestration-v2/Orchestrator.ts";
 import * as ThreadManagementService from "../../orchestration-v2/ThreadManagementService.ts";
+import * as Attention from "../Attention.ts";
 import * as CorrectionStore from "../learning/CorrectionStore.ts";
 
 interface Row {
@@ -76,7 +77,9 @@ export class VerdictStore extends Context.Service<
      * one), then the row that points at it; the correction lives in the learning plugin's database,
      * so the two cannot share a transaction. The same payload again answers with the stored result
      * and adds nothing; a different one is refused. So is a call that finds a correction left by an
-     * earlier call that stopped before its row, unless it declares that correction's mode.
+     * earlier call that stopped before its row, unless it declares that correction's mode. The row
+     * answers the thread's request open at the same checkpoint, and answering one that superseded a
+     * stale request clears the thread's `stale_review` flag.
      */
     readonly record: (
       reviewerThreadId: ThreadId,
@@ -103,6 +106,7 @@ export class VerdictStore extends Context.Service<
 const make = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
   const threads = yield* ThreadManagementService.ThreadManagementService;
+  const attention = yield* Attention.Attention;
   // The checks, the correction and the verdict row span two databases, so callers for the same
   // checkpoint are serialized here rather than by a transaction.
   const recordLock = yield* Semaphore.make(1);
@@ -209,13 +213,41 @@ const make = Effect.gen(function* () {
               })
               .pipe(Effect.mapError(fromLearning));
       const at = DateTime.formatIso(yield* DateTime.now);
-      // A concurrent identical call may have inserted first; its row is the one settled below.
-      yield* sql`INSERT INTO review_verdicts
-        (id, project_id, reviewed_thread_id, reviewer_thread_id, checkpoint_id, outcome,
-         failure_mode, summary, correction_id, created_at)
-        VALUES (${id}, ${projectId}, ${input.threadId}, ${reviewerThreadId}, ${input.checkpointId},
-         ${input.outcome}, ${failureMode}, ${input.summary}, ${correction?.id ?? null}, ${at})
-        ON CONFLICT (id) DO NOTHING`;
+      const answeredSuperseding = yield* sql.withTransaction(
+        Effect.gen(function* () {
+          // A concurrent identical call may have inserted first; its row is the one settled below.
+          yield* sql`INSERT INTO review_verdicts
+            (id, project_id, reviewed_thread_id, reviewer_thread_id, checkpoint_id, outcome,
+             failure_mode, summary, correction_id, created_at)
+            VALUES (${id}, ${projectId}, ${input.threadId}, ${reviewerThreadId},
+             ${input.checkpointId}, ${input.outcome}, ${failureMode}, ${input.summary},
+             ${correction?.id ?? null}, ${at})
+            ON CONFLICT (id) DO NOTHING`;
+          // The verdict answers the request open at its checkpoint, and no other.
+          const answered = yield* sql<{ readonly id: number }>`UPDATE review_request
+            SET status = 'answered'
+            WHERE thread_id = ${input.threadId} AND checkpoint_id = ${input.checkpointId}
+              AND status = 'open'
+            RETURNING id`;
+          if (answered.length === 0) return false;
+          const superseded = yield* sql`SELECT 1 FROM review_request
+            WHERE thread_id = ${input.threadId}
+              AND superseded_by IN ${sql.in(answered.map((row) => row.id))}
+            LIMIT 1`;
+          return superseded.length > 0;
+        }),
+      );
+      if (answeredSuperseding) {
+        // The flag lives in the host's file. Should this write fail, the invalidation sweep
+        // clears it on its next tick, so the verdict still stands.
+        yield* attention
+          .clear({ pluginId: "review", threadId: input.threadId, kind: "stale_review" })
+          .pipe(
+            Effect.catch((cause) =>
+              Effect.logWarning("review: could not clear a stale review flag", { cause }),
+            ),
+          );
+      }
       return yield* settle((yield* find(id))!);
     }).pipe(recordLock.withPermits(1), Effect.catchTags({ SqlError: io }));
 
