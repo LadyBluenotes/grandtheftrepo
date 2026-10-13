@@ -13,6 +13,21 @@ export const POLICY_AGENTS = PolicyAgent.literals;
 export const PolicyKey = TrimmedNonEmptyString.check(Schema.isPattern(/^[a-z0-9-]+$/));
 export type PolicyKey = typeof PolicyKey.Type;
 
+/**
+ * The ponytail ladder's rungs, earliest first. The built-in `ponytail` policy states them and the
+ * review plugin accepts only these after `rung:` in a `convention` verdict's summary.
+ */
+export const PonytailRungId = Schema.Literals([
+  "needed",
+  "existing",
+  "platform",
+  "dependency",
+  "one_line",
+  "minimum",
+]);
+export type PonytailRungId = typeof PonytailRungId.Type;
+export const PONYTAIL_RUNG_IDS = PonytailRungId.literals;
+
 export const PolicyState = Schema.Literals(["draft", "accepted", "superseded"]);
 export type PolicyState = typeof PolicyState.Type;
 

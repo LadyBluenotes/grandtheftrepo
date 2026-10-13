@@ -1,5 +1,5 @@
 import { assert, it } from "@effect/vitest";
-import type { ReviewVerdictError, ReviewVerdictInput, ThreadId } from "@t3tools/contracts";
+import { ThreadId, type ReviewVerdictError, type ReviewVerdictInput } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Ref from "effect/Ref";
 
@@ -171,6 +171,75 @@ it.effect("refuses what the ticket names, each with its message, and writes noth
       }
       assert.strictEqual(yield* verdictCount, 0);
       assert.strictEqual(yield* correctionCount, 0);
+    }),
+  ),
+);
+
+const convention = (summary: string) =>
+  ({ ...sendBack, failureMode: "convention", summary }) satisfies ReviewVerdictInput;
+
+it.effect("stores a convention verdict that names a rung, as written", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const { record, list, corrections, verdictCount } = yield* harness;
+      // One verdict per reviewer and checkpoint, so each summary comes from its own reviewer.
+      const summaries = [
+        "rung:dependency adds a package for three lines",
+        "rung:one_line. A loop does what a map does.",
+        "rung:needed: nothing calls it",
+      ];
+      for (const [index, summary] of summaries.entries()) {
+        const result = yield* record(
+          ThreadId.make(`thread:reviewer-${index}`),
+          convention(summary),
+        );
+        const correction = yield* corrections.get(result.correctionId!);
+        assert.strictEqual(correction.declaredMode, "convention");
+      }
+      assert.strictEqual(yield* verdictCount, summaries.length);
+      assert.deepEqual(
+        (yield* list({ threadId: reviewed })).map((verdict) => verdict.summary),
+        summaries,
+      );
+    }),
+  ),
+);
+
+it.effect("refuses a convention summary that names no known rung, and writes nothing", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const { record, verdictCount, correctionCount } = yield* harness;
+      const rungs = "needed, existing, platform, dependency, one_line, minimum";
+      for (const [named, summary] of [
+        ["bogus", "rung:bogus"],
+        ["", "rung:"],
+        ["Dependency", "rung:Dependency, three lines"],
+        ["one-line", "rung:one-line is the rung"],
+      ] as const) {
+        const refused = yield* refusal(record(reviewer, convention(summary)));
+        assert.strictEqual(refused.code, "invalid");
+        assert.strictEqual(refused.message, `Unknown rung "${named}". Rungs: ${rungs}.`);
+      }
+      assert.strictEqual(yield* verdictCount, 0);
+      assert.strictEqual(yield* correctionCount, 0);
+    }),
+  ),
+);
+
+it.effect("leaves a summary alone unless it is a convention one starting with rung:", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const { record, verdictCount } = yield* harness;
+      const cases: ReadonlyArray<readonly [name: string, input: ReviewVerdictInput]> = [
+        ["plain", convention("It breaks the naming convention.")],
+        ["rung later in the text", convention("Breaks the ladder at rung:bogus.")],
+        ["another mode", { ...sendBack, failureMode: "defect", summary: "rung:bogus" }],
+        ["approval", { ...approve, summary: "rung:bogus" }],
+      ];
+      for (const [name, input] of cases) {
+        yield* record(ThreadId.make(`thread:reviewer-${name}`), input);
+      }
+      assert.strictEqual(yield* verdictCount, cases.length);
     }),
   ),
 );
