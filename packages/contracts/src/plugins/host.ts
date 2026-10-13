@@ -23,6 +23,7 @@ export * from "./review.ts";
 export * from "./routing.ts";
 export * from "./supervisor.ts";
 export * from "./telemetry.ts";
+export * from "./telemetryReport.ts";
 
 /**
  * One RPC per scope; plugin methods are dispatched behind them by name. The WebSocket group sits at

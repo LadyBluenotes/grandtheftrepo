@@ -5,7 +5,6 @@ import {
   type TelemetryMeasuresInput,
 } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
-import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Option from "effect/Option";
@@ -28,11 +27,10 @@ import * as VerdictStore from "../review/VerdictStore.ts";
 import * as TierMapService from "../routing/TierMapService.ts";
 import { computeMeasures, unavailableMeasures } from "./measures/index.ts";
 import type { RunRow, ThreadRow, ToolCallRow, TurnUsageRow } from "./measures/input.ts";
+import { readiness } from "./readiness.ts";
 
 /** The LiteLLM rate snapshot the Usage page saves under the state directory. */
 const RATES_FILE = "usage-model-rates.json";
-/** How long a request waits for the reactor to catch up before answering without values. */
-const CATCH_UP_WAIT = Duration.seconds(3);
 const decodeRatesFile = Schema.decodeUnknownEffect(
   Schema.fromJsonString(Schema.Struct({ document: Schema.Unknown })),
 );
@@ -64,13 +62,8 @@ const failWith =
  * narrow only to the project; each measure picks its own rows by window, so the window logic is
  * all in the pure measures. Nothing is cached.
  *
- * `caughtUp` is the reactor's `drain`. The tables trail the event log, by all of it while the
- * reactor replays from the first event (as after migrations 2 and 3), and a value read from
- * half-filled tables is wrong rather than missing; so a request waits for the reactor first, and
- * when it is not caught up within `CATCH_UP_WAIT` every measure answers `unavailable`. The reactor
- * also advances past an event whose handler failed, leaving a row in `host_reactor_failure`; a
- * table missing that event reads as complete, so any such row makes every measure `unavailable`
- * too, until a retry (`retryFailed`, which the reactor runs at start) clears it.
+ * `caughtUp` is the reactor's `drain`. Until `readiness` says the tables are complete, every
+ * measure answers `unavailable` with its reason.
  *
  * With a `tier`, only the project's runs on that tier's model, as the routing plugin resolves it
  * now, count, with their tool calls and turn usage; threads all stay. A run is on the tier when
@@ -107,21 +100,10 @@ export const make = Effect.fn("MeasureService.make")(function* (
       const { projectId, tier } = input;
       const tierModel = tier === undefined ? undefined : yield* modelOf(projectId, tier);
       if (typeof tierModel === "string") return unavailableMeasures(tierModel);
-      const inTime = yield* Effect.timeoutOption(caughtUp, CATCH_UP_WAIT).pipe(
-        Effect.catch(failWith("The event log could not be read.")),
+      const unready = yield* readiness(caughtUp).pipe(
+        Effect.provideService(SqlClient.SqlClient, sql),
       );
-      if (Option.isNone(inTime)) {
-        return unavailableMeasures("Telemetry is still replaying the event log.");
-      }
-      const failures = yield* sql<{
-        readonly failed: number;
-      }>`SELECT COUNT(*) AS failed FROM host_reactor_failure`;
-      const failed = failures[0]?.failed ?? 0;
-      if (failed > 0) {
-        return unavailableMeasures(
-          `${failed} event(s) failed to replay into telemetry; retry them before reading measures.`,
-        );
-      }
+      if (unready !== null) return unavailableMeasures(unready);
       const threads = yield* sql<ThreadRow>`
         SELECT * FROM telemetry_threads WHERE project_id = ${projectId}`;
       const projectRuns = yield* sql<RunRow>`

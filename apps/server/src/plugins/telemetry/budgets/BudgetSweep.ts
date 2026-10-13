@@ -24,6 +24,9 @@ const RESUME_ACTION = { label: "Open budgets", target: "settings" } as const;
 /** A flag is per budget and project: a budget with no project is judged in each one apart. */
 const flagKey = (budgetId: number, projectId: ProjectId) => `budget:${budgetId}:${projectId}`;
 
+/** The project a budget flag's key names, or undefined when the key is not a budget flag's. */
+export const budgetFlagProject = (key: string) => /^budget:\d+:(.+)$/.exec(key)?.[1];
+
 const isBreach = (budget: TelemetryBudget, value: number) =>
   budget.direction === "lower_is_better" ? value > budget.threshold : value < budget.threshold;
 
