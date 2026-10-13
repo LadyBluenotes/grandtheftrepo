@@ -6,6 +6,8 @@ import {
   PLUGIN_GATEWAY_WS_METHODS,
   ProjectId,
   TELEMETRY_METHODS,
+  TelemetryBudget,
+  TelemetryBudgetsResult,
   TelemetryError,
   TelemetryMeasuresResult,
 } from "@t3tools/contracts";
@@ -42,14 +44,26 @@ const measures = (input = measuresInput) =>
     method: TELEMETRY_METHODS.measures.method,
     input,
   });
+/** Any telemetry method through the gateway its scope names. */
+const viaGateway = (
+  gateway: keyof typeof PLUGIN_GATEWAY_WS_METHODS,
+  method: string,
+  input: unknown,
+) => PluginHost.handlers[PLUGIN_GATEWAY_WS_METHODS[gateway]]({ method, input });
 const decodeMeasures = Schema.decodeUnknownEffect(TelemetryMeasuresResult);
+const decodeBudgets = Schema.decodeUnknownEffect(TelemetryBudgetsResult);
+const decodeBudgetsJson = Schema.decodeUnknownSync(Schema.fromJsonString(TelemetryBudgetsResult));
+const decodeBudget = Schema.decodeUnknownEffect(TelemetryBudget);
 const decodeMeasuresJson = Schema.decodeUnknownSync(Schema.fromJsonString(TelemetryMeasuresResult));
 const decodeTelemetryError = Schema.decodeUnknownEffect(TelemetryError);
 
 /** The `TelemetryError` a gateway call failed with. */
-const refusal = (call: ReturnType<typeof measures>) =>
+const refusal = (gatewayCall: ReturnType<typeof measures>) =>
   Effect.gen(function* () {
-    const refused = yield* call.pipe(Effect.andThen(Effect.die("expected a failure")), Effect.flip);
+    const refused = yield* gatewayCall.pipe(
+      Effect.andThen(Effect.die("expected a failure")),
+      Effect.flip,
+    );
     if (refused._tag !== "PluginMethodError") return assert.fail(refused.message);
     return yield* decodeTelemetryError(refused.error);
   });
@@ -96,7 +110,8 @@ const layerHost = PluginHost.layerAll.pipe(
     Layer.mergeAll(
       SqlitePersistence.layerMemory,
       Layer.mock(ThreadManagementService.ThreadManagementService)({}),
-      Layer.mock(ProjectService.ProjectService)({}),
+      // No project, so the budget sweep has nothing to judge.
+      Layer.mock(ProjectService.ProjectService)({ listShells: () => Effect.succeed([]) }),
       // Inactive routing still types its catalog and settings reads through `layerAll`.
       Layer.mock(ProviderRegistry.ProviderRegistry)({}),
       ServerSettings.layerTest(),
@@ -308,9 +323,12 @@ it.effect(
           assert.isTrue(yield* telemetryFileExists);
           // The reactor made its cursor table in the plugin's own file next to the migrated ones.
           assert.deepEqual(yield* tableNames(host.databases.get("telemetry")!), [
+            "budget_events",
+            "budgets",
             "effect_sql_migrations",
             "host_reactor_cursor",
             "host_reactor_failure",
+            "sqlite_sequence",
             "telemetry_runs",
             "telemetry_threads",
             "telemetry_tool_calls",
@@ -325,11 +343,17 @@ it.effect(
             tick.sweeps
               .filter((s) => s.plugin === "telemetry")
               .map((s) => [s.plugin, s.name, s.status, s.examined, s.acted, s.flags]),
-            [["telemetry", "heartbeat", "ok", 0, 0, 0]],
+            [
+              ["telemetry", "heartbeat", "ok", 0, 0, 0],
+              ["telemetry", "budgets", "ok", 0, 0, 0],
+            ],
           );
           assert.deepEqual(
             (yield* supervisor.status).sweeps.filter((s) => s.plugin === "telemetry"),
-            [{ plugin: "telemetry", name: "heartbeat" }],
+            [
+              { plugin: "telemetry", name: "heartbeat" },
+              { plugin: "telemetry", name: "budgets" },
+            ],
           );
 
           yield* seed(host.databases.get("telemetry")!);
@@ -421,6 +445,77 @@ it.effect("learning off: its measure names the learning plugin", () =>
   ).pipe(Effect.provide(layerTest)),
 );
 
+it.effect("budgets: the RPC and the tool agree, a save is checked, and a removal sticks", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      yield* writeStateFile("plugins.json", onlyPlugins(["telemetry"]));
+      yield* Effect.gen(function* () {
+        const listed = yield* viaGateway("read", TELEMETRY_METHODS.budgets.method, {}).pipe(
+          Effect.flatMap(decodeBudgets),
+        );
+        assert.deepEqual(
+          listed.map((budget) => [budget.tier, budget.threshold, budget.state]),
+          [
+            ["cheap", 800, "ok"],
+            ["standard", 1500, "ok"],
+            ["strong", 3000, "ok"],
+          ],
+        );
+        const tool = yield* mcp;
+        const tools = (yield* tool("tools/list", {})).tools?.map((t) => t.name) ?? [];
+        assert.include(tools, "telemetry_budgets");
+        const called = yield* tool("tools/call", { name: "telemetry_budgets", arguments: {} });
+        assert.deepEqual(decodeBudgetsJson(called.content?.[0]?.text ?? ""), listed);
+
+        const standard = { ...listed[1]!, threshold: 1800 };
+        const saved = yield* viaGateway("settingsWrite", TELEMETRY_METHODS.budgetsSet.method, {
+          id: standard.id,
+          measure: standard.measure,
+          tier: standard.tier,
+          threshold: standard.threshold,
+          direction: standard.direction,
+          projectId: standard.projectId,
+          minSample: standard.minSample,
+          enabled: standard.enabled,
+        }).pipe(Effect.flatMap(decodeBudget));
+        assert.strictEqual(saved.threshold, 1800);
+
+        const bad = { ...saved, tier: "premium" };
+        const invalid = yield* refusal(
+          viaGateway("settingsWrite", TELEMETRY_METHODS.budgetsSet.method, bad),
+        );
+        assert.strictEqual(invalid.message, "Budget is invalid: tier");
+        const infinite = yield* refusal(
+          viaGateway("settingsWrite", TELEMETRY_METHODS.budgetsSet.method, {
+            ...saved,
+            threshold: Number.POSITIVE_INFINITY,
+          }),
+        );
+        assert.strictEqual(infinite.message, "Budget is invalid: threshold");
+
+        yield* viaGateway("settingsWrite", TELEMETRY_METHODS.budgetsRemove.method, {
+          id: saved.id,
+        });
+        const after = yield* viaGateway("read", TELEMETRY_METHODS.budgets.method, {}).pipe(
+          Effect.flatMap(decodeBudgets),
+        );
+        assert.deepEqual(
+          after.map((budget) => budget.tier),
+          ["cheap", "strong"],
+        );
+        assert.deepEqual(
+          yield* viaGateway("read", TELEMETRY_METHODS.budgetEvents.method, {
+            projectId: measuresInput.projectId,
+            from: measuresInput.from,
+            to: measuresInput.to,
+          }),
+          [],
+        );
+      }).pipe(Effect.provide(layerHost));
+    }),
+  ).pipe(Effect.provide(layerTest)),
+);
+
 it.effect("a dry run runs the heartbeat the same way", () =>
   Effect.scoped(
     Effect.gen(function* () {
@@ -431,7 +526,10 @@ it.effect("a dry run runs the heartbeat the same way", () =>
         assert.isTrue(tick.dryRun);
         assert.deepEqual(
           tick.sweeps.map((s) => [s.plugin, s.name, s.status]),
-          [["telemetry", "heartbeat", "ok"]],
+          [
+            ["telemetry", "heartbeat", "ok"],
+            ["telemetry", "budgets", "ok"],
+          ],
         );
       }).pipe(Effect.provide(layerHost));
     }),
@@ -451,11 +549,24 @@ it.effect("disabled: no file, no sweep, no tool, and the RPC says it is not runn
         const error = yield* refusal(measures());
         assert.strictEqual(error._tag, "TelemetryError");
         assert.strictEqual(error.message, 'Plugin "telemetry" is not running.');
+        for (const [gateway, method, input] of [
+          ["read", TELEMETRY_METHODS.budgets.method, {}],
+          ["settingsWrite", TELEMETRY_METHODS.budgetsRemove.method, { id: 1 }],
+          [
+            "read",
+            TELEMETRY_METHODS.budgetEvents.method,
+            { projectId: measuresInput.projectId, from: measuresInput.from, to: measuresInput.to },
+          ],
+        ] as const) {
+          const off = yield* refusal(viaGateway(gateway, method, input));
+          assert.strictEqual(off.message, 'Plugin "telemetry" is not running.');
+        }
 
-        const call = yield* mcp;
-        const tools = (yield* call("tools/list", {})).tools?.map((tool) => tool.name) ?? [];
+        const tool = yield* mcp;
+        const tools = (yield* tool("tools/list", {})).tools?.map((t) => t.name) ?? [];
         assert.include(tools, "supervisor_status");
         assert.notInclude(tools, "telemetry_measures");
+        assert.notInclude(tools, "telemetry_budgets");
       }).pipe(Effect.provide(layerHost));
     }),
   ).pipe(Effect.provide(layerTest)),

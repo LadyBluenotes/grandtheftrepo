@@ -79,14 +79,15 @@ const upsertRun = (f: ReturnType<typeof runFields>, eventSequence: number) =>
     const sql = yield* SqlClient.SqlClient;
     yield* sql`
       INSERT INTO telemetry_runs
-        (run_id, thread_id, turn_id, ordinal, status, model, started_at, completed_at,
-         event_sequence)
+        (run_id, thread_id, turn_id, ordinal, status, provider_instance_id, model, started_at,
+         completed_at, event_sequence)
       VALUES
         (${f["run.id"]}, ${f["run.threadId"]}, ${f["run.userMessageId"]}, ${f["run.ordinal"]},
-         ${f["run.status"]}, ${f["run.modelSelection.model"]}, ${f["run.startedAt"]},
-         ${f["run.completedAt"]}, ${eventSequence})
+         ${f["run.status"]}, ${f["run.providerInstanceId"]}, ${f["run.modelSelection.model"]},
+         ${f["run.startedAt"]}, ${f["run.completedAt"]}, ${eventSequence})
       ON CONFLICT (run_id) DO UPDATE SET
         status = excluded.status,
+        provider_instance_id = excluded.provider_instance_id,
         model = excluded.model,
         started_at = excluded.started_at,
         completed_at = excluded.completed_at,
