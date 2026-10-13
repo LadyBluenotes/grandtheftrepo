@@ -40,6 +40,7 @@ export const computeMeasures = (input: MeasureInput): TelemetryMeasuresResult =>
 const NO_ROWS: MeasureInput = {
   from: "",
   to: "",
+  tier: undefined,
   threads: [],
   runs: [],
   toolCalls: [],
@@ -60,3 +61,18 @@ export const unavailableMeasures = (missingReason: string): TelemetryMeasuresRes
     sampleSize: 0,
     missingReason,
   }));
+
+/**
+ * Whether `result` is `unavailableMeasures`' answer, every measure unavailable for one reason:
+ * nothing was measured, so asking again later may answer.
+ */
+export const unmeasured = (result: TelemetryMeasuresResult) =>
+  result.every(
+    (measure) =>
+      measure.state === "unavailable" && measure.missingReason === result[0]?.missingReason,
+  );
+
+/** Every measure's name, which a budget must name one of. */
+export const MEASURE_NAMES: ReadonlySet<string> = new Set(
+  computeMeasures(NO_ROWS).map((measure) => measure.measure),
+);
