@@ -21,6 +21,7 @@ import type * as EventSink from "../../../orchestration-v2/EventSink.ts";
 import * as ThreadManagementService from "../../../orchestration-v2/ThreadManagementService.ts";
 import * as ProjectService from "../../../project/ProjectService.ts";
 import * as Attention from "../../Attention.ts";
+import { flagKeyedToProject } from "../../attentionKeys.ts";
 import * as CorrectionStore from "../../learning/CorrectionStore.ts";
 import * as ItemStore from "../../learning/items/ItemStore.ts";
 import * as Promoter from "../../learning/Promoter.ts";
@@ -179,10 +180,13 @@ export const make = Effect.fn("ReportService.make")(function* (
         threads: shells.map(toReportThread),
         threadRowsUnavailable: unready,
         measures,
-        // A budget flag is keyed by budget and project, not by a thread.
+        // A flag keyed by a budget, a policy, a knowledge page or a promotion is on its project, not
+        // on a thread: the board's rule says which keys are this project's.
         flags: (yield* attention.listOpen({})).map((flag) => ({
           ...flag,
-          projectId: budgetFlagProject(flag.threadId) ?? null,
+          projectId:
+            budgetFlagProject(flag.threadId) ??
+            (flagKeyedToProject(flag.threadId, projectId) ? projectId : null),
         })),
         verdicts: Option.isSome(verdictStore)
           ? yield* verdictStore.value.listWindow({ projectId, from, to })

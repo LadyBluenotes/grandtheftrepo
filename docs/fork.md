@@ -35,9 +35,9 @@ the `supervisor.json` interval, in registry order, and records each tick in `plu
 A sweep that finds something waiting on a person raises a flag with `Attention.raise` and clears it
 with `Attention.clear` once the cause is gone. Flags live in the host's `attention` table in that
 same file, so any plugin can raise one without depending on the plugin that shows them. The strip
-above the kanban board lists a flag whose key is not a thread when the key ends in `:<projectId>`,
-has the project id between colons, or starts with `policy:*:` (`kanban/attentionRows.ts`); a flag
-keyed by none of these is on no board.
+above the kanban board and a project's weekly report list a flag whose key is not a thread when the
+key ends in `:<projectId>`, has the project id between colons, or starts with `policy:*:`
+(`plugins/attentionKeys.ts`); a flag keyed by none of these is on no board and in no report.
 
 A plugin says what it needs to do its work through `ServerPlugin.readiness`: checks, each `ready`,
 `attention` or `off`, with one sentence and where a person fixes it. `PluginHost.readiness` runs
