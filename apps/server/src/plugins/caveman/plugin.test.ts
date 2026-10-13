@@ -11,6 +11,7 @@ import * as ThreadManagementService from "../../orchestration-v2/ThreadManagemen
 import * as SqlitePersistence from "../../persistence/Sqlite.ts";
 import * as ProjectService from "../../project/ProjectService.ts";
 import * as ProviderRegistry from "../../provider/ProviderRegistry.ts";
+import * as ScheduledTaskService from "../../scheduledTasks/ScheduledTaskService.ts";
 import * as ServerSettings from "../../serverSettings.ts";
 import * as PluginHost from "../PluginHost.ts";
 import * as PluginSupervisor from "../PluginSupervisor.ts";
@@ -23,6 +24,7 @@ const layerHost = PluginHost.layerAll.pipe(
       SqlitePersistence.layerMemory,
       Layer.mock(ThreadManagementService.ThreadManagementService)({}),
       Layer.mock(ProjectService.ProjectService)({}),
+      Layer.mock(ScheduledTaskService.ScheduledTaskService)({}),
       Layer.mock(ProviderRegistry.ProviderRegistry)({}),
       ServerSettings.layerTest(),
     ),

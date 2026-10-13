@@ -515,6 +515,54 @@ it.effect("lists each failure mode's earliest delivery, whatever its item's stat
   ),
 );
 
+it.effect("lists a range's deliveries to the owner kinds asked for, oldest first", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const learning = yield* setup;
+      const elsewhere = ProjectId.make("project:elsewhere");
+      const defect = yield* learning.items.strengthen(projectId, "defect", "key:1", "Again.");
+      const other = yield* learning.items.strengthen(elsewhere, "defect", "key:2", "Again.");
+      const promotion = (
+        item: { readonly id: number; readonly projectId: ProjectId },
+        ownerKind: LearningOwnerKind,
+        state: string,
+        updatedAt: string,
+        failureMode = "defect",
+      ) =>
+        learning.sql`INSERT INTO learning_promotions
+          (item_id, project_id, failure_mode, owner_kind, state, attempts, created_at, updated_at)
+          VALUES (${item.id}, ${item.projectId}, ${failureMode}, ${ownerKind}, ${state}, 0,
+            '2026-10-01T00:00:00.000Z', ${updatedAt})`;
+      yield* promotion(defect, "prompt", "delivered", "2026-10-06T00:00:00.000Z");
+      yield* promotion(defect, "project_knowledge", "delivered", "2026-10-05T00:00:00.000Z");
+      // Another owner kind, one at the range's end, one still pending, and another project's.
+      yield* promotion(defect, "policy", "delivered", "2026-10-06T00:00:00.000Z");
+      yield* promotion(defect, "local_only", "delivered", "2026-10-12T00:00:00.000Z");
+      yield* promotion(defect, "local_only", "pending", "2026-10-06T00:00:00.000Z", "convention");
+      yield* promotion(other, "prompt", "delivered", "2026-10-06T00:00:00.000Z");
+
+      const delivered = (ownerKinds: ReadonlyArray<LearningOwnerKind>) =>
+        learning.items.deliveredIn({
+          projectId,
+          ownerKinds,
+          from: "2026-10-05T00:00:00.000Z",
+          to: "2026-10-12T00:00:00.000Z",
+        });
+      assert.deepEqual(
+        (yield* delivered(["project_knowledge", "prompt", "local_only"])).map((p) => [
+          p.ownerKind,
+          p.updatedAt,
+        ]),
+        [
+          ["project_knowledge", "2026-10-05T00:00:00.000Z"],
+          ["prompt", "2026-10-06T00:00:00.000Z"],
+        ],
+      );
+      assert.deepEqual(yield* delivered([]), []);
+    }),
+  ),
+);
+
 it.effect("an item a person moves during its handover stays a candidate for the new owner", () =>
   Effect.scoped(
     Effect.gen(function* () {

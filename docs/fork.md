@@ -101,10 +101,15 @@ them half-evaluated. The host hands `toolkitRegistration` to `ServerPlugin.mcp` 
   for the reactor to catch up, and past that every measure answers `unavailable`. Where
   compaction before the upgrade kept a later thread event in place of a `thread.settled`, who
   settled is lost, and a thread settled by hand that way counts as an accepted outcome only if a
-  pull request merged. The template plugin: it uses every host seam once (database, reactor,
-  sweep, gateway method, MCP tool, settings panel) and is the one to copy. Server:
-  `apps/server/src/plugins/telemetry/`. Contracts: `packages/contracts/src/plugins/telemetry.ts`.
-  Web: `apps/web/src/plugins/telemetry/`.
+  pull request merged. `telemetry.report` and the `telemetry_report` MCP tool fold a project's
+  range into ten sections, from the thread records, the learning and review plugins and the host's
+  attention flags, with the same report as one self-contained HTML page; at start the plugin gives
+  each project with a default model a `Weekly report` thread and a scheduled task that posts that
+  page there every Monday, and never touches a task that already exists. The template plugin: it
+  uses every host seam once (database, reactor, sweep, gateway method, MCP tool, settings panel)
+  and is the one to copy. Server: `apps/server/src/plugins/telemetry/`. Contracts:
+  `packages/contracts/src/plugins/telemetry.ts` and `telemetryReport.ts`. Web:
+  `apps/web/src/plugins/telemetry/`. User guide: [Weekly report](./user/weekly-report.md).
 - **routing**: which model does which work. Three tiers, `cheap`, `standard` and `strong`, each map
   to a provider instance and a model, set for the environment and overridable per project, in the
   plugin's own database. A tier with nothing saved falls back to the built-in: one instance's model

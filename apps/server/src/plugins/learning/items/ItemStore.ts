@@ -5,6 +5,7 @@ import {
   type LearningItemsSetDispositionInput,
   LearningError,
   type LearningOwnerKind,
+  type LearningPromotion,
   type ProjectId,
 } from "@t3tools/contracts";
 import * as Context from "effect/Context";
@@ -83,6 +84,16 @@ export class ItemStore extends Context.Service<
     readonly deliveredAt: (
       projectId: ProjectId,
     ) => Effect.Effect<ReadonlyArray<ItemDelivery>, LearningError>;
+    /**
+     * A project's promotions delivered in `[from, to)` to one of `ownerKinds`, oldest first, for
+     * reports. Internal: it has no gateway method.
+     */
+    readonly deliveredIn: (input: {
+      readonly projectId: ProjectId;
+      readonly ownerKinds: ReadonlyArray<LearningOwnerKind>;
+      readonly from: string;
+      readonly to: string;
+    }) => Effect.Effect<ReadonlyArray<LearningPromotion>, LearningError>;
     /**
      * A person sets the owner kind or closes and reopens the item. `promoted` comes only from
      * delivery and `candidate` only from the owner kind, so neither is accepted.
@@ -194,6 +205,12 @@ const make = Effect.gen(function* () {
       Effect.catchTags({ SqlError: io }),
     );
 
+  const deliveredIn: ItemStore["Service"]["deliveredIn"] = (input) =>
+    PromotionStore.deliveredIn(input).pipe(
+      Effect.provideService(SqlClient.SqlClient, sql),
+      Effect.catchTags({ SqlError: io }),
+    );
+
   const setDisposition: ItemStore["Service"]["setDisposition"] = ({ id, ownerKind, state }) =>
     Effect.gen(function* () {
       if (state === "promoted" || state === "candidate") {
@@ -224,7 +241,7 @@ const make = Effect.gen(function* () {
       return toItem(updated!);
     }).pipe(Effect.catchTags({ SqlError: io }));
 
-  return ItemStore.of({ strengthen, list, get, deliveredAt, setDisposition });
+  return ItemStore.of({ strengthen, list, get, deliveredAt, deliveredIn, setDisposition });
 });
 
 export const layer = Layer.effect(ItemStore, make);

@@ -1,0 +1,347 @@
+import type {
+  LearningCorrection,
+  LearningItem,
+  LearningOwnerKind,
+  LearningPromotion,
+  ProjectId,
+  PullRequestReviewDecision,
+  PullRequestState,
+  ReviewVerdict,
+  TelemetryMeasuresResult,
+  TelemetryReport,
+  ThreadId,
+} from "@t3tools/contracts";
+import * as DateTime from "effect/DateTime";
+import * as Option from "effect/Option";
+import * as Result from "effect/Result";
+
+/** The most items a section lists; its `count` is all of them. */
+export const MAX_SECTION_ITEMS = 20;
+
+/** A linked pull request as its latest sync saw it. Instants are normalized ISO strings. */
+export interface ReportPullRequest {
+  /** Host, repository and number, the same for the pull request linked from any thread. */
+  readonly key: string;
+  readonly repository: string;
+  readonly number: number;
+  readonly url: string;
+  readonly title: string;
+  readonly state: PullRequestState;
+  readonly reviewDecision: PullRequestReviewDecision | null;
+  /** When it merged or closed; null while open, or when the host gave no time at all. */
+  readonly closedAt: string | null;
+  readonly linkedAt: string;
+}
+
+export interface ReportThread {
+  readonly id: ThreadId;
+  readonly title: string;
+  readonly settledAt: string | null;
+  readonly pullRequests: ReadonlyArray<ReportPullRequest>;
+}
+
+/** Everything one report reads, loaded by `ReportService`. The range is `[from, to)`. */
+export interface ReportInput {
+  readonly projectId: ProjectId;
+  readonly projectTitle: string;
+  readonly from: string;
+  readonly to: string;
+  /** The project's threads the report can name: the active ones and those the range touched. */
+  readonly threads: ReadonlyArray<ReportThread>;
+  readonly measures: TelemetryMeasuresResult;
+  /** Every open attention flag; the fold keeps those on the project's threads. */
+  readonly flags: ReadonlyArray<{ readonly threadId: string; readonly text: string }>;
+  /** Verdicts given in the range. Undefined while the review plugin is not running. */
+  readonly verdicts: ReadonlyArray<ReviewVerdict> | undefined;
+  /** Undefined while the learning plugin is not running. */
+  readonly learning:
+    | {
+        /** Corrections from `from` through `to`, which the learning plugin includes. */
+        readonly corrections: ReadonlyArray<LearningCorrection>;
+        /** Every item of the project. */
+        readonly items: ReadonlyArray<LearningItem>;
+        /** Promotions delivered in the range to project knowledge or prompts. */
+        readonly promotions: ReadonlyArray<LearningPromotion>;
+        /** Owner kinds a plugin hands items to. */
+        readonly promoters: ReadonlyArray<LearningOwnerKind>;
+      }
+    | undefined;
+}
+
+type Section<K extends keyof TelemetryReport> = TelemetryReport[K];
+
+const ok = <Item>(items: ReadonlyArray<Item>, missingReason: string | null = null) => ({
+  state: "ok" as const,
+  missingReason,
+  count: items.length,
+  items: items.slice(0, MAX_SECTION_ITEMS),
+});
+
+const unavailable = (missingReason: string) => ({
+  state: "unavailable" as const,
+  missingReason,
+  count: 0,
+  items: [],
+});
+
+const notRunning = (plugin: string) => `The ${plugin} plugin is not running.`;
+
+/** Orders by each key in turn. Strings compare by code unit, so the order is the same everywhere. */
+const byKeys =
+  <T>(...keys: ReadonlyArray<(value: T) => string | number>) =>
+  (left: T, right: T) => {
+    for (const key of keys) {
+      const a = key(left);
+      const b = key(right);
+      if (a < b) return -1;
+      if (a > b) return 1;
+    }
+    return 0;
+  };
+
+const STATE_ORDER: Record<PullRequestState, number> = { open: 0, merged: 1, closed: 2 };
+
+/**
+ * The range a report covers, as normalized ISO instants: the one given, or with neither bound
+ * given, the last seven whole UTC days before `now`.
+ */
+export const reportRange = (
+  input: { readonly from?: string | undefined; readonly to?: string | undefined },
+  now: DateTime.Utc,
+): Result.Result<{ readonly from: string; readonly to: string }, string> => {
+  if (input.from === undefined && input.to === undefined) {
+    const to = DateTime.startOf(now, "day");
+    return Result.succeed({
+      from: DateTime.formatIso(DateTime.subtract(to, { days: 7 })),
+      to: DateTime.formatIso(to),
+    });
+  }
+  if (input.from === undefined || input.to === undefined) {
+    return Result.fail("Report range is invalid: give both from and to, or neither.");
+  }
+  const from = DateTime.make(input.from);
+  const to = DateTime.make(input.to);
+  if (Option.isNone(from) || Option.isNone(to)) {
+    return Result.fail("Report range is invalid: from and to must be ISO instants.");
+  }
+  if (!DateTime.isGreaterThan(to.value, from.value)) return Result.fail("Report range is invalid");
+  return Result.succeed({ from: DateTime.formatIso(from.value), to: DateTime.formatIso(to.value) });
+};
+
+/**
+ * The report over loaded rows: no clock, no database, so the same input always gives the same
+ * report. A section whose plugin is off is `unavailable`, naming the plugin.
+ */
+export const foldReport = (input: ReportInput): TelemetryReport => {
+  const inRange = (at: string | null) => at !== null && at >= input.from && at < input.to;
+  const threads = input.threads.toSorted(byKeys((thread) => thread.id));
+  const byId = new Map<string, ReportThread>(threads.map((thread) => [thread.id, thread]));
+  const titleOf = (threadId: string) => byId.get(threadId)?.title ?? null;
+
+  const delivered: Section<"delivered">["items"] = threads.flatMap((thread) => {
+    const merged = thread.pullRequests.filter((pr) => pr.state === "merged");
+    if (thread.settledAt === null || !inRange(thread.settledAt) || merged.length === 0) return [];
+    return [
+      {
+        threadId: thread.id,
+        title: thread.title,
+        settledAt: thread.settledAt,
+        pullRequests: merged
+          .toSorted(
+            byKeys(
+              (pr) => pr.repository,
+              (pr) => pr.number,
+            ),
+          )
+          .map(({ repository, number, url }) => ({ repository, number, url })),
+      },
+    ];
+  });
+
+  // A pull request linked from two threads is listed once.
+  const pullRequests = new Map<string, ReportPullRequest>();
+  for (const thread of threads) {
+    for (const pr of thread.pullRequests) {
+      if (!pullRequests.has(pr.key)) pullRequests.set(pr.key, pr);
+    }
+  }
+  const linked = [...pullRequests.values()].toSorted(
+    byKeys(
+      (pr) => STATE_ORDER[pr.state],
+      (pr) => pr.repository,
+      (pr) => pr.number,
+    ),
+  );
+  const changesRequested = linked.filter(
+    (pr) => pr.state === "open" && pr.reviewDecision === "changes-requested",
+  );
+
+  const { learning, verdicts } = input;
+  const handedTo = (ownerKind: LearningOwnerKind, owner: string) => {
+    if (learning === undefined) return unavailable(notRunning("learning"));
+    if (!learning.promoters.includes(ownerKind)) {
+      return unavailable(`No plugin hands learning items to ${owner} yet.`);
+    }
+    return ok(
+      learning.promotions
+        .filter((promotion) => promotion.ownerKind === ownerKind && inRange(promotion.updatedAt))
+        .toSorted(
+          byKeys(
+            (promotion) => promotion.updatedAt,
+            (promotion) => promotion.id,
+          ),
+        )
+        .map((promotion) => ({
+          promotionId: promotion.id,
+          itemId: promotion.itemId,
+          failureMode: promotion.failureMode,
+          deliveredAt: promotion.updatedAt,
+        })),
+    );
+  };
+
+  const openItems: Section<"unresolved">["items"] =
+    learning === undefined
+      ? []
+      : learning.items
+          .filter((item) => item.state === "open")
+          .toSorted(
+            byKeys(
+              (item) => -item.occurrences,
+              (item) => item.id,
+            ),
+          )
+          .map((item) => ({
+            kind: "learning_item" as const,
+            itemId: item.id,
+            failureMode: item.failureMode,
+            occurrences: item.occurrences,
+            updatedAt: item.updatedAt,
+          }));
+
+  return {
+    projectId: input.projectId,
+    projectTitle: input.projectTitle,
+    from: input.from,
+    to: input.to,
+    delivered: ok(
+      delivered.toSorted(
+        byKeys(
+          (item) => item.settledAt,
+          (item) => item.threadId,
+        ),
+      ),
+    ),
+    findings:
+      verdicts === undefined
+        ? unavailable(notRunning("review"))
+        : ok(
+            verdicts
+              .filter((verdict) => inRange(verdict.createdAt))
+              .toSorted(
+                byKeys(
+                  (verdict) => verdict.outcome,
+                  (verdict) => verdict.failureMode ?? "",
+                  (verdict) => verdict.createdAt,
+                  (verdict) => verdict.id,
+                ),
+              )
+              .map((verdict) => ({
+                verdictId: verdict.id,
+                threadId: verdict.reviewedThreadId,
+                title: titleOf(verdict.reviewedThreadId),
+                outcome: verdict.outcome,
+                failureMode: verdict.failureMode,
+                summary: verdict.summary,
+                createdAt: verdict.createdAt,
+              })),
+          ),
+    decisions:
+      learning === undefined
+        ? unavailable(notRunning("learning"))
+        : ok(
+            learning.items
+              .filter((item) => item.dispositionBy === "person" && inRange(item.updatedAt))
+              .toSorted(
+                byKeys(
+                  (item) => item.updatedAt,
+                  (item) => item.id,
+                ),
+              )
+              .map((item) => ({
+                itemId: item.id,
+                failureMode: item.failureMode,
+                state: item.state,
+                ownerKind: item.ownerKind,
+                updatedAt: item.updatedAt,
+              })),
+          ),
+    knowledgeChanges: handedTo("project_knowledge", "project knowledge"),
+    prompts: handedTo("prompt", "prompts"),
+    failures:
+      learning === undefined
+        ? unavailable(notRunning("learning"))
+        : ok(
+            learning.corrections
+              .filter((correction) => inRange(correction.createdAt))
+              .toSorted(
+                byKeys(
+                  (correction) => correction.failureKind,
+                  (correction) => correction.createdAt,
+                  (correction) => correction.id,
+                ),
+              )
+              .map((correction) => ({
+                correctionId: correction.id,
+                threadId: correction.threadId,
+                title: titleOf(correction.threadId),
+                failureKind: correction.failureKind,
+                declaredMode: correction.declaredMode,
+                description: correction.description,
+                createdAt: correction.createdAt,
+              })),
+          ),
+    pullRequests: ok(
+      linked
+        .filter((pr) => pr.linkedAt < input.to && (pr.state === "open" || inRange(pr.closedAt)))
+        .map(({ repository, number, url, title, state }) => ({
+          repository,
+          number,
+          url,
+          title,
+          state,
+        })),
+    ),
+    unresolved: ok(
+      [
+        ...openItems,
+        ...changesRequested.map(({ repository, number, url, title }) => ({
+          kind: "pull_request" as const,
+          repository,
+          number,
+          url,
+          title,
+        })),
+      ],
+      learning === undefined
+        ? "Open learning items are left out: the learning plugin is not running."
+        : null,
+    ),
+    attention: ok(
+      input.flags
+        .toSorted(
+          byKeys(
+            (flag) => flag.threadId,
+            (flag) => flag.text,
+          ),
+        )
+        .flatMap((flag) => {
+          const thread = byId.get(flag.threadId);
+          return thread === undefined
+            ? []
+            : [{ threadId: thread.id, title: thread.title, text: flag.text }];
+        }),
+    ),
+    efficiency: ok(input.measures),
+  };
+};

@@ -6,8 +6,10 @@ import {
   PLUGIN_GATEWAY_WS_METHODS,
   ProjectId,
   TELEMETRY_METHODS,
+  TELEMETRY_REPORT_METHODS,
   TelemetryError,
   TelemetryMeasuresResult,
+  TelemetryReportResult,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -25,10 +27,12 @@ import * as ThreadManagementService from "../../orchestration-v2/ThreadManagemen
 import * as SqlitePersistence from "../../persistence/Sqlite.ts";
 import * as ProjectService from "../../project/ProjectService.ts";
 import * as ProviderRegistry from "../../provider/ProviderRegistry.ts";
+import type * as ScheduledTaskService from "../../scheduledTasks/ScheduledTaskService.ts";
 import * as ServerSettings from "../../serverSettings.ts";
 import * as PluginHost from "../PluginHost.ts";
 import * as PluginSupervisor from "../PluginSupervisor.ts";
 import { registry } from "../registry.ts";
+import { fakeCore, project } from "./report/testkit.ts";
 
 const measuresInput = {
   projectId: ProjectId.make("project:telemetry"),
@@ -42,6 +46,20 @@ const measures = (input = measuresInput) =>
     method: TELEMETRY_METHODS.measures.method,
     input,
   });
+const reportInput = { ...measuresInput, from: "2026-10-01T00:00:00.000Z" };
+
+/** `telemetry.report` through the read gateway. */
+const report = (input = reportInput) =>
+  PluginHost.handlers[PLUGIN_GATEWAY_WS_METHODS.read]({
+    method: TELEMETRY_REPORT_METHODS.report.method,
+    input,
+  });
+const decodeReport = Schema.decodeUnknownEffect(TelemetryReportResult);
+const decodeReportJson = Schema.decodeUnknownSync(Schema.fromJsonString(TelemetryReportResult));
+
+/** In-memory projects, scheduled tasks and threads, with the one project the tests report on. */
+const core = fakeCore({ projects: [project(measuresInput.projectId)] });
+
 const decodeMeasures = Schema.decodeUnknownEffect(TelemetryMeasuresResult);
 const decodeMeasuresJson = Schema.decodeUnknownSync(Schema.fromJsonString(TelemetryMeasuresResult));
 const decodeTelemetryError = Schema.decodeUnknownEffect(TelemetryError);
@@ -88,21 +106,28 @@ const onlyPlugins = (keep: ReadonlyArray<string>) =>
 
 /**
  * The real host and supervisor over a fresh state directory, with the core
- * services the plugins and the host's sink need. The sink runs on an empty
- * in-memory core database, so the reactor has nothing to replay.
+ * services the plugins and the host's sink need: `fakes` for projects, tasks and
+ * threads. The sink runs on an empty in-memory core database, so the reactor
+ * has nothing to replay.
  */
-const layerHost = PluginHost.layerAll.pipe(
-  Layer.provide(
-    Layer.mergeAll(
-      SqlitePersistence.layerMemory,
-      Layer.mock(ThreadManagementService.ThreadManagementService)({}),
-      Layer.mock(ProjectService.ProjectService)({}),
-      // Inactive routing still types its catalog and settings reads through `layerAll`.
-      Layer.mock(ProviderRegistry.ProviderRegistry)({}),
-      ServerSettings.layerTest(),
+const layerHost = (
+  fakes: Layer.Layer<
+    | ProjectService.ProjectService
+    | ScheduledTaskService.ScheduledTaskService
+    | ThreadManagementService.ThreadManagementService
+  >,
+) =>
+  PluginHost.layerAll.pipe(
+    Layer.provide(
+      Layer.mergeAll(
+        SqlitePersistence.layerMemory,
+        fakes,
+        // Inactive routing still types its catalog and settings reads through `layerAll`.
+        Layer.mock(ProviderRegistry.ProviderRegistry)({}),
+        ServerSettings.layerTest(),
+      ),
     ),
-  ),
-);
+  );
 
 /** `/mcp` the way the server builds it, over whatever host is in the context; calls return the result. */
 const mcp = Effect.gen(function* () {
@@ -302,6 +327,7 @@ it.effect(
     Effect.scoped(
       Effect.gen(function* () {
         yield* writeStateFile("plugins.json", onlyPlugins(["telemetry", "learning"]));
+        const fakes = yield* core;
         yield* Effect.gen(function* () {
           const host = yield* PluginHost.PluginHost;
           assert.deepEqual([...host.activeIds], ["telemetry", "learning"]);
@@ -359,7 +385,35 @@ it.effect(
           });
           // MCP carries a list as JSON text; the server keeps `structuredContent` for objects.
           assert.deepEqual(decodeMeasuresJson(called.content?.[0]?.text ?? ""), fromHandler);
-        }).pipe(Effect.provide(layerHost));
+
+          // The report: the RPC and the tool answer the same, with a page to render.
+          const fromGateway = yield* report().pipe(Effect.flatMap(decodeReport));
+          assert.include(tools, "telemetry_report");
+          const reported = yield* call("tools/call", {
+            name: "telemetry_report",
+            arguments: reportInput,
+          });
+          assert.deepEqual(decodeReportJson(reported.content?.[0]?.text ?? ""), fromGateway);
+          assert.deepEqual(
+            [fromGateway.report.projectTitle, fromGateway.report.efficiency.count],
+            [`Project ${measuresInput.projectId}`, 14],
+          );
+          assert.deepEqual(
+            [fromGateway.report.failures.state, fromGateway.report.findings.missingReason],
+            ["ok", "The review plugin is not running."],
+          );
+          assert.include(fromGateway.html, "<h1>Activity report: Project project:telemetry</h1>");
+          const backwards = yield* refusal(report({ ...reportInput, to: reportInput.from }));
+          assert.strictEqual(backwards.message, "Report range is invalid");
+
+          // Seeding ran once the plugin started: one task for the project, bound to its thread.
+          yield* fakes.upserted;
+          const [task, ...others] = yield* fakes.tasks;
+          const [created] = yield* fakes.commands;
+          assert.strictEqual(others.length, 0);
+          assert.strictEqual(task?.id, `telemetry-weekly-report:${measuresInput.projectId}`);
+          assert.isTrue(created?.type === "thread.create" && created.threadId === task?.threadId);
+        }).pipe(Effect.provide(layerHost(fakes.layer)));
       }),
     ).pipe(Effect.provide(layerTest)),
 );
@@ -368,6 +422,7 @@ it.effect("review and learning on: both review measures answer ok on a fixture",
   Effect.scoped(
     Effect.gen(function* () {
       yield* writeStateFile("plugins.json", onlyPlugins(["telemetry", "learning", "review"]));
+      const fakes = yield* core;
       yield* Effect.gen(function* () {
         const host = yield* PluginHost.PluginHost;
         yield* seedReview(host.databases.get("review")!);
@@ -379,7 +434,7 @@ it.effect("review and learning on: both review measures answer ok on a fixture",
         };
         assert.deepEqual(pick("first_review_acceptance"), ["ok", 0.75, 4, null]);
         assert.deepEqual(pick("known_error_recurrence"), ["ok", 2 / 6, 6, null]);
-      }).pipe(Effect.provide(layerHost));
+      }).pipe(Effect.provide(layerHost(fakes.layer)));
     }),
   ).pipe(Effect.provide(layerTest)),
 );
@@ -388,6 +443,7 @@ it.effect("review off: its measure names the review plugin, and learning's still
   Effect.scoped(
     Effect.gen(function* () {
       yield* writeStateFile("plugins.json", onlyPlugins(["telemetry", "learning"]));
+      const fakes = yield* core;
       yield* Effect.gen(function* () {
         const host = yield* PluginHost.PluginHost;
         yield* seedLearning(host.databases.get("learning")!);
@@ -399,7 +455,7 @@ it.effect("review off: its measure names the review plugin, and learning's still
         );
         assert.match(review?.missingReason ?? "", /review plugin/);
         assert.strictEqual(byName.get("known_error_recurrence")?.state, "ok");
-      }).pipe(Effect.provide(layerHost));
+      }).pipe(Effect.provide(layerHost(fakes.layer)));
     }),
   ).pipe(Effect.provide(layerTest)),
 );
@@ -408,6 +464,7 @@ it.effect("learning off: its measure names the learning plugin", () =>
   Effect.scoped(
     Effect.gen(function* () {
       yield* writeStateFile("plugins.json", onlyPlugins(["telemetry"]));
+      const fakes = yield* core;
       yield* Effect.gen(function* () {
         const byName = yield* answers;
         const learning = byName.get("known_error_recurrence");
@@ -416,7 +473,13 @@ it.effect("learning off: its measure names the learning plugin", () =>
           ["unavailable", null, 0],
         );
         assert.match(learning?.missingReason ?? "", /learning plugin/);
-      }).pipe(Effect.provide(layerHost));
+
+        const { report: folded } = yield* report().pipe(Effect.flatMap(decodeReport));
+        assert.deepEqual(
+          [folded.failures.state, folded.failures.missingReason],
+          ["unavailable", "The learning plugin is not running."],
+        );
+      }).pipe(Effect.provide(layerHost(fakes.layer)));
     }),
   ).pipe(Effect.provide(layerTest)),
 );
@@ -425,6 +488,7 @@ it.effect("a dry run runs the heartbeat the same way", () =>
   Effect.scoped(
     Effect.gen(function* () {
       yield* writeStateFile("plugins.json", onlyPlugins(["telemetry"]));
+      const fakes = yield* core;
       yield* writeStateFile("supervisor.json", '{ "dryRun": true }');
       yield* Effect.gen(function* () {
         const tick = yield* (yield* PluginSupervisor.PluginSupervisor).tick;
@@ -433,30 +497,40 @@ it.effect("a dry run runs the heartbeat the same way", () =>
           tick.sweeps.map((s) => [s.plugin, s.name, s.status]),
           [["telemetry", "heartbeat", "ok"]],
         );
-      }).pipe(Effect.provide(layerHost));
+      }).pipe(Effect.provide(layerHost(fakes.layer)));
     }),
   ).pipe(Effect.provide(layerTest)),
 );
 
-it.effect("disabled: no file, no sweep, no tool, and the RPC says it is not running", () =>
-  Effect.scoped(
-    Effect.gen(function* () {
-      yield* writeStateFile("plugins.json", onlyPlugins([]));
-      yield* Effect.gen(function* () {
-        const host = yield* PluginHost.PluginHost;
-        assert.deepEqual([...host.activeIds], []);
-        assert.isFalse(yield* telemetryFileExists);
-        assert.deepEqual((yield* (yield* PluginSupervisor.PluginSupervisor).status).sweeps, []);
+it.effect(
+  "disabled: no file, no sweep, no tools, no seeding, and the RPCs say it is not running",
+  () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        yield* writeStateFile("plugins.json", onlyPlugins([]));
+        const fakes = yield* core;
+        yield* Effect.gen(function* () {
+          const host = yield* PluginHost.PluginHost;
+          assert.deepEqual([...host.activeIds], []);
+          assert.isFalse(yield* telemetryFileExists);
+          assert.deepEqual((yield* (yield* PluginSupervisor.PluginSupervisor).status).sweeps, []);
 
-        const error = yield* refusal(measures());
-        assert.strictEqual(error._tag, "TelemetryError");
-        assert.strictEqual(error.message, 'Plugin "telemetry" is not running.');
+          const error = yield* refusal(measures());
+          assert.strictEqual(error._tag, "TelemetryError");
+          assert.strictEqual(error.message, 'Plugin "telemetry" is not running.');
 
-        const call = yield* mcp;
-        const tools = (yield* call("tools/list", {})).tools?.map((tool) => tool.name) ?? [];
-        assert.include(tools, "supervisor_status");
-        assert.notInclude(tools, "telemetry_measures");
-      }).pipe(Effect.provide(layerHost));
-    }),
-  ).pipe(Effect.provide(layerTest)),
+          const call = yield* mcp;
+          const tools = (yield* call("tools/list", {})).tools?.map((tool) => tool.name) ?? [];
+          assert.include(tools, "supervisor_status");
+          assert.notInclude(tools, "telemetry_measures");
+          assert.notInclude(tools, "telemetry_report");
+
+          const off = yield* refusal(report());
+          assert.strictEqual(off.message, 'Plugin "telemetry" is not running.');
+          // Nothing seeds: no task, no thread.
+          assert.deepEqual(yield* fakes.tasks, []);
+          assert.deepEqual(yield* fakes.commands, []);
+        }).pipe(Effect.provide(layerHost(fakes.layer)));
+      }),
+    ).pipe(Effect.provide(layerTest)),
 );
