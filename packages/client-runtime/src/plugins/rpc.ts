@@ -49,13 +49,12 @@ export function createPluginRpcCommand<R, ER, I, O, F = never>(
         environmentId: target.environmentId,
         input: { method: method.method, input: encodeInput(target.input) },
       });
-      return result._tag === "Success"
-        ? AsyncResult.success(decodeOutput(result.value))
-        : AsyncResult.failure(
-            Cause.map(result.cause, (error) =>
-              isPluginMethodError(error) ? failure(error) : error,
-            ),
-          );
+      if (result._tag === "Success") return AsyncResult.success(decodeOutput(result.value));
+      const cause = Cause.map(result.cause, (error) =>
+        isPluginMethodError(error) ? failure(error) : error,
+      );
+      // Typed by the output too, so a caller that narrows to Success reads the decoded value.
+      return AsyncResult.failure<O, Cause.Cause.Error<typeof cause>>(cause);
     },
   };
 }

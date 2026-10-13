@@ -1,5 +1,5 @@
 import * as Schema from "effect/Schema";
-import { ProjectId, TrimmedNonEmptyString } from "../baseSchemas.ts";
+import { IsoDateTime, ProjectId, TrimmedNonEmptyString } from "../baseSchemas.ts";
 import { definePluginMethods } from "./method.ts";
 
 /** The environment-wide project: its policies reach the agents of every project. */
@@ -81,13 +81,65 @@ export const PolicyVerifyResult = Schema.Struct({
 });
 export type PolicyVerifyResult = typeof PolicyVerifyResult.Type;
 
+/** One version of a policy in its latest state; `at` is when it reached that state. */
+export const PolicyVersion = Schema.Struct({
+  version: Schema.Int,
+  state: PolicyState,
+  title: TrimmedNonEmptyString,
+  at: IsoDateTime,
+});
+export type PolicyVersion = typeof PolicyVersion.Type;
+
+/** The last install into one agent's file, as recorded. */
+export const PolicyDelivery = Schema.Struct({
+  agent: PolicyAgent,
+  version: Schema.Int,
+  path: Schema.String,
+  installedAt: IsoDateTime,
+  verifiedAt: Schema.NullOr(IsoDateTime),
+});
+export type PolicyDelivery = typeof PolicyDelivery.Type;
+
+/**
+ * One policy as `list` shows it: the accepted version, else the latest draft, with every version,
+ * the last delivery per agent and each agent's file re-read now. `status` is what `verify` would
+ * answer, read without marking the delivery verified.
+ */
+export const PolicyListing = Schema.Struct({
+  projectId: ProjectId,
+  key: PolicyKey,
+  title: TrimmedNonEmptyString,
+  body: Schema.String,
+  version: Schema.Int,
+  state: PolicyState,
+  updatedAt: IsoDateTime,
+  /** Earliest first. */
+  versions: Schema.Array(PolicyVersion),
+  deliveries: Schema.Array(PolicyDelivery),
+  status: Schema.Array(PolicyVerifyResult),
+});
+export type PolicyListing = typeof PolicyListing.Type;
+
+export const PolicyListInput = Schema.Struct({
+  /** The project whose policies to list; the environment's (`*`) come with them. */
+  projectId: ProjectId,
+});
+export type PolicyListInput = typeof PolicyListInput.Type;
+
 export class PolicyError extends Schema.TaggedError<PolicyError>()("PolicyError", {
   code: Schema.Literals(["inactive", "not_found", "invalid", "io"]),
   message: Schema.String,
 }) {}
 
-/** Every method writes the database or a home file, so each answers behind the `operate` gateway. */
+/** `list` only reads; every other method writes the database or a home file, so it answers behind `operate`. */
 export const POLICY_METHODS = definePluginMethods({
+  list: {
+    method: "policy.list",
+    gateway: "read",
+    input: PolicyListInput,
+    output: Schema.Array(PolicyListing),
+    error: PolicyError,
+  },
   create: {
     method: "policy.create",
     gateway: "operate",

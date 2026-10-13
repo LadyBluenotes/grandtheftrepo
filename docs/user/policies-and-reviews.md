@@ -9,8 +9,25 @@ project; any other project's policies apply to that project.
 
 The server writes each accepted policy into the instruction files that Claude, Codex and Copilot
 read from your home directory. It does this between runs, so a policy that changes while an agent is
-working arrives once that work is done. There is no screen for policies yet. Agents list them, with
-the version each agent holds, using the `policy_list` tool.
+working arrives once that work is done. Agents list policies, with the version each agent holds,
+using the `policy_list` tool.
+
+### The Policies screen
+
+While the policy plugin runs, **Policies** is in the sidebar. Pick the environment or one project
+at the top: the environment's policies apply everywhere, a project's to that project. The list shows
+each policy with the version on show, its state and when it last changed; a draft waiting above the
+accepted version is marked.
+
+Open a policy to see its versions and accept one. The form below starts from the body on show, and
+saving it adds a draft. Accepting a draft makes it current and the server delivers it between runs.
+**New policy** starts one from an empty form; its key is lowercase letters, digits and dashes.
+
+Delivery shows, for Claude, Codex and Copilot, whether the agent's instruction file holds the
+accepted version: `OK`, `Drifted` when the block was edited by hand, or `Missing` when nothing was
+installed or the file lost it. **Reinstall** writes the accepted version again; an agent whose
+directory does not exist is skipped. The screen re-reads when you come back to it, so a change an
+agent made through the `policy_*` tools shows then.
 
 ### The ponytail policy
 
@@ -24,11 +41,11 @@ every agent is told to ask these questions, in this order, before adding anythin
 5. `one_line`: Can it be one line? Write the line.
 6. `minimum`: None of the above? Write the minimum that works.
 
-`ponytail` is edited like any other policy: add a new version with your own wording and accept it.
-Once a `ponytail` policy exists, in any state, the server leaves it alone, so your version is never
-replaced. The questions are adapted from [ponytail](https://github.com/DietrichGebert/ponytail) by
-DietrichGebert, used under the MIT license; its notice is listed under
-[Open source licenses](./open-source-licenses.md).
+`ponytail` is edited like any other policy: on the Policies screen, save a new version with your
+own wording and accept it. Once a `ponytail` policy exists, in any state, the server leaves it alone,
+so your version is never replaced. The questions are adapted from
+[ponytail](https://github.com/DietrichGebert/ponytail) by DietrichGebert, used under the MIT
+license; its notice is listed under [Open source licenses](./open-source-licenses.md).
 
 ### The caveman policy
 
@@ -44,9 +61,10 @@ It reaches every thread of Claude, Codex and Copilot through the instruction fil
 nothing to install. Cursor, Grok, OpenCode and Antigravity do not read those files, so it does not
 reach them.
 
-To switch the style off, add a new version of `caveman` with a neutral body, such as
-`Reply in plain sentences.`, and accept it. The server delivers it between runs and never replaces
-your version. Turning the policy plugin off does not remove a block already installed.
+To switch the style off, open `caveman` on the Policies screen, save a new version with a neutral
+body, such as `Reply in plain sentences.`, and accept it. The server delivers it between runs and
+never replaces your version. Turning the policy plugin off does not remove a block already
+installed.
 
 ## Reviews
 

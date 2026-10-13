@@ -344,6 +344,35 @@ it.layer(layerTest)("PolicyService", (it) => {
         (yield* policies.list(ProjectId.make("project-2"))).map((policy) => policy.projectId),
         ["*", "*", "*", "*", "*"],
       );
+
+      // Every version in its latest state, the shown body, and each agent's file as it is now.
+      const restored = listed.find((policy) => policy.key === key);
+      assert.deepStrictEqual(
+        restored?.versions.map((version) => [version.version, version.state, version.title]),
+        [
+          [1, "accepted", "Restore"],
+          [2, "superseded", "Restore"],
+        ],
+      );
+      assert.strictEqual(restored?.body, "First.");
+      assert.deepStrictEqual(
+        restored?.status.map((agent) => [agent.agent, agent.status]),
+        [
+          ["claude", "missing"],
+          ["codex", "ok"],
+          ["copilot", "missing"],
+        ],
+      );
+      // Listing marks nothing verified: that is verify's job.
+      assert.strictEqual(restored?.deliveries[0]?.verifiedAt, null);
+      const text = yield* fs.readFileString(codex!.path);
+      yield* fs.writeFileString(codex!.path, text.replace("First.", "Edited."));
+      const drifted = (yield* policies.list(local)).find((policy) => policy.key === key);
+      assert.strictEqual(
+        drifted?.status.find((agent) => agent.agent === "codex")?.status,
+        "drifted",
+      );
+      yield* fs.writeFileString(codex!.path, text);
     }),
   );
 

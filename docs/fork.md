@@ -154,14 +154,17 @@ them half-evaluated. The host hands `toolkitRegistration` to `ServerPlugin.mcp` 
 - **policy**: reviewed working rules per project (`*` is the whole environment), versioned in the
   plugin's database and rendered as one marked block each, with `<state dir>/RULES.md` ahead of
   the body, into the instruction file each agent reads from the user's home. Verify re-reads the
-  block. `policy.create`, `.accept`, `.install` and `.verify` are gateway methods, and the
+  block. `policy.list` reads, with every version and each agent's file re-read but nothing marked
+  verified; `policy.create`, `.accept`, `.install` and `.verify` are operate methods, and the
   `policy_list` MCP tool reads. A supervisor sweep installs and verifies accepted policies an
   agent lacks or holds under older rules, but only while no run is active on the project (any
   run, for `*`). The first start seeds `*` / `ponytail`, the six-question ladder, and `*` /
   `caveman`, the terse reply rules, each unless a policy of that key exists in any state; the
   review plugin refuses a `convention` summary that starts with `rung:` and names none of the six
   rung ids. Server: `apps/server/src/plugins/policy/`. Contracts:
-  `packages/contracts/src/plugins/policy.ts`. No screen.
+  `packages/contracts/src/plugins/policy.ts`. Web: `apps/web/src/plugins/policy/`, the Policies
+  screen at `/plugins/policy`. User guide:
+  [Policies and reviews](./user/policies-and-reviews.md#policies).
 - **review**: a reviewing agent's typed verdict on one checkpoint of another thread: `approve`, or
   `changes_requested` with one of six failure modes (`defect`, `incomplete`, `scope_drift`,
   `missing_verification`, `convention`, `unclear_spec`), so nothing reads reviewer prose to learn
