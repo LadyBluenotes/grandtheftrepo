@@ -43,6 +43,26 @@ export const forItem = (itemId: number) =>
   ).pipe(Effect.map((rows) => rows.map(toPromotion)));
 
 /**
+ * A project's promotions delivered in `[from, to)` to one of `ownerKinds`, oldest first. Nothing
+ * writes a delivered record again, so its `updated_at` is when it was delivered.
+ */
+export const deliveredIn = (input: {
+  readonly projectId: ProjectId;
+  readonly ownerKinds: ReadonlyArray<LearningOwnerKind>;
+  readonly from: string;
+  readonly to: string;
+}) =>
+  Effect.flatMap(SqlClient.SqlClient, (sql) =>
+    input.ownerKinds.length === 0
+      ? Effect.succeed([])
+      : sql<Row>`SELECT * FROM learning_promotions
+          WHERE project_id = ${input.projectId} AND state = 'delivered'
+            AND owner_kind IN ${sql.in(input.ownerKinds)}
+            AND updated_at >= ${input.from} AND updated_at < ${input.to}
+          ORDER BY updated_at, id`,
+  ).pipe(Effect.map((rows) => rows.map(toPromotion)));
+
+/**
  * Up to `limit` candidate items that need a record or were already handed over, with the state of
  * the promotion for their owner kind: null when there is none, `delivered` when there is. The
  * record is keyed by project, failure mode and owner kind, so a repeat finds the old one. One

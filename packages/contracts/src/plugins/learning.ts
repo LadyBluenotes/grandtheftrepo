@@ -84,6 +84,11 @@ export const LearningItem = Schema.Struct({
   ownerKind: Schema.NullOr(LearningOwnerKind),
   /** A rule never changes an item a person has set. */
   dispositionBy: Schema.Literals(["rule", "person"]),
+  /**
+   * When a person last set the disposition; null while the rules own it, and for a person's
+   * choice made before this was recorded. New evidence moves `updatedAt`, never this.
+   */
+  dispositionAt: Schema.NullOr(IsoDateTime),
   reason: Schema.String,
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,

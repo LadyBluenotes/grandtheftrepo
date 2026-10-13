@@ -59,10 +59,13 @@ export class Attention extends Context.Service<
     ) => Effect.Effect<void, SqlError.SqlError>;
     /** Clears the open flag for the key; succeeds when none is open. */
     readonly clear: (flag: FlagKey) => Effect.Effect<void, SqlError.SqlError>;
-    /** One plugin's open flags of one kind, oldest first, for its sweep to reconcile against. */
+    /**
+     * Open flags, oldest first. A sweep narrows them to its own plugin and kind to reconcile
+     * against; a report reads them all.
+     */
     readonly listOpen: (input: {
-      readonly pluginId: string;
-      readonly kind: AttentionKind;
+      readonly pluginId?: string | undefined;
+      readonly kind?: AttentionKind | undefined;
     }) => Effect.Effect<
       ReadonlyArray<{ readonly threadId: string; readonly text: string }>,
       SqlError.SqlError
@@ -103,7 +106,9 @@ const make = Effect.gen(function* () {
   const listOpen: Attention["Service"]["listOpen"] = ({ pluginId, kind }) =>
     sql<{ readonly thread_id: string; readonly text: string }>`
       SELECT thread_id, text FROM attention
-      WHERE plugin_id = ${pluginId} AND kind = ${kind} AND cleared_at IS NULL
+      WHERE cleared_at IS NULL
+        ${pluginId === undefined ? sql`` : sql`AND plugin_id = ${pluginId}`}
+        ${kind === undefined ? sql`` : sql`AND kind = ${kind}`}
       ORDER BY id
     `.pipe(Effect.map((rows) => rows.map((row) => ({ threadId: row.thread_id, text: row.text }))));
 

@@ -53,7 +53,9 @@ them is resolved by keeping the line.
 | `apps/server/src/auth/RpcAuthorization.ts`                   | `...PLUGIN_RPC_SCOPES,` inside `RPC_REQUIRED_SCOPES`, plus its import                                                                                                  |
 | `apps/server/src/mcp/toolkits/worktree/registration.test.ts` | the `PluginHost` and `PluginSupervisor` mocks in the service list, plus their imports                                                                                  |
 | `packages/client-runtime/src/rpc/client.ts`                  | `\| PluginSubscriptionRpcTag` in `EnvironmentSubscriptionRpcTag`, plus its import                                                                                      |
-| `packages/client-runtime/package.json`                       | the `./plugins/rpc` entry at the end of `exports`                                                                                                                      |
+| `packages/client-runtime/package.json`                       | the `./plugins/rpc` and `./plugins/kanban` entries at the end of `exports`                                                                                             |
+| `apps/mobile/src/Stack.tsx`                                  | `SettingsKanbanBoard` at the end of `SettingsContentStack`'s screens, plus its import                                                                                  |
+| `apps/mobile/.../SettingsProjectOverviewRouteScreen.tsx`     | in `features/settings/`: `<KanbanBoardEntries />` between the Project and Checkouts sections, plus its import                                                          |
 | `apps/web/src/routes/_chat.board.tsx`                        | the kanban board's own route; a new plugin screen uses `/plugins/<id>` through the registry instead                                                                    |
 | `apps/web/src/components/sidebar/mainAppLocation.ts`         | `/board` and the `/plugins` paths in `isSidebarUtilityPage`                                                                                                            |
 | `apps/web/src/components/sidebar/SidebarChrome.tsx`          | the board's `SidebarUtilityItem`, gated on `kanbanSupportedAtom`, and `<PluginSidebarEntries />` after the Usage entry, plus imports; `SidebarUtilityItem` is exported |
@@ -92,9 +94,12 @@ them half-evaluated. The host hands `toolkitRegistration` to `ServerPlugin.mcp` 
   that starts a thread must ask first; no launcher calls it yet). The `writers` sweep raises an
   attention flag when two agents write one project. `kanban.attention.list` feeds the strip above
   the board from the project's open host flags, its threads' pending questions and permission
-  requests, and, while routing runs, its routing mismatches. Server:
+  requests, and, while routing runs, its routing mismatches. Mobile shows the board as a read-only
+  list grouped by column, from the Board row on a project's overview; it and the web board share
+  the board and active-plugin atoms in `packages/client-runtime/src/plugins/kanban.ts`. Server:
   `apps/server/src/plugins/kanban/`. Contracts: `packages/contracts/src/plugins/kanban.ts`. Web:
-  `apps/web/src/plugins/kanban/`. User guide: [Kanban board](./user/kanban.md).
+  `apps/web/src/plugins/kanban/`. Mobile: `apps/mobile/src/features/kanban/`. User guide:
+  [Kanban board](./user/kanban.md).
 - **telemetry**: the fourteen efficiency measures of #1 over a project's window, from the
   `telemetry.measures` gateway method and the `telemetry_measures` MCP tool. Its reactor keeps
   runs, tool calls, threads and provider turn token usage from the event log in the plugin's own
@@ -110,10 +115,15 @@ them half-evaluated. The host hands `toolkitRegistration` to `ServerPlugin.mcp` 
   replays the log to record each run's instance. The `telemetry/budgets` sweep judges each budget,
   one measure for one tier, over the last seven whole UTC days per project, writes a
   `budget_events` row only when its state changes, and raises or clears a `budget_breach`
-  attention flag. The template plugin: it uses every host seam once (database, reactor, sweep,
-  gateway method, MCP tool, settings panel) and is the one to copy. Server:
-  `apps/server/src/plugins/telemetry/`. Contracts: `packages/contracts/src/plugins/telemetry.ts`.
-  Web: `apps/web/src/plugins/telemetry/`.
+  attention flag. `telemetry.report` and the `telemetry_report` MCP tool fold a project's range
+  into ten sections, from the thread records, the learning and review plugins and the host's
+  attention flags, with the same report as one self-contained HTML page; at start the plugin gives
+  each project with a default model a `Weekly report` thread and a scheduled task that posts that
+  page there every Monday, and never touches a task that already exists. The template plugin: it
+  uses every host seam once (database, reactor, sweep, gateway method, MCP tool, settings panel)
+  and is the one to copy. Server: `apps/server/src/plugins/telemetry/`. Contracts:
+  `packages/contracts/src/plugins/telemetry.ts` and `telemetryReport.ts`. Web:
+  `apps/web/src/plugins/telemetry/`. User guide: [Weekly report](./user/weekly-report.md).
 - **routing**: which model does which work. Three tiers, `cheap`, `standard` and `strong`, each map
   to a provider instance and a model, set for the environment and overridable per project, in the
   plugin's own database. A tier with nothing saved falls back to the built-in: one instance's model
