@@ -77,6 +77,10 @@ const STRICTEST_MODES: DraftingModes = {
  * `malformed` and stays where it is. So does an issue deleted outright: a missing issue is an
  * outcome of the attempt, not a failure to retry.
  *
+ * An attempt is decided once. Each transition updates the row only while it is still in the state
+ * it was read in, so when the launch's error, the run's end and the startup reconciliation reach
+ * the same attempt, the first to get there wins and the others change nothing.
+ *
  * The attempt is stored, with its outcome, before the issue is admitted: admitting renames the
  * issue file, which no SQL transaction can cover, and a card admitted without an attempt would
  * have nothing to show for it. A crash between the two leaves a `valid` attempt for a card still
@@ -209,8 +213,14 @@ const make = Effect.gen(function* () {
       ),
     );
 
+  /**
+   * Moves an attempt from `from` (`running` unless said otherwise) to its outcome, and answers
+   * whether it did. The launch's error, the run's end and the startup reconciliation can all reach
+   * the same attempt; the first to get there decides it, and the others change nothing.
+   */
   const close = (input: {
     readonly id: number;
+    readonly from?: "running" | "valid";
     readonly status: "valid" | "malformed";
     readonly text: string | null;
     readonly reason: string | null;
@@ -218,16 +228,20 @@ const make = Effect.gen(function* () {
     Effect.flatMap(
       nowIso,
       (completedAt) =>
-        sql`UPDATE spec_attempt
+        sql<{ readonly id: number }>`UPDATE spec_attempt
           SET status = ${input.status}, text = ${input.text}, reason = ${input.reason},
             completed_at = ${completedAt}
-          WHERE id = ${input.id}`,
-    ).pipe(Effect.asVoid, Effect.catchTags({ SqlError: io }));
+          WHERE id = ${input.id} AND status = ${input.from ?? "running"}
+          RETURNING id`,
+    ).pipe(
+      Effect.map((rows) => rows.length > 0),
+      Effect.catchTags({ SqlError: io }),
+    );
 
   /**
-   * Admits the issue a valid spec was checked against. When it has changed or is gone, closes the
-   * attempt as `malformed` and returns why; otherwise returns nothing. Any other failure
-   * propagates: the reactor retries it.
+   * Admits the issue a valid spec was checked against. When it has changed or is gone, moves the
+   * attempt, already stored as `valid`, to `malformed` and returns why; otherwise returns nothing.
+   * Any other failure propagates: the reactor retries it.
    */
   const admit = (input: {
     readonly attemptId: number;
@@ -247,6 +261,7 @@ const make = Effect.gen(function* () {
         const reason = outcome === "changed" ? ISSUE_CHANGED : ISSUE_DELETED;
         return close({
           id: input.attemptId,
+          from: "valid",
           status: "malformed",
           text: input.text,
           reason,
@@ -430,13 +445,15 @@ const make = Effect.gen(function* () {
     );
     const attempt = rows[0];
     if (attempt === undefined) return;
-    if (run.status !== "completed")
-      return yield* close({
+    if (run.status !== "completed") {
+      yield* close({
         id: attempt.id,
         status: "malformed",
         text: null,
         reason: `The drafting run ended ${run.status} before it sent a spec.`,
       });
+      return;
+    }
     const { turnItems } = yield* threads
       .getThreadRecords(run.threadId, ["turnItems"], {
         turnItemRunId: run.id,
@@ -457,24 +474,27 @@ const make = Effect.gen(function* () {
         ),
       );
     const text = finalMessage(turnItems);
-    if (text === undefined)
-      return yield* close({
+    if (text === undefined) {
+      yield* close({
         id: attempt.id,
         status: "malformed",
         text: null,
         reason: "The drafting run finished without a message.",
       });
+      return;
+    }
     const check = validateSpec(text);
     // The attempt first, then the issue file; see the order note on `SpecService`. The reactor runs
     // this inside the transaction that holds its cursor, so an admission that fails rolls the
     // attempt back to running and the event is retried.
-    yield* close({
+    const decided = yield* close({
       id: attempt.id,
       status: check.valid ? "valid" : "malformed",
       text,
       reason: check.valid ? null : check.reason,
     });
-    if (!check.valid) return;
+    // Another writer closed the attempt since it was read: it decided, and the issue is its to admit.
+    if (!decided || !check.valid) return;
     yield* admit({
       attemptId: attempt.id,
       projectId: attempt.project_id,
@@ -514,7 +534,12 @@ const make = Effect.gen(function* () {
               ),
             );
       if (!started)
-        yield* close({ id: row.id, status: "malformed", text: null, reason: NEVER_STARTED });
+        yield* close({
+          id: row.id,
+          status: "malformed",
+          text: null,
+          reason: NEVER_STARTED,
+        });
     }
   }).pipe(Effect.withSpan("SpecService.reconcile"));
 

@@ -235,6 +235,8 @@ const runUpdated = (
 const start = Effect.gen(function* () {
   const { sql } = yield* PluginDatabase.open({ id: "kanban", filename: ":memory:", migrations });
   const projections = yield* ProjectionStore.ProjectionStoreV2;
+  // Runs just before `finish` reads the drafting thread, after it has read its attempt.
+  let beforeRecords: Effect.Effect<void> = Effect.void;
   // The real store, except that `admit` can be made to fail, as a rename that cannot complete would,
   // and can be preceded by an edit, as a person's would land between a read and the locked write.
   let admitFails = false;
@@ -261,7 +263,10 @@ const start = Effect.gen(function* () {
           Layer.succeed(SqlClient.SqlClient, sql),
           Layer.mock(ThreadManagementService.ThreadManagementService)({
             getThreadRecords: (threadId, fields, filter) =>
-              projections.getThreadRecords(threadId, fields, filter).pipe(Effect.orDie),
+              Effect.andThen(
+                beforeRecords,
+                projections.getThreadRecords(threadId, fields, filter).pipe(Effect.orDie),
+              ),
             getThreadShell: (threadId) => projections.getThreadShell(threadId).pipe(Effect.orDie),
           }),
           Layer.mock(ProjectService.ProjectService)({
@@ -281,26 +286,35 @@ const start = Effect.gen(function* () {
   // The step a launch fails at, after it has recorded the input as the real launcher records the
   // thread; null launches fine.
   let launchFailsAt: ThreadLaunchService.ThreadLaunchError["operation"] | null = null;
+  // Runs inside a launch, once it has recorded the input and before it answers or fails.
+  let duringLaunch: (input: ThreadLaunchService.ThreadLaunchInput) => Effect.Effect<void> = () =>
+    Effect.void;
   const launcher = ThreadLaunchService.ThreadLaunchService.of({
     launch: (input) =>
       Effect.suspend(() => {
         launched.push(input);
-        if (launchFailsAt !== null)
-          return Effect.fail(
-            new ThreadLaunchService.ThreadLaunchError({
-              operation: launchFailsAt,
-              commandId: input.commandId,
-              projectId: input.projectId,
-              cause: new Error("The provider is offline."),
-            }),
-          );
-        // Only the thread id is read.
-        return Effect.succeed({
-          threadId: input.threadId ?? ThreadId.make("unused"),
-          resumed: false,
-          projection: {} as never,
-        });
-      }),
+        return duringLaunch(input);
+      }).pipe(
+        Effect.andThen(
+          Effect.suspend(() => {
+            if (launchFailsAt !== null)
+              return Effect.fail(
+                new ThreadLaunchService.ThreadLaunchError({
+                  operation: launchFailsAt,
+                  commandId: input.commandId,
+                  projectId: input.projectId,
+                  cause: new Error("The provider is offline."),
+                }),
+              );
+            // Only the thread id is read.
+            return Effect.succeed({
+              threadId: input.threadId ?? ThreadId.make("unused"),
+              resumed: false,
+              projection: {} as never,
+            });
+          }),
+        ),
+      ),
     checkWorktreeBase: () => Effect.void,
     retryPreparation: () => Effect.die("unused"),
   });
@@ -364,6 +378,14 @@ const start = Effect.gen(function* () {
     beforeAdmit = edit;
   };
 
+  const beforeThreadRead = (effect: Effect.Effect<void>) => {
+    beforeRecords = effect;
+  };
+
+  const whileLaunching = (effect: typeof duringLaunch) => {
+    duringLaunch = effect;
+  };
+
   const failLaunch = (operation: typeof launchFailsAt) => {
     launchFailsAt = operation;
   };
@@ -393,6 +415,8 @@ const start = Effect.gen(function* () {
     reactorFailures,
     failAdmit,
     editBeforeAdmit,
+    beforeThreadRead,
+    whileLaunching,
     failLaunch,
   };
 });
@@ -768,6 +792,72 @@ describe("SpecService", () => {
           assert.strictEqual(decided?.issueStatus, "todo");
         }),
       ).pipe(Effect.provide(layerTest)),
+  );
+
+  it.effect("a launch error that closes the attempt first wins over the run's end", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { spec, sql, store, launched, specify, react, file, fileText, beforeThreadRead } =
+          yield* start;
+        const { id } = yield* file("Login loops", rough);
+        yield* specify({ projectId, id });
+        const before = yield* fileText(id);
+
+        // The launch's error closes the attempt after `finish` has read it as running and before
+        // it writes.
+        beforeThreadRead(
+          sql`UPDATE spec_attempt SET status = 'malformed', reason = 'The launch failed.',
+            completed_at = '1970-01-01T00:00:00.000Z' WHERE status = 'running'`.pipe(
+            Effect.orDie,
+            Effect.asVoid,
+          ),
+        );
+        const threadId = launched[0]!.threadId!;
+        const runId = RunId.make("run:spec-race-launch-first");
+        yield* react([
+          threadCreated(threadId),
+          planned(threadId, runId, 1, validSpec),
+          runUpdated(threadId, runId, "completed"),
+        ]);
+
+        const report = yield* spec.latest({ projectId, id });
+        assert.strictEqual(report?.attempt.status, "malformed");
+        assert.strictEqual(report?.attempt.reason, "The launch failed.");
+        // The run's end changed nothing, and the card was not admitted on a spec it lost.
+        assert.strictEqual(report?.issueStatus, "triage");
+        assert.strictEqual(yield* fileText(id), before);
+        assert.lengthOf((yield* store.getIssue({ projectId, id })).criteria, 0);
+      }),
+    ).pipe(Effect.provide(layerTest)),
+  );
+
+  it.effect("a run's end that lands first is not overwritten by a late launch error", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { spec, store, specify, react, file, whileLaunching, failLaunch } = yield* start;
+        const { id } = yield* file("Login loops", rough);
+        const sink = yield* EventSink.EventSinkV2;
+
+        // The run finishes while the launcher is still working, then the launch reports an error.
+        whileLaunching((input) =>
+          react([
+            threadCreated(input.threadId!),
+            planned(input.threadId!, RunId.make("run:spec-race-run-first"), 1, validSpec),
+            runUpdated(input.threadId!, RunId.make("run:spec-race-run-first"), "completed"),
+          ]).pipe(Effect.provideService(EventSink.EventSinkV2, sink)),
+        );
+        failLaunch("dispatch-message");
+        const error = yield* refusal(specify({ projectId, id }));
+        assert.strictEqual(error.code, "io");
+
+        const report = yield* spec.latest({ projectId, id });
+        assert.strictEqual(report?.attempt.status, "valid");
+        assert.isNull(report?.attempt.reason);
+        assert.strictEqual(report?.attempt.text, validSpec);
+        assert.strictEqual(report?.issueStatus, "todo");
+        assert.lengthOf((yield* store.getIssue({ projectId, id })).criteria, 2);
+      }),
+    ).pipe(Effect.provide(layerTest)),
   );
 
   it.effect("six Approach items: malformed with the reason, the ticket untouched", () =>
