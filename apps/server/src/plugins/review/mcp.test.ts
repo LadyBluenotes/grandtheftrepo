@@ -2,6 +2,7 @@ import { expect, it } from "@effect/vitest";
 import {
   EnvironmentId,
   OrchestratorMcpFailure,
+  PONYTAIL_RUNG_IDS,
   ProviderInstanceId,
   type ThreadId,
   type AuthMcpClientAccess,
@@ -125,7 +126,7 @@ it.effect("tells the reviewer the six rungs in order and how a failed one is rep
       const { server } = yield* withTools;
       const description = server.tools.find(({ tool }) => tool.name === "review_verdict")?.tool
         .description;
-      expect(description).toContain("needed, existing, platform, dependency, one_line, minimum");
+      expect(description).toContain(PONYTAIL_RUNG_IDS.join(", "));
       expect(description).toContain("convention verdict whose summary starts with rung:<id>");
     }),
   ),

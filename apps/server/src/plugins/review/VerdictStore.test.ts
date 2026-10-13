@@ -226,6 +226,24 @@ it.effect("refuses a convention summary that names no known rung, and writes not
   ),
 );
 
+it.effect("answers the retry of a verdict stored before the ladder with the stored result", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const { record, review, verdictCount } = yield* harness;
+      const stored = convention("rung:bogus");
+      // A free-form summary that was valid when it was stored.
+      const first = yield* record(reviewer, convention("Breaks the naming convention."));
+      yield* review`UPDATE review_verdicts SET summary = ${stored.summary}`;
+
+      assert.deepEqual(yield* record(reviewer, stored), first);
+      // Only the same payload settles; any other is the usual conflict, not a rung refusal.
+      const refused = yield* refusal(record(reviewer, convention("rung:bogus again")));
+      assert.strictEqual(refused.code, "conflict");
+      assert.strictEqual(yield* verdictCount, 1);
+    }),
+  ),
+);
+
 it.effect("leaves a summary alone unless it is a convention one starting with rung:", () =>
   Effect.scoped(
     Effect.gen(function* () {

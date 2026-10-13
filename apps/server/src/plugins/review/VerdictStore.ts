@@ -178,12 +178,6 @@ const make = Effect.gen(function* () {
       if (reviewerThreadId === input.threadId) {
         return yield* invalid("A thread cannot review its own work");
       }
-      // A failed rung of the ponytail ladder; only the shape is checked, the reviewer judges it.
-      const rung = failureMode === "convention" ? rungNamed(input.summary) : undefined;
-      if (rung !== undefined && !isRungId(rung)) {
-        return yield* invalid(`Unknown rung "${rung}". Rungs: ${PONYTAIL_RUNG_IDS.join(", ")}.`);
-      }
-
       const id = verdictIdOf(reviewerThreadId, input.checkpointId);
       /** The stored verdict is the answer to the same payload, and a conflict for any other. */
       const settle = (row: Row) =>
@@ -196,6 +190,13 @@ const make = Effect.gen(function* () {
 
       const existing = yield* find(id);
       if (existing !== undefined) return yield* settle(existing);
+
+      // Only new writes are held to the ladder's shape: a verdict stored before it existed still
+      // answers its own retry. The reviewer judges the rung; code checks only that it is named.
+      const rung = failureMode === "convention" ? rungNamed(input.summary) : undefined;
+      if (rung !== undefined && !isRungId(rung)) {
+        return yield* invalid(`Unknown rung "${rung}". Rungs: ${PONYTAIL_RUNG_IDS.join(", ")}.`);
+      }
 
       const projectId = yield* readCheckpoint(input.threadId, input.checkpointId);
       const corrections = yield* CorrectionStore.CorrectionStore;
