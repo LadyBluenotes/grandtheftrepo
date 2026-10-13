@@ -149,8 +149,14 @@ them half-evaluated. The host hands `toolkitRegistration` to `ServerPlugin.mcp` 
   correction is recorded first and the verdict row second; the verdict id is derived from the
   reviewer thread and checkpoint, so a retry finds the same correction. Agents give a verdict with
   the `review_verdict` MCP tool, from a thread only, and read them with `review_verdicts`;
-  `review.verdicts` reads them over the gateway. Server: `apps/server/src/plugins/review/`.
-  Contracts: `packages/contracts/src/plugins/review.ts`. No screen yet.
+  `review.verdicts` reads them over the gateway. A review request (`review_request`,
+  `review.request`) names the thread's latest ready root checkpoint and a verdict on it answers
+  the request; once the thread's latest is another checkpoint, the `review/invalidation` sweep marks
+  the request stale for good, invalidates the verdicts on its checkpoint, opens a request at the
+  latest, and keeps a `stale_review` attention flag until that one is answered. `ReviewGate.check`
+  is the completion gate a ticket asks before it finishes; nothing calls it yet. Server:
+  `apps/server/src/plugins/review/`. Contracts: `packages/contracts/src/plugins/review.ts`. No
+  screen yet. User guide: [Policies and reviews](./user/policies-and-reviews.md#reviews).
 - **caveman**: whether each provider instance's model traffic goes through caveman's loopback
   proxy, `routed`, `direct`, `other` or `unsupported`, read from the Claude `settings.json` and
   Codex `config.toml` the instance starts with, and a switch that runs caveman's own `enable` and

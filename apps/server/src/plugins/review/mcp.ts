@@ -1,6 +1,8 @@
 import {
   OrchestratorMcpFailure,
   PONYTAIL_RUNG_IDS,
+  ReviewRequest,
+  ReviewRequestInput,
   ReviewVerdict,
   ReviewVerdictInput,
   ReviewVerdictResult,
@@ -17,6 +19,7 @@ import * as McpToolAccess from "../../mcp/McpToolAccess.ts";
 import { readCaller } from "../../mcp/threadAccess.ts";
 import * as ThreadManagementService from "../../orchestration-v2/ThreadManagementService.ts";
 import * as CorrectionStore from "../learning/CorrectionStore.ts";
+import * as ReviewRequests from "./ReviewRequests.ts";
 import * as VerdictStore from "./VerdictStore.ts";
 
 const shared = {
@@ -50,7 +53,35 @@ const ReviewVerdictsTool = Tool.make("review_verdicts", {
   .annotate(Tool.Readonly, true)
   .annotate(Tool.Destructive, false);
 
-export const ReviewToolkit = Toolkit.make(ReviewVerdictTool, ReviewVerdictsTool);
+const ReviewRequestTool = Tool.make("review_request", {
+  ...shared,
+  description:
+    "Ask for a review of threadId's latest checkpoint; it can be your own thread. Answers with the request: its checkpointId, and status open until a review_verdict names that checkpoint, then answered. Asking again at the same checkpoint returns the same request. Once the thread's latest checkpoint is another one, the supervisor marks the request stale for good and opens a new one at the latest, so a review always describes the current work. Refused while the thread has no checkpoint.",
+  parameters: ReviewRequestInput,
+  success: ReviewRequest,
+})
+  .annotate(Tool.Title, "Request a review")
+  .annotate(Tool.Readonly, false)
+  .annotate(Tool.Destructive, false)
+  .annotate(Tool.Idempotent, true)
+  .annotate(Tool.OpenWorld, false);
+
+const ReviewRequestsTool = Tool.make("review_requests", {
+  ...shared,
+  description:
+    "The review requests made for one thread, newest first: the checkpoint each names, status open, answered or stale, who asked and when, and for a stale one when it went stale and the id of the request that superseded it.",
+  parameters: ReviewRequestInput,
+  success: Schema.Array(ReviewRequest),
+})
+  .annotate(Tool.Readonly, true)
+  .annotate(Tool.Destructive, false);
+
+export const ReviewToolkit = Toolkit.make(
+  ReviewVerdictTool,
+  ReviewVerdictsTool,
+  ReviewRequestTool,
+  ReviewRequestsTool,
+);
 
 const failure = (error: ReviewVerdictError) =>
   new OrchestratorMcpFailure({
@@ -68,7 +99,7 @@ const inactive = (plugin: string) =>
   );
 
 /**
- * Both stores are read when the handlers are built, not declared as tool dependencies: plugin
+ * The stores are read when the handlers are built, not declared as tool dependencies: plugin
  * services are typed as absent from the server chain, and these tools only register while the
  * plugin, and so learning, is active, which is when they are there.
  */
@@ -78,9 +109,14 @@ export const handlers = McpToolAccess.toLayer(
     Effect.all([
       Effect.serviceOption(VerdictStore.VerdictStore),
       Effect.serviceOption(CorrectionStore.CorrectionStore),
+      Effect.serviceOption(ReviewRequests.ReviewRequests),
     ]),
-    ([verdictsOption, correctionsOption]) => {
+    ([verdictsOption, correctionsOption, requestsOption]) => {
       const verdicts = Option.match(verdictsOption, {
+        onNone: () => inactive("review"),
+        onSome: Effect.succeed,
+      });
+      const requests = Option.match(requestsOption, {
         onNone: () => inactive("review"),
         onSome: Effect.succeed,
       });
@@ -112,6 +148,30 @@ export const handlers = McpToolAccess.toLayer(
           Effect.gen(function* () {
             yield* readCaller();
             const store = yield* verdicts;
+            return yield* store.list(input);
+          }).pipe(Effect.catchTags({ ReviewVerdictError: (error) => Effect.fail(failure(error)) })),
+        ),
+        review_request: McpToolAccess.actsAsCaller((input) =>
+          Effect.gen(function* () {
+            const { caller } = yield* readCaller();
+            if (caller === undefined) {
+              return yield* new OrchestratorMcpFailure({
+                code: "thread_credential_required",
+                message:
+                  "A review is requested by a T3 thread; this MCP client is not running in one.",
+              });
+            }
+            const store = yield* requests;
+            return yield* store.request({
+              threadId: input.threadId,
+              requestedBy: `thread:${caller.id}`,
+            });
+          }).pipe(Effect.catchTags({ ReviewVerdictError: (error) => Effect.fail(failure(error)) })),
+        ),
+        review_requests: McpToolAccess.reads((input) =>
+          Effect.gen(function* () {
+            yield* readCaller();
+            const store = yield* requests;
             return yield* store.list(input);
           }).pipe(Effect.catchTags({ ReviewVerdictError: (error) => Effect.fail(failure(error)) })),
         ),

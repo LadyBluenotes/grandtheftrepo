@@ -54,10 +54,35 @@ export type ReviewVerdictsInput = typeof ReviewVerdictsInput.Type;
 export class ReviewVerdictError extends Schema.TaggedError<ReviewVerdictError>()(
   "ReviewVerdictError",
   {
-    code: Schema.Literals(["inactive", "invalid", "not_found", "conflict", "io"]),
+    /** `gated` is `ReviewGate.check` refusing completion; its message says why. */
+    code: Schema.Literals(["inactive", "invalid", "not_found", "conflict", "gated", "io"]),
     message: Schema.String,
   },
 ) {}
+
+const ReviewRequestStatus = Schema.Literals(["open", "answered", "stale"]);
+
+/**
+ * A thread's ask for a review of one checkpoint, the thread's latest when it was made. A verdict on
+ * that checkpoint answers it. Once the thread's latest checkpoint is another one, the supervisor
+ * marks it `stale`, for good, and opens the request that supersedes it at the latest.
+ */
+export const ReviewRequest = Schema.Struct({
+  id: Schema.Int,
+  threadId: ThreadId,
+  checkpointId: CheckpointId,
+  status: ReviewRequestStatus,
+  /** `user` for a client, `thread:<id>` for an agent, `supervisor` for a superseding request. */
+  requestedBy: Schema.String,
+  requestedAt: IsoDateTime,
+  staleAt: Schema.NullOr(IsoDateTime),
+  /** The request that replaced this one once it went stale. */
+  supersededBy: Schema.NullOr(Schema.Int),
+});
+export type ReviewRequest = typeof ReviewRequest.Type;
+
+/** A request for a review of one thread's latest checkpoint, or the requests made for it. */
+export const ReviewRequestInput = Schema.Struct({ threadId: ThreadId });
 
 /**
  * The plugin's methods and the gateway each answers behind. They are not in the WebSocket RPC
@@ -69,6 +94,20 @@ export const REVIEW_METHODS = definePluginMethods({
     gateway: "read",
     input: ReviewVerdictsInput,
     output: Schema.Array(ReviewVerdict),
+    error: ReviewVerdictError,
+  },
+  request: {
+    method: "review.request",
+    gateway: "operate",
+    input: ReviewRequestInput,
+    output: ReviewRequest,
+    error: ReviewVerdictError,
+  },
+  requestsList: {
+    method: "review.requests.list",
+    gateway: "read",
+    input: ReviewRequestInput,
+    output: Schema.Array(ReviewRequest),
     error: ReviewVerdictError,
   },
 });

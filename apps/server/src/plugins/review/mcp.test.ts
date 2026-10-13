@@ -18,12 +18,13 @@ import * as McpHttpServer from "../../mcp/McpHttpServer.ts";
 import * as McpInvocationContext from "../../mcp/McpInvocationContext.ts";
 import * as CorrectionStore from "../learning/CorrectionStore.ts";
 import { plugin } from "./index.ts";
+import * as ReviewRequests from "./ReviewRequests.ts";
 import * as VerdictStore from "./VerdictStore.ts";
 import {
   approve,
   foreign,
   harness,
-  layerThreads,
+  ready,
   reviewed,
   reviewer,
   sendBack,
@@ -78,7 +79,7 @@ const mcpClient = McpSchema.McpServerClient.of({
 
 /**
  * The plugin registers its tools the way the host does: `plugin.mcp(toolkitRegistration)`, with
- * both stores in the surrounding context, never declared as tool dependencies.
+ * the stores in the surrounding context, never declared as tool dependencies.
  */
 const withTools = Effect.gen(function* () {
   const kit = yield* harness;
@@ -90,7 +91,8 @@ const withTools = Effect.gen(function* () {
         Layer.provide(Layer.succeed(SqlClient.SqlClient, kit.review)),
         Layer.provide(Layer.succeed(VerdictStore.VerdictStore, kit.store)),
         Layer.provide(Layer.succeed(CorrectionStore.CorrectionStore, kit.corrections)),
-        Layer.provide(layerThreads),
+        Layer.provide(Layer.succeed(ReviewRequests.ReviewRequests, kit.requests)),
+        Layer.provide(kit.layerThreads),
       ),
   );
   const server = Context.get(services, McpServer.McpServer);
@@ -104,18 +106,25 @@ const withTools = Effect.gen(function* () {
   return { ...kit, server, call };
 });
 
-it.effect("lists the review tools with the write tool marked as changing things", () =>
+it.effect("lists the review tools with the write tools marked as changing things", () =>
   Effect.scoped(
     Effect.gen(function* () {
       const { server } = yield* withTools;
       expect(server.tools.map(({ tool }) => tool.name).toSorted()).toEqual([
+        "review_request",
+        "review_requests",
         "review_verdict",
         "review_verdicts",
       ]);
       const annotations = Object.fromEntries(
         server.tools.map(({ tool }) => [tool.name, tool.annotations?.readOnlyHint]),
       );
-      expect(annotations).toEqual({ review_verdict: false, review_verdicts: true });
+      expect(annotations).toEqual({
+        review_request: false,
+        review_requests: true,
+        review_verdict: false,
+        review_verdicts: true,
+      });
     }),
   ),
 );
@@ -262,6 +271,53 @@ it.effect("lets any caller read a thread's verdicts", () =>
           invalidatedAt: null,
         }),
       ]);
+    }),
+  ),
+);
+
+it.effect(
+  "a thread requests a review of its latest checkpoint; any caller reads the requests",
+  () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { call } = yield* withTools;
+        const first = yield* call(threadScope(reviewed), "review_request", { threadId: reviewed });
+        expect(first.isError).toBe(false);
+        expect(first.structuredContent).toMatchObject({
+          threadId: reviewed,
+          checkpointId: ready,
+          status: "open",
+          requestedBy: `thread:${reviewed}`,
+          staleAt: null,
+          supersededBy: null,
+        });
+        const again = yield* call(threadScope(reviewed), "review_request", { threadId: reviewed });
+        expect(again.structuredContent).toEqual(first.structuredContent);
+
+        const listed = yield* call(clientScope("read-only"), "review_requests", {
+          threadId: reviewed,
+        });
+        expect(listed.isError).toBe(false);
+        expect(listed.structuredContent).toEqual([first.structuredContent]);
+      }),
+    ),
+);
+
+it.effect("refuses a request from outside a T3 thread and for a thread with no checkpoint", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const { call, requests } = yield* withTools;
+      for (const access of ["read-only", "auto"] as const) {
+        const result = yield* call(clientScope(access), "review_request", { threadId: reviewed });
+        expect(result.isError).toBe(true);
+      }
+      const bare = yield* call(threadScope(reviewed), "review_request", { threadId: reviewer });
+      expect(bare.isError).toBe(true);
+      expect(failureOf(bare)).toMatchObject({
+        code: "invalid_request",
+        message: "This thread has no checkpoint to review yet.",
+      });
+      expect(yield* requests.list({ threadId: reviewed })).toEqual([]);
     }),
   ),
 );
