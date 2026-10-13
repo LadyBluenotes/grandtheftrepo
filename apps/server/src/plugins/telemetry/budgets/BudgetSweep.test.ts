@@ -1,6 +1,8 @@
 import { assert, it } from "@effect/vitest";
 import {
   ProjectId,
+  ProviderInstanceId,
+  type RoutingEntry,
   type RoutingTier,
   TelemetryError,
   type TelemetryMeasure,
@@ -16,6 +18,7 @@ import * as ProjectService from "../../../project/ProjectService.ts";
 import * as Attention from "../../Attention.ts";
 import * as HostDatabase from "../../HostDatabase.ts";
 import * as PluginDatabase from "../../PluginDatabase.ts";
+import * as TierMapService from "../../routing/TierMapService.ts";
 import { migrations } from "../migrations.ts";
 import * as BudgetStore from "./BudgetStore.ts";
 import * as BudgetSweep from "./BudgetSweep.ts";
@@ -53,6 +56,8 @@ const measure = (name: string, value: number | null, sampleSize: number): Teleme
  * host's attention flags over a fresh host database, `projects` listed, and a fake measure
  * service. It answers `context_efficiency` by window and tier as `answer` set it, unavailable
  * otherwise, next to another measure that always answers, and fails for projects in `failing`.
+ * `state.during` runs inside each measure request, as a save could while the sweep waits on one;
+ * `state.standard`, when set, is what a running routing plugin resolves the standard tier to.
  */
 const setup = (projects: ReadonlyArray<ProjectId> = [projectA]) =>
   Effect.gen(function* () {
@@ -70,37 +75,62 @@ const setup = (projects: ReadonlyArray<ProjectId> = [projectA]) =>
     const answers = new Map<string, TelemetryMeasure>();
     const requests: Array<TelemetryMeasuresInput> = [];
     const failing = new Set<ProjectId>();
-    const state = { replaying: false };
+    const state: {
+      replaying: boolean;
+      during: ((input: TelemetryMeasuresInput) => Effect.Effect<void, TelemetryError>) | undefined;
+      standard: RoutingEntry | undefined;
+      projects: ReadonlyArray<ProjectId>;
+    } = { replaying: false, during: undefined, standard: undefined, projects };
     const context = yield* Layer.build(
       Layer.mergeAll(
         BudgetStore.layer.pipe(Layer.provide(Layer.succeed(SqlClient.SqlClient, sql))),
         Attention.layer.pipe(Layer.provide(Layer.succeed(HostDatabase.HostDatabase, host.sql))),
         Layer.mock(ProjectService.ProjectService)({
-          listShells: () => Effect.succeed(projects.map(shell)),
+          listShells: () => Effect.sync(() => state.projects.map(shell)),
         }),
       ),
     );
+    const tierMap = TierMapService.TierMapService.of({
+      get: () =>
+        Effect.sync(() => {
+          const tier = (resolved: RoutingEntry | null) => ({
+            resolved,
+            source: resolved === null ? null : ("environment" as const),
+            available: true,
+            environment: resolved,
+            project: null,
+          });
+          return { cheap: tier(null), standard: tier(state.standard ?? null), strong: tier(null) };
+        }),
+      set: () => Effect.die("not used"),
+    });
     const sweep = yield* BudgetSweep.sweep((input) =>
       Effect.suspend(() => {
         requests.push(input);
-        if (failing.has(input.projectId)) {
-          return Effect.fail(new TelemetryError({ message: "The telemetry database is locked." }));
-        }
-        if (state.replaying) {
-          // As `unavailableMeasures` answers: every measure, one reason.
-          return Effect.succeed(
-            ["context_efficiency", "repeated_reads"].map((name) => ({
-              ...measure(name, null, 0),
-              missingReason: "Telemetry is still replaying the event log.",
-            })),
-          );
-        }
-        return Effect.succeed([
-          answers.get(`${input.projectId} ${input.from} ${input.tier}`) ??
-            measure("context_efficiency", null, 0),
-          measure("repeated_reads", 0.1, 4),
-        ]);
-      }),
+        return state.during?.(input) ?? Effect.void;
+      }).pipe(
+        Effect.andThen(() => {
+          if (failing.has(input.projectId)) {
+            return Effect.fail(
+              new TelemetryError({ message: "The telemetry database is locked." }),
+            );
+          }
+          if (state.replaying) {
+            // As `unavailableMeasures` answers: every measure, one reason.
+            return Effect.succeed(
+              ["context_efficiency", "repeated_reads"].map((name) => ({
+                ...measure(name, null, 0),
+                missingReason: "Telemetry is still replaying the event log.",
+              })),
+            );
+          }
+          return Effect.succeed([
+            answers.get(`${input.projectId} ${input.from} ${input.tier}`) ??
+              measure("context_efficiency", null, 0),
+            measure("repeated_reads", 0.1, 4),
+          ]);
+        }),
+      ),
     ).pipe(Effect.provide(context));
     return {
       store: Context.get(context, BudgetStore.BudgetStore),
@@ -119,7 +149,12 @@ const setup = (projects: ReadonlyArray<ProjectId> = [projectA]) =>
           `${projectId} ${day(from)} ${tier}`,
           measure("context_efficiency", value, sampleSize),
         ),
-      sweep: (dryRun = false) => sweep.run({ dryRun }),
+      sweep: (dryRun = false) =>
+        state.standard === undefined
+          ? sweep.run({ dryRun })
+          : sweep
+              .run({ dryRun })
+              .pipe(Effect.provideService(TierMapService.TierMapService, tierMap)),
       events: sql<{
         readonly budget_id: number;
         readonly project_id: string;
@@ -380,17 +415,135 @@ it.effect("a project whose measures fail is skipped, and judged on the next tick
   ),
 );
 
-it.effect("a dry run counts and writes nothing", () =>
+it.effect("a dry run counts, writes nothing and remembers nothing", () =>
   Effect.scoped(
     Effect.gen(function* () {
       const budgets = yield* setup();
       budgets.answer("2026-10-05", "standard", 1900);
 
       assert.deepEqual(yield* budgets.sweep(true), { examined: 1, acted: 1, flags: 1 });
+      assert.deepEqual(yield* budgets.sweep(true), { examined: 1, acted: 1, flags: 1 });
+      assert.deepEqual(yield* budgets.events, []);
+      assert.deepEqual(yield* budgets.flags, []);
+
+      // A real tick after them still judges the window.
+      assert.deepEqual(yield* budgets.sweep(), { examined: 1, acted: 1, flags: 1 });
+      assert.strictEqual((yield* budgets.events).length, 1);
+      assert.strictEqual((yield* budgets.flags).length, 1);
+    }),
+  ),
+);
+
+it.effect("a budget removed or edited while it is measured gets no event and no flag", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const budgets = yield* setup();
+      budgets.answer("2026-10-05", "standard", 1900);
+      budgets.state.during = (input) =>
+        input.tier === "standard" ? budgets.store.remove(STANDARD) : Effect.void;
+
+      assert.deepEqual(yield* budgets.sweep(), { examined: 1, acted: 0, flags: 0 });
+      assert.deepEqual(yield* budgets.events, []);
+      assert.deepEqual(yield* budgets.flags, []);
+      assert.deepEqual(
+        (yield* budgets.store.list({})).map((budget) => budget.tier),
+        ["cheap", "strong"],
+      );
+
+      // The strong budget's threshold moves above the value while it is measured.
+      budgets.answer("2026-10-05", "strong", 3500);
+      const strong = (yield* budgets.store.list({}))[1]!;
+      budgets.state.during = (input) =>
+        input.tier === "strong"
+          ? budgets.store
+              .set({
+                id: strong.id,
+                measure: strong.measure,
+                tier: strong.tier,
+                threshold: 4000,
+                direction: strong.direction,
+                projectId: strong.projectId,
+                minSample: strong.minSample,
+                enabled: strong.enabled,
+              })
+              .pipe(Effect.asVoid)
+          : Effect.void;
+      yield* TestClock.adjust("1 day");
+      budgets.answer("2026-10-06", "strong", 3500);
+      assert.deepEqual(yield* budgets.sweep(), { examined: 1, acted: 0, flags: 0 });
       assert.deepEqual(yield* budgets.events, []);
       assert.deepEqual(yield* budgets.flags, []);
     }),
   ),
+);
+
+it.effect("a change to what a tier resolves to is judged on the next tick", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const budgets = yield* setup();
+      budgets.state.standard = {
+        providerInstanceId: ProviderInstanceId.make("codex"),
+        model: "gpt-a",
+      };
+      budgets.answer("2026-10-05", "standard", 1200);
+      assert.deepEqual(yield* budgets.sweep(), { examined: 1, acted: 0, flags: 0 });
+      const asked = budgets.requests.length;
+      assert.deepEqual(yield* budgets.sweep(), { examined: 0, acted: 0, flags: 0 });
+      assert.strictEqual(budgets.requests.length, asked);
+
+      // The standard tier now runs another model, whose week is over budget.
+      budgets.state.standard = {
+        providerInstanceId: ProviderInstanceId.make("claude"),
+        model: "gpt-b",
+      };
+      budgets.answer("2026-10-05", "standard", 1900);
+      assert.deepEqual(yield* budgets.sweep(), { examined: 1, acted: 1, flags: 1 });
+      assert.deepEqual(
+        budgets.requests.slice(asked).map((request) => request.tier),
+        ["standard"],
+      );
+      assert.deepEqual(
+        (yield* budgets.events).map((event) => [event.kind, event.value]),
+        [["breach", 1900]],
+      );
+    }),
+  ),
+);
+
+it.effect(
+  "a project-scoped budget whose project is gone is not measured, and its flag clears",
+  () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const budgets = yield* setup([projectA, projectB]);
+        const scoped = yield* budgets.store.set({
+          measure: "context_efficiency",
+          tier: "cheap",
+          threshold: 500,
+          direction: "lower_is_better",
+          projectId: projectB,
+          minSample: 20,
+          enabled: true,
+        });
+        budgets.answer("2026-10-05", "cheap", 700, 30, projectB);
+        // The default cheap budget judges the same week, within its 800.
+        assert.deepEqual(yield* budgets.sweep(), { examined: 2, acted: 1, flags: 1 });
+        const open = Effect.map(budgets.flags, (flags) =>
+          flags.filter((flag) => flag.cleared_at === null).map((flag) => flag.thread_id),
+        );
+        assert.deepEqual(yield* open, [`budget:${scoped.id}:${projectB}`]);
+
+        budgets.state.projects = [projectA];
+        yield* TestClock.adjust("1 day");
+        const asked = budgets.requests.length;
+        assert.deepEqual(yield* budgets.sweep(), { examined: 0, acted: 1, flags: 0 });
+        assert.deepEqual(
+          budgets.requests.slice(asked).map((request) => request.projectId),
+          [projectA, projectA, projectA],
+        );
+        assert.deepEqual(yield* open, []);
+      }),
+    ),
 );
 
 it.effect("disabling or removing a budget clears its flag; enabling it again raises it", () =>

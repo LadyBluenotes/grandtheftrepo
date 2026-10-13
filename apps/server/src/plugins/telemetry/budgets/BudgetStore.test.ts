@@ -98,23 +98,73 @@ it.effect("refuses an unknown measure or tier, or a threshold or sample it canno
   ),
 );
 
+it.effect("records an event only while the budget keeps the terms it was judged on", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const { store } = yield* fixture;
+      const standard = (yield* store.list({}))[1]!;
+      const event = {
+        projectId: projectA,
+        kind: "breach",
+        windowFrom: "2026-10-05T00:00:00.000Z",
+        windowTo: "2026-10-12T00:00:00.000Z",
+        value: 1900,
+        sampleSize: 30,
+      } as const;
+      const terms = {
+        id: standard.id,
+        measure: standard.measure,
+        tier: standard.tier,
+        threshold: standard.threshold,
+        direction: standard.direction,
+        projectId: standard.projectId,
+        minSample: standard.minSample,
+        enabled: standard.enabled,
+      };
+      const count = Effect.map(
+        store.events({
+          projectId: projectA,
+          from: "1970-01-01T00:00:00.000Z",
+          to: "2027-01-01T00:00:00.000Z",
+        }),
+        (events) => events.length,
+      );
+
+      yield* store.set({ ...terms, threshold: 2500 });
+      assert.isFalse(yield* store.record(standard, event));
+      yield* store.set({ ...terms, enabled: false });
+      assert.isFalse(yield* store.record(standard, event));
+      yield* store.set(terms);
+      assert.isTrue(yield* store.record(standard, event));
+      assert.strictEqual(yield* count, 1);
+      yield* store.remove(standard.id);
+      assert.isFalse(yield* store.record(standard, event));
+      assert.strictEqual(yield* count, 0);
+    }),
+  ),
+);
+
 it.effect("lists the budgets that judge a project, with that project's newest event", () =>
   Effect.scoped(
     Effect.gen(function* () {
       yield* TestClock.setTime(Date.UTC(2026, 9, 12));
       const { store } = yield* fixture;
       const own = yield* store.set({ ...valid, projectId: projectB });
+      const standard = (yield* store.list({}))[1]!;
       const event = {
-        budgetId: 2,
         windowFrom: "2026-10-05T00:00:00.000Z",
         windowTo: "2026-10-12T00:00:00.000Z",
         value: 1900,
-        threshold: 1500,
         sampleSize: 30,
       };
-      yield* store.record({ ...event, projectId: projectA, kind: "breach" });
-      yield* store.record({ ...event, projectId: projectB, kind: "breach" });
-      yield* store.record({ ...event, projectId: projectB, kind: "recovery", value: 1400 });
+      yield* store.record(standard, { ...event, projectId: projectA, kind: "breach" });
+      yield* store.record(standard, { ...event, projectId: projectB, kind: "breach" });
+      yield* store.record(standard, {
+        ...event,
+        projectId: projectB,
+        kind: "recovery",
+        value: 1400,
+      });
 
       const forA = yield* store.list({ projectId: projectA });
       assert.deepEqual(
@@ -136,9 +186,9 @@ it.effect("lists the budgets that judge a project, with that project's newest ev
         ],
       );
       // Overall, a budget is in breach while any project's newest event is a breach.
-      const standard = (yield* store.list({})).find((budget) => budget.id === 2);
+      const overall = (yield* store.list({})).find((budget) => budget.id === 2);
       assert.deepEqual(
-        [standard?.state, standard?.latest.map((e) => [e.projectId, e.kind])],
+        [overall?.state, overall?.latest.map((e) => [e.projectId, e.kind])],
         [
           "breach",
           [

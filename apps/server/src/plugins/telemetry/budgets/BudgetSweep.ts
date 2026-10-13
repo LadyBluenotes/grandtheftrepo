@@ -1,15 +1,18 @@
 import type {
   ProjectId,
   RoutingTier,
+  RoutingTiers,
   TelemetryBudget,
   TelemetryMeasuresResult,
 } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
 import * as Result from "effect/Result";
 
 import * as ProjectService from "../../../project/ProjectService.ts";
 import * as Attention from "../../Attention.ts";
+import * as TierMapService from "../../routing/TierMapService.ts";
 import { unmeasured } from "../measures/index.ts";
 import type * as Telemetry from "../Telemetry.ts";
 import * as BudgetStore from "./BudgetStore.ts";
@@ -32,12 +35,16 @@ const flagText = (budget: TelemetryBudget, value: number, project: string) =>
     budget.direction === "lower_is_better" ? "over" : "under"
   } its budget of ${show(budget.threshold)} in ${project}.`;
 
-/** What a judgment of one budget in one project rests on, besides the project's rows. */
-const terms = (windowFrom: string, budget: TelemetryBudget) =>
+/**
+ * What a judgment of one budget in one project rests on, besides the project's rows: the window,
+ * the budget's terms, and the model its tier resolves to.
+ */
+const terms = (windowFrom: string, budget: TelemetryBudget, tierModel: string) =>
   [
     windowFrom,
     budget.measure,
     budget.tier,
+    tierModel,
     budget.threshold,
     budget.direction,
     budget.minSample,
@@ -49,14 +56,16 @@ const terms = (windowFrom: string, budget: TelemetryBudget) =>
  * `unavailable`, or has fewer samples than the budget's minimum, is not judged. The budget's state
  * in a project is its newest event there: a breach on the wrong side of the threshold appends one
  * `breach` event and raises one `budget_breach` flag, and a value back inside while in breach
- * clears the flag and appends one `recovery`; anything else writes nothing. A breach whose flag
- * is not open, as after a budget is enabled again, raises it again without an event, and the flag
- * of a budget that was removed or disabled, or of a project that is gone, is cleared.
+ * appends one `recovery` and clears the flag; anything else writes nothing. An event is written
+ * only while the budget still has the terms it was judged on, so one removed or edited during the
+ * measuring gets none. A breach whose flag is not open, as after a budget is enabled again, raises
+ * it again without an event, and the flag of a budget that was removed or disabled, or of a
+ * project that is gone, is cleared.
  *
- * The window's rows are all in the past, so a budget is measured in a project once per window and
- * set of terms; one whose measures could not be read, or were not measured yet, as while telemetry
- * replays the event log or the routing plugin is off, is asked again on the next tick. A dry run
- * counts and writes nothing.
+ * The window's rows are all in the past, so a budget is measured in a project once per window,
+ * set of terms and model its tier resolves to; one whose measures could not be read, or were not
+ * measured yet, as while telemetry replays the event log or the routing plugin is off, is asked
+ * again on the next tick. A dry run counts, writes nothing and remembers nothing.
  */
 export const sweep = (measures: Telemetry.Telemetry["Service"]["measures"]) =>
   Effect.gen(function* () {
@@ -81,6 +90,26 @@ export const sweep = (measures: Telemetry.Telemetry["Service"]["measures"]) =>
             (flag) => flag.threadId,
           ),
         );
+
+        // Read where the sweep runs: the routing plugin is a sibling, absent while it is off.
+        const tierMap = yield* Effect.serviceOption(TierMapService.TierMapService);
+        const tiersByProject = new Map<ProjectId, RoutingTiers | undefined>();
+        /** What the tier resolves to in the project now, for the memo; the measures read it too. */
+        const tierModel = (projectId: ProjectId, tier: RoutingTier) =>
+          Effect.gen(function* () {
+            if (Option.isNone(tierMap)) return "routing off";
+            if (!tiersByProject.has(projectId)) {
+              const read = yield* Effect.result(tierMap.value.get({ projectId }));
+              tiersByProject.set(projectId, Result.isSuccess(read) ? read.success : undefined);
+            }
+            const resolved = tiersByProject.get(projectId)?.[tier].resolved;
+            // Unread tiers fail the measures as well, so this never reaches the memo.
+            if (resolved === undefined) return "unread";
+            return resolved === null
+              ? "no model"
+              : `${resolved.providerInstanceId}/${resolved.model}`;
+          });
+
         // One request per project and tier, shared by every budget on that tier.
         const results = new Map<string, TelemetryMeasuresResult | undefined>();
         const measured = (projectId: ProjectId, tier: RoutingTier) =>
@@ -106,12 +135,17 @@ export const sweep = (measures: Telemetry.Telemetry["Service"]["measures"]) =>
         let acted = 0;
         let flags = 0;
         for (const budget of budgets) {
+          // A project the server no longer lists is not judged, and its flag clears below.
           const projectIds =
-            budget.projectId === null ? shells.map((shell) => shell.id) : [budget.projectId];
+            budget.projectId === null
+              ? shells.map((shell) => shell.id)
+              : titles.has(budget.projectId)
+                ? [budget.projectId]
+                : [];
           for (const projectId of projectIds) {
             const threadId = flagKey(budget.id, projectId);
             covered.add(threadId);
-            const stamp = terms(window.from, budget);
+            const stamp = terms(window.from, budget, yield* tierModel(projectId, budget.tier));
             if (judged.get(threadId) === stamp) continue;
             const result = yield* measured(projectId, budget.tier);
             if (result === undefined) continue;
@@ -125,43 +159,49 @@ export const sweep = (measures: Telemetry.Telemetry["Service"]["measures"]) =>
               );
               const flag = { pluginId: PLUGIN_ID, threadId, kind: FLAG_KIND } as const;
               const event = {
-                budgetId: budget.id,
                 projectId,
                 windowFrom: window.from,
                 windowTo: window.to,
                 value,
-                threshold: budget.threshold,
                 sampleSize: measure.sampleSize,
               };
               if (breached && (!inBreach || !open.has(threadId))) {
-                acted += 1;
-                flags += 1;
-                if (!dryRun) {
-                  if (!inBreach) yield* store.record({ ...event, kind: "breach" });
-                  yield* attention.raise({
-                    ...flag,
-                    text: flagText(budget, value, titles.get(projectId) ?? projectId),
-                    resumeAction: RESUME_ACTION,
-                  });
+                // The flag follows the event: a budget changed meanwhile gets neither.
+                const recorded =
+                  dryRun || inBreach || (yield* store.record(budget, { ...event, kind: "breach" }));
+                if (recorded) {
+                  acted += 1;
+                  flags += 1;
+                  if (!dryRun) {
+                    yield* attention.raise({
+                      ...flag,
+                      text: flagText(budget, value, titles.get(projectId) ?? projectId),
+                      resumeAction: RESUME_ACTION,
+                    });
+                  }
                 }
               } else if (!breached && inBreach) {
-                acted += 1;
-                if (!dryRun) {
-                  // Cleared first: a failed write after it is retried as a breach to recover.
-                  yield* attention.clear(flag);
-                  yield* store.record({ ...event, kind: "recovery" });
+                const recorded =
+                  dryRun || (yield* store.record(budget, { ...event, kind: "recovery" }));
+                if (recorded) {
+                  acted += 1;
+                  if (!dryRun) yield* attention.clear(flag);
                 }
+              } else if (!breached && open.has(threadId)) {
+                // A recovery whose flag failed to clear after it was written.
+                acted += 1;
+                if (!dryRun) yield* attention.clear(flag);
               }
             }
             // Only once its writes are done: a failed one leaves the pair to the next tick.
-            judged.set(threadId, stamp);
+            if (!dryRun) judged.set(threadId, stamp);
           }
         }
-        // A budget disabled and enabled again is judged afresh, which raises its flag again.
-        for (const threadId of judged.keys()) if (!covered.has(threadId)) judged.delete(threadId);
         const stale = [...open].filter((threadId) => !covered.has(threadId));
         acted += stale.length;
         if (!dryRun) {
+          // A budget disabled and enabled again is judged afresh, which raises its flag again.
+          for (const threadId of judged.keys()) if (!covered.has(threadId)) judged.delete(threadId);
           for (const threadId of stale) {
             yield* attention.clear({ pluginId: PLUGIN_ID, threadId, kind: FLAG_KIND });
           }

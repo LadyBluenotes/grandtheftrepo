@@ -83,8 +83,8 @@ const validate = (input: TelemetryBudgetsSetInput) => {
   return { ...input, tier, direction };
 };
 
-/** One breach or recovery for the sweep to append. */
-type NewEvent = Omit<TelemetryBudgetEvent, "id" | "occurredAt">;
+/** One breach or recovery for the sweep to append; the budget supplies its id and threshold. */
+type NewEvent = Omit<TelemetryBudgetEvent, "id" | "budgetId" | "threshold" | "occurredAt">;
 
 /**
  * The plugin's budgets and the breaches and recoveries the budget sweep records. A budget's state
@@ -110,8 +110,15 @@ export class BudgetStore extends Context.Service<
     readonly events: (
       input: TelemetryBudgetEventsInput,
     ) => Effect.Effect<ReadonlyArray<TelemetryBudgetEvent>, TelemetryError>;
-    /** Appends one event, dated now. */
-    readonly record: (event: NewEvent) => Effect.Effect<void, TelemetryError>;
+    /**
+     * Appends one event for `budget`, dated now, only while the stored budget is still enabled
+     * with the same terms; answers whether it did. A budget removed or edited while the sweep
+     * measured it gets nothing.
+     */
+    readonly record: (
+      budget: TelemetryBudget,
+      event: NewEvent,
+    ) => Effect.Effect<boolean, TelemetryError>;
   }
 >()("t3/plugins/telemetry/budgets/BudgetStore") {}
 
@@ -207,15 +214,22 @@ const make = Effect.gen(function* () {
       return rows.map(toEvent);
     }).pipe(Effect.catchTags({ SqlError: io }));
 
-  const record: BudgetStore["Service"]["record"] = (event) =>
+  const record: BudgetStore["Service"]["record"] = (budget, event) =>
     Effect.gen(function* () {
       const occurredAt = DateTime.formatIso(yield* DateTime.now);
-      yield* sql`INSERT INTO budget_events
+      // One statement, so the check and the insert cannot be split by a save or a removal.
+      const inserted = yield* sql<{ readonly id: number }>`INSERT INTO budget_events
           (budget_id, project_id, kind, window_from, window_to, value, threshold, sample_size,
            occurred_at)
-        VALUES (${event.budgetId}, ${event.projectId}, ${event.kind}, ${event.windowFrom},
-          ${event.windowTo}, ${event.value}, ${event.threshold}, ${event.sampleSize},
-          ${occurredAt})`;
+        SELECT id, ${event.projectId}, ${event.kind}, ${event.windowFrom}, ${event.windowTo},
+          ${event.value}, threshold, ${event.sampleSize}, ${occurredAt}
+        FROM budgets
+        WHERE id = ${budget.id} AND enabled = 1 AND measure = ${budget.measure}
+          AND tier = ${budget.tier} AND threshold = ${budget.threshold}
+          AND direction = ${budget.direction} AND project_id IS ${budget.projectId}
+          AND min_sample = ${budget.minSample}
+        RETURNING id`;
+      return inserted.length > 0;
     }).pipe(Effect.catchTags({ SqlError: io }));
 
   return BudgetStore.of({ list, set, remove, events, record });

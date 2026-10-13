@@ -3,6 +3,7 @@ import {
   squashAtomCommandFailure,
 } from "@t3tools/client-runtime/state/runtime";
 import type { RoutingTier, TelemetryBudget } from "@t3tools/contracts";
+import { useState } from "react";
 
 import { SettingsRow } from "~/components/settings/settingsLayout";
 import { Badge } from "~/components/ui/badge";
@@ -36,24 +37,33 @@ const DIRECTION_LABEL: Record<TelemetryBudget["direction"], string> = {
 /**
  * The environment's budgets, with their state, under the telemetry plugin's row. Threshold,
  * minimum sample and enabled save as they are committed; the sweep judges the change on its next
- * tick, so the state follows then.
+ * tick, so the state follows then. A save sends the whole row, so a row takes no other edit while
+ * its save is in flight, and no row does while the list rereads after one: an edit made from the
+ * row as it was before the save would undo it.
  */
 export function Budgets() {
   const environmentId = usePrimaryEnvironmentId();
   const projects = useProjects().filter((project) => project.environmentId === environmentId);
   const budgets = useTelemetryBudgets();
   const { canWrite, save, remove } = useTelemetryBudgetCommands();
+  const [saving, setSaving] = useState<ReadonlySet<number>>(() => new Set());
+  const locked = (id: number) => !canWrite || saving.has(id) || budgets.isPending;
 
   const report = async (
+    id: number,
     title: string,
     run: () => ReturnType<typeof save> | ReturnType<typeof remove>,
   ) => {
+    setSaving((current) => new Set(current).add(id));
     const result = await run();
-    if (result._tag === "Success") {
-      budgets.refresh();
-      return;
-    }
-    if (isAtomCommandInterrupted(result)) return;
+    // The refresh starts before the row is released, so `isPending` holds it until it lands.
+    if (result._tag === "Success") budgets.refresh();
+    setSaving((current) => {
+      const next = new Set(current);
+      next.delete(id);
+      return next;
+    });
+    if (result._tag === "Success" || isAtomCommandInterrupted(result)) return;
     const failure = squashAtomCommandFailure(result);
     toastManager.add(
       stackedThreadToast({
@@ -64,7 +74,7 @@ export function Budgets() {
     );
   };
   const change = (budget: TelemetryBudget, next: Partial<TelemetryBudget>) =>
-    void report("Could not save the budget", () => save({ ...budget, ...next }));
+    void report(budget.id, "Could not save the budget", () => save({ ...budget, ...next }));
 
   return (
     <SettingsRow
@@ -105,7 +115,7 @@ export function Budgets() {
                       <NumberField
                         size="sm"
                         value={budget.threshold}
-                        disabled={!canWrite}
+                        disabled={locked(budget.id)}
                         onValueCommitted={(threshold) => {
                           if (threshold !== null && threshold !== budget.threshold) {
                             change(budget, { threshold });
@@ -126,7 +136,7 @@ export function Budgets() {
                         min={0}
                         step={1}
                         value={budget.minSample}
-                        disabled={!canWrite}
+                        disabled={locked(budget.id)}
                         onValueCommitted={(minSample) => {
                           const next =
                             minSample === null ? null : Math.max(0, Math.round(minSample));
@@ -146,7 +156,7 @@ export function Budgets() {
                       size="sm"
                       aria-label={`Enable the ${budget.tier} ${budget.measure} budget`}
                       checked={budget.enabled}
-                      disabled={!canWrite}
+                      disabled={locked(budget.id)}
                       onCheckedChange={(enabled) => change(budget, { enabled })}
                     />
                   </TableCell>
@@ -165,9 +175,11 @@ export function Budgets() {
                     <Button
                       size="xs"
                       variant="ghost-muted"
-                      disabled={!canWrite}
+                      disabled={locked(budget.id)}
                       onClick={() =>
-                        void report("Could not remove the budget", () => remove(budget.id))
+                        void report(budget.id, "Could not remove the budget", () =>
+                          remove(budget.id),
+                        )
                       }
                     >
                       Remove
