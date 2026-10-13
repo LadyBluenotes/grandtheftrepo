@@ -1,5 +1,6 @@
 import {
   OrchestratorMcpFailure,
+  PONYTAIL_RUNG_IDS,
   ReviewVerdict,
   ReviewVerdictInput,
   ReviewVerdictResult,
@@ -29,8 +30,7 @@ const shared = {
 
 const ReviewVerdictTool = Tool.make("review_verdict", {
   ...shared,
-  description:
-    "Judge one checkpoint of another thread's work as the reviewer. outcome is approve or changes_requested. changes_requested needs failureMode, the one reason the work was sent back: defect (the change is wrong), incomplete (part of the request is missing), scope_drift (it changed things nobody asked for), missing_verification (no tests or evidence it works), convention (it breaks a project convention) or unclear_spec (the request itself was ambiguous); approve takes none. checkpointId must be a ready checkpoint of threadId, and threadId cannot be your own thread. summary is for people, at most 1000 characters; nothing reads it to learn what went wrong, so put the reason in failureMode. A changes_requested verdict also records a correction. Answers with verdictId and correctionId (null on approve). Reviewing the same checkpoint again with the same payload returns the stored verdict; a different payload is refused.",
+  description: `Judge one checkpoint of another thread's work as the reviewer. outcome is approve or changes_requested. changes_requested needs failureMode, the one reason the work was sent back: defect (the change is wrong), incomplete (part of the request is missing), scope_drift (it changed things nobody asked for), missing_verification (no tests or evidence it works), convention (it breaks a project convention) or unclear_spec (the request itself was ambiguous); approve takes none. checkpointId must be a ready checkpoint of threadId, and threadId cannot be your own thread. Reviewing against the ponytail ladder, check these rungs in order: ${PONYTAIL_RUNG_IDS.join(", ")}. A failed rung is a convention verdict whose summary starts with rung:<id>, naming the earliest failing rung; when another failure mode is more severe, that one stands in place of convention. A convention summary starting with rung: must name one of those ids, else the verdict is refused. summary is for people, at most 1000 characters; nothing reads it to learn what went wrong, so put the reason in failureMode. A changes_requested verdict also records a correction. Answers with verdictId and correctionId (null on approve). Reviewing the same checkpoint again with the same payload returns the stored verdict; a different payload is refused.`,
   parameters: ReviewVerdictInput,
   success: ReviewVerdictResult,
 })
