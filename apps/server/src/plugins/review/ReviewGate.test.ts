@@ -68,20 +68,33 @@ it.effect("refuses an approval the thread moved past, before and after the sweep
   ),
 );
 
-it.effect("refuses when the newest request is the stale one", () =>
+it.effect("decides by the request still standing after a rollback, not the one made last", () =>
   Effect.scoped(
     Effect.gen(function* () {
-      const { gate, review } = yield* harness;
-      // A superseding request made before the one it replaced, as reusing a standing one leaves.
-      const [superseding] = yield* review<{ readonly id: number }>`INSERT INTO review_request
-        (thread_id, checkpoint_id, status, requested_by, requested_at)
-        VALUES (${reviewed}, ${ready}, 'open', 'user', '2026-10-01T00:00:00.000Z')
-        RETURNING id`;
-      yield* review`INSERT INTO review_request
-        (thread_id, checkpoint_id, status, requested_by, requested_at, stale_at, superseded_by)
-        VALUES (${reviewed}, ${later}, 'stale', 'user', '2026-10-02T00:00:00.000Z',
-          '2026-10-03T00:00:00.000Z', ${superseding!.id})`;
-      assert.deepEqual(yield* refusal(gate.check(reviewed)), outOfDate(later));
+      const { gate, requests, record, sweep, captureLater, rollBackLater, review } = yield* harness;
+      const first = yield* requests.request({ threadId: reviewed, requestedBy: "user" });
+      yield* captureLater;
+      yield* requests.request({ threadId: reviewed, requestedBy: "user" });
+      // Back to `ready` before the sweep ran: the first request still stands there.
+      yield* rollBackLater;
+      yield* sweep({ dryRun: false });
+      assert.deepEqual(
+        yield* review<{
+          readonly checkpoint_id: string;
+          readonly status: string;
+          readonly superseded_by: number | null;
+        }>`SELECT checkpoint_id, status, superseded_by FROM review_request ORDER BY id`,
+        [
+          { checkpoint_id: ready, status: "open", superseded_by: null },
+          { checkpoint_id: later, status: "stale", superseded_by: first.id },
+        ],
+      );
+      assert.deepEqual(yield* refusal(gate.check(reviewed)), {
+        code: "gated",
+        message: "A review was requested and has no verdict yet.",
+      });
+      yield* record(reviewer, approve);
+      yield* gate.check(reviewed);
     }),
   ),
 );

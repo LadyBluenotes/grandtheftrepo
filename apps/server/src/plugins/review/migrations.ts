@@ -35,7 +35,8 @@ const projectWindow: PluginMigration[2] = Effect.gen(function* () {
 
 // A request names the checkpoint it was made at. `stale` is final: `stale_at` and `superseded_by`
 // are set together, when the invalidation sweep opens the request that replaces it. The partial
-// index is the sweep's batch, the threads with a request still standing.
+// index is the sweep's batch, the threads with a request still standing; `superseded_by` finds
+// the stale requests one names, for the flag that follows them.
 const requests: PluginMigration[2] = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
   yield* sql`CREATE TABLE review_request (
@@ -52,6 +53,7 @@ const requests: PluginMigration[2] = Effect.gen(function* () {
   yield* sql`CREATE INDEX review_request_thread ON review_request (thread_id, requested_at)`;
   yield* sql`CREATE INDEX review_request_standing ON review_request (thread_id)
     WHERE status IN ('open', 'answered')`;
+  yield* sql`CREATE INDEX review_request_superseded ON review_request (superseded_by)`;
 });
 
 export const migrations = [

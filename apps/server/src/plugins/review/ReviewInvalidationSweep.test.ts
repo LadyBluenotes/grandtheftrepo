@@ -176,6 +176,30 @@ it.effect("stale is permanent: after a rollback the thread gets a new request in
   ),
 );
 
+it.effect("repairs a flag write lost between the two databases", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const { requests, sweep, captureLater, review, host, flags } = yield* fixture;
+      yield* requests.request({ threadId: reviewed, requestedBy: "user" });
+      yield* captureLater;
+      yield* sweep({ dryRun: false });
+
+      // The raise was lost: the rows still call for the flag, so the next tick raises it.
+      yield* host`DELETE FROM attention`;
+      assert.deepEqual(yield* sweep({ dryRun: false }), { examined: 1, acted: 1, flags: 1 });
+      assert.deepEqual(
+        (yield* flags).map((flag) => [flag.text, flag.cleared_at]),
+        [[`Review of checkpoint ${ready} is out of date`, null]],
+      );
+
+      // The clear was lost: the superseding request was answered, so the next tick clears it.
+      yield* review`UPDATE review_request SET status = 'answered' WHERE status = 'open'`;
+      assert.deepEqual(yield* sweep({ dryRun: false }), { examined: 1, acted: 1, flags: 0 });
+      assert.isString((yield* flags)[0]?.cleared_at);
+    }),
+  ),
+);
+
 it.effect("a dry run counts what it would do and writes nothing", () =>
   Effect.scoped(
     Effect.gen(function* () {

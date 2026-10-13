@@ -14,9 +14,10 @@ export class ReviewGate extends Context.Service<
   {
     /**
      * Whether review lets the thread's work complete; a ticket's completion asks it first. A thread
-     * nobody asked to review passes. Otherwise its newest request decides, and the refusal is a
-     * `gated` error saying why: the request is stale or names a checkpoint the thread has moved
-     * past, it has no verdict yet, or the newest verdict on its checkpoint asked for changes.
+     * nobody asked to review passes. Otherwise its newest open or answered request decides, or its
+     * newest stale one when none stands, and the refusal is a `gated` error saying why: the request
+     * is stale or names a checkpoint the thread has moved past, it has no verdict yet, or the
+     * newest verdict on its checkpoint asked for changes.
      */
     readonly check: (threadId: ThreadId) => Effect.Effect<void, ReviewVerdictError>;
   }
@@ -42,21 +43,24 @@ const make = Effect.gen(function* () {
 
   const check: ReviewGate["Service"]["check"] = (threadId) =>
     Effect.gen(function* () {
-      const [newest] = yield* sql<RequestRow>`SELECT * FROM review_request
-        WHERE thread_id = ${threadId} ORDER BY requested_at DESC, id DESC LIMIT 1`;
-      if (newest === undefined) return;
-      if (newest.status === "stale") return yield* outOfDate(newest.checkpoint_id);
+      // The standing request decides, not the row made last: a sweep can supersede a newer
+      // request with an older one still standing at the thread's latest checkpoint.
+      const [deciding] = yield* sql<RequestRow>`SELECT * FROM review_request
+        WHERE thread_id = ${threadId}
+        ORDER BY status = 'stale', requested_at DESC, id DESC LIMIT 1`;
+      if (deciding === undefined) return;
+      if (deciding.status === "stale") return yield* outOfDate(deciding.checkpoint_id);
       // The sweep marks a request stale on its next tick; until then the thread itself says so.
       const latest = yield* latestCheckpoint(threads, threadId).pipe(Effect.catch(io));
-      if (latest !== null && latest !== undefined && latest.id !== newest.checkpoint_id) {
-        return yield* outOfDate(newest.checkpoint_id);
+      if (latest !== null && latest !== undefined && latest.id !== deciding.checkpoint_id) {
+        return yield* outOfDate(deciding.checkpoint_id);
       }
-      if (newest.status === "open") {
+      if (deciding.status === "open") {
         return yield* refuse("A review was requested and has no verdict yet.");
       }
       const [verdict] = yield* sql<{ readonly outcome: ReviewOutcome }>`
         SELECT outcome FROM review_verdicts
-        WHERE reviewed_thread_id = ${threadId} AND checkpoint_id = ${newest.checkpoint_id}
+        WHERE reviewed_thread_id = ${threadId} AND checkpoint_id = ${deciding.checkpoint_id}
           AND invalidated_at IS NULL
         ORDER BY created_at DESC, id DESC LIMIT 1`;
       if (verdict?.outcome === "changes_requested") {

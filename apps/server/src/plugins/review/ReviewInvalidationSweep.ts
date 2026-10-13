@@ -23,10 +23,11 @@ const flagText = (checkpointId: string) => `Review of checkpoint ${checkpointId}
  * superseded by the request standing at the latest checkpoint, opened here when there is none.
  * The thread's verdicts on the superseded checkpoints are marked invalidated with them, all in one
  * transaction. A thread whose superseding request waits for a verdict keeps one `stale_review`
- * flag naming the newest stale checkpoint; the flag clears once that request is answered. Flags
- * are reconciled against the rows every tick, so a write lost between the two databases is
- * repaired by the next. On state it already reconciled it writes nothing. A dry run counts what
- * it would do and writes nothing.
+ * flag naming the newest stale checkpoint; the flag clears once that request is answered. Each
+ * tick reconciles the flags of its batch and of every thread with a flag open against the rows,
+ * so a write lost between the two databases is repaired by the time the thread's batch comes
+ * round. On state it already reconciled it writes nothing. A dry run counts what it would do and
+ * writes nothing.
  */
 export const sweep = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
@@ -35,20 +36,23 @@ export const sweep = Effect.gen(function* () {
   // The thread id the next batch starts after; empty starts from the first.
   const cursor = yield* Ref.make("");
 
+  /**
+   * The flag text a thread's rows call for: the newest stale request one of its open requests
+   * superseded, or undefined when no superseding request waits.
+   */
+  const flagFor = (threadId: string) =>
+    Effect.map(
+      sql<{ readonly checkpoint_id: string }>`SELECT checkpoint_id FROM review_request
+        WHERE superseded_by IN (
+          SELECT id FROM review_request WHERE thread_id = ${threadId} AND status = 'open'
+        )
+        ORDER BY requested_at DESC, id DESC LIMIT 1`,
+      ([row]) => (row === undefined ? undefined : flagText(row.checkpoint_id)),
+    );
+
   const run = Effect.fn("ReviewInvalidationSweep.run")(function* (input: {
     readonly dryRun: boolean;
   }) {
-    // Each thread whose superseding request still waits, to the flag text it should carry.
-    const wanted = new Map<string, string>();
-    const waiting = yield* sql<{ readonly thread_id: string; readonly checkpoint_id: string }>`
-      SELECT stale.thread_id, stale.checkpoint_id
-      FROM review_request AS superseding
-      JOIN review_request AS stale
-        ON stale.thread_id = superseding.thread_id AND stale.superseded_by = superseding.id
-      WHERE superseding.status = 'open'
-      ORDER BY stale.requested_at, stale.id`;
-    for (const row of waiting) wanted.set(row.thread_id, flagText(row.checkpoint_id));
-
     const after = yield* Ref.get(cursor);
     const batch = yield* sql<{ readonly thread_id: ThreadId }>`
       SELECT DISTINCT thread_id FROM review_request
@@ -58,6 +62,8 @@ export const sweep = Effect.gen(function* () {
 
     const at = DateTime.formatIso(yield* DateTime.now);
     let superseded = 0;
+    // The flag each changed thread would carry, for a dry run, which writes no row to read it from.
+    const planned = new Map<string, string | undefined>();
     for (const { thread_id: threadId } of batch) {
       const latest = yield* latestCheckpoint(threads, threadId).pipe(
         Effect.catch((cause) =>
@@ -101,35 +107,36 @@ export const sweep = Effect.gen(function* () {
       );
       if (outcome === undefined) continue;
       superseded += outcome.count;
-      if (outcome.status === "open") wanted.set(threadId, flagText(outcome.checkpointId));
-      else wanted.delete(threadId);
+      planned.set(threadId, outcome.status === "open" ? flagText(outcome.checkpointId) : undefined);
     }
 
-    const open = yield* attention.listOpen({ pluginId: PLUGIN_ID, kind: FLAG_KIND });
-    const gone = open.filter((flag) => !wanted.has(flag.threadId));
-    const changed = [...wanted].filter(
-      ([threadId, text]) => open.find((flag) => flag.threadId === threadId)?.text !== text,
+    // Flags are reconciled for this batch's threads and every thread with an open flag, so a tick
+    // reads the flags still standing, never the request history.
+    const open = new Map(
+      (yield* attention.listOpen({ pluginId: PLUGIN_ID, kind: FLAG_KIND })).map((flag) => [
+        flag.threadId,
+        flag.text,
+      ]),
     );
-    if (!input.dryRun) {
-      for (const { threadId } of gone) {
-        yield* attention.clear({ pluginId: PLUGIN_ID, threadId, kind: FLAG_KIND });
-      }
-      for (const [threadId, text] of changed) {
-        yield* attention.raise({
-          pluginId: PLUGIN_ID,
-          threadId,
-          kind: FLAG_KIND,
-          text,
-          resumeAction: RESUME_ACTION,
-        });
-      }
+    let flags = 0;
+    let changes = 0;
+    for (const threadId of new Set<string>([
+      ...batch.map((row) => row.thread_id),
+      ...open.keys(),
+    ])) {
+      const text =
+        input.dryRun && planned.has(threadId) ? planned.get(threadId) : yield* flagFor(threadId);
+      if (text !== undefined) flags += 1;
+      if (text === open.get(threadId)) continue;
+      changes += 1;
+      if (input.dryRun) continue;
+      const key = { pluginId: PLUGIN_ID, threadId, kind: FLAG_KIND } as const;
+      yield* text === undefined
+        ? attention.clear(key)
+        : attention.raise({ ...key, text, resumeAction: RESUME_ACTION });
     }
 
-    return {
-      examined: batch.length,
-      acted: superseded + gone.length + changed.length,
-      flags: wanted.size,
-    };
+    return { examined: batch.length, acted: superseded + changes, flags };
   });
 
   return { plugin: PLUGIN_ID, name: "invalidation", run };
