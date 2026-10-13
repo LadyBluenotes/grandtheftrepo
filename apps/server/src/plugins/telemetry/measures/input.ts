@@ -1,8 +1,9 @@
-import type { LearningCorrection, TelemetryMeasure } from "@t3tools/contracts";
+import type { LearningCorrection, ReviewVerdict, TelemetryMeasure } from "@t3tools/contracts";
 import { classifyToolActivity } from "@t3tools/shared/toolActivity";
 import * as DateTime from "effect/DateTime";
 
 import type { RateTable } from "../../../usage/usagePricing.ts";
+import type { ItemDelivery } from "../../learning/items/ItemStore.ts";
 import type { FieldPath } from "../fields.ts";
 
 /** A `telemetry_threads` row. Instants are ISO strings from `DateTime.formatIso`, so they sort. */
@@ -77,6 +78,16 @@ export interface MeasureInput {
   readonly turnUsage: ReadonlyArray<TurnUsageRow>;
   /** Undefined while the learning plugin is not running. */
   readonly corrections: ReadonlyArray<LearningCorrection> | undefined;
+  /**
+   * Each failure mode the project handed over, with when, whatever its item's state now.
+   * Undefined while the learning plugin is not running.
+   */
+  readonly deliveries: ReadonlyArray<ItemDelivery> | undefined;
+  /**
+   * Every verdict the project has had before `to`, not only the window's: a thread's first
+   * verdict can predate the window. Undefined while the review plugin is not running.
+   */
+  readonly verdicts: ReadonlyArray<ReviewVerdict> | undefined;
   readonly pricing: Pricing;
 }
 

@@ -5,11 +5,14 @@ import type {
   OrchestrationV2Run,
   OrchestrationV2StoredEvent,
   OrchestrationV2TurnItem,
+  ReviewVerdict,
 } from "@t3tools/contracts";
 import { visibleThreadPullRequests } from "@t3tools/shared/threadPullRequests";
 import * as DateTime from "effect/DateTime";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
+
+import type { ItemDelivery } from "../learning/items/ItemStore.ts";
 
 /*
  * Every value the reactor stores comes out of an event through one of these, keyed by the path a
@@ -120,6 +123,27 @@ export const pinnedFields = (event: Pick<OrchestrationV2DomainEvent, "occurredAt
 /** A correction as the learning plugin lists it. */
 export const correctionFields = (correction: LearningCorrection) => ({
   "learning.correction.createdAt": correction.createdAt,
+  /** Set only when a reviewer or person declared the failure mode. */
+  "learning.correction.declaredMode": correction.declaredMode,
+});
+
+/** A verdict as the review plugin lists it. */
+export const verdictFields = (verdict: ReviewVerdict) => ({
+  "review.verdict.id": verdict.id,
+  "review.verdict.reviewedThreadId": verdict.reviewedThreadId,
+  "review.verdict.outcome": verdict.outcome,
+  "review.verdict.createdAt": verdict.createdAt,
+});
+
+/**
+ * A failure mode's handover as `ItemStore.deliveredAt` lists it: the earliest delivered
+ * promotion's `updatedAt`, which delivery sets and nothing changes after. It is read from the
+ * promotion records, not the item, whose `updatedAt` moves with every later piece of evidence and
+ * whose state with a person's later choice.
+ */
+export const deliveredFields = (delivery: ItemDelivery) => ({
+  "learning.promotion.failureMode": delivery.failureMode,
+  "learning.promotion.updatedAt": delivery.deliveredAt,
 });
 
 /** A path a measure may cite in `provenance`. */
@@ -130,4 +154,6 @@ export type FieldPath =
   | keyof ReturnType<typeof threadFields>
   | keyof ReturnType<typeof settledFields>
   | keyof ReturnType<typeof pinnedFields>
-  | keyof ReturnType<typeof correctionFields>;
+  | keyof ReturnType<typeof correctionFields>
+  | keyof ReturnType<typeof verdictFields>
+  | keyof ReturnType<typeof deliveredFields>;

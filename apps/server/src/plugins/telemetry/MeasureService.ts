@@ -18,6 +18,8 @@ import {
   type RateTable,
 } from "../../usage/usagePricing.ts";
 import * as CorrectionStore from "../learning/CorrectionStore.ts";
+import * as ItemStore from "../learning/items/ItemStore.ts";
+import * as VerdictStore from "../review/VerdictStore.ts";
 import { computeMeasures, unavailableMeasures } from "./measures/index.ts";
 import type { RunRow, ThreadRow, ToolCallRow, TurnUsageRow } from "./measures/input.ts";
 
@@ -28,6 +30,8 @@ const CATCH_UP_WAIT = Duration.seconds(3);
 const decodeRatesFile = Schema.decodeUnknownEffect(
   Schema.fromJsonString(Schema.Struct({ document: Schema.Unknown })),
 );
+/** Where verdicts are read from: a thread's first verdict can predate the window. */
+const EPOCH = DateTime.formatIso(DateTime.makeUnsafe(0));
 
 const failWith =
   (message: string) =>
@@ -106,10 +110,19 @@ export const make = Effect.fn("MeasureService.make")(function* (
           u.output_tokens
         FROM telemetry_turn_usage u JOIN telemetry_threads t USING (thread_id)
         WHERE t.project_id = ${projectId}`;
-      // Read where the call runs: the learning plugin's store is a sibling, absent while it is off.
+      // Read where the call runs: the learning and review plugins' stores are siblings, absent
+      // while their plugin is off.
       const store = yield* Effect.serviceOption(CorrectionStore.CorrectionStore);
       const corrections = Option.isSome(store)
         ? yield* store.value.list({ projectId, ...window })
+        : undefined;
+      const items = yield* Effect.serviceOption(ItemStore.ItemStore);
+      const deliveries = Option.isSome(items)
+        ? yield* items.value.deliveredAt(projectId)
+        : undefined;
+      const verdictStore = yield* Effect.serviceOption(VerdictStore.VerdictStore);
+      const verdicts = Option.isSome(verdictStore)
+        ? yield* verdictStore.value.listWindow({ projectId, from: EPOCH, to: window.to })
         : undefined;
       const current = yield* settings.getSettings;
       return computeMeasures({
@@ -119,6 +132,8 @@ export const make = Effect.fn("MeasureService.make")(function* (
         toolCalls,
         turnUsage,
         corrections,
+        deliveries,
+        verdicts,
         pricing: {
           rates: yield* rates,
           overrides: createOverrideRateTable(current.usagePriceOverrides),
@@ -128,7 +143,8 @@ export const make = Effect.fn("MeasureService.make")(function* (
     }).pipe(
       Effect.catchTags({
         SqlError: failWith("The telemetry database could not be read."),
-        LearningError: failWith("The learning plugin's corrections could not be read."),
+        LearningError: failWith("The learning plugin's corrections or items could not be read."),
+        ReviewVerdictError: failWith("The review plugin's verdicts could not be read."),
         ServerSettingsError: failWith(
           "Server settings, which hold custom model prices, could not be read.",
         ),

@@ -217,6 +217,85 @@ const seed = (sql: SqlClient.SqlClient) =>
         ('item:2', 'run:1', 'thread:1', 2, 'dynamic_tool', 'Read', 'src/a.ts', 'completed', 1)`;
   });
 
+/**
+ * The review plugin's rows for the window. Four threads count: thread:b was sent back before it
+ * was approved, so three of the four were approved the first time. thread:d was first reviewed
+ * before the window, so its approval inside it is not a first review.
+ */
+const seedReview = (sql: SqlClient.SqlClient) =>
+  Effect.gen(function* () {
+    const give = (id: string, thread: string, outcome: string, createdAt: string) =>
+      sql`INSERT INTO review_verdicts
+          (id, project_id, reviewed_thread_id, reviewer_thread_id, checkpoint_id, outcome,
+           failure_mode, summary, created_at)
+        VALUES (${id}, ${measuresInput.projectId}, ${thread}, 'thread:reviewer',
+          ${`checkpoint:${id}`}, ${outcome}, ${outcome === "approve" ? null : "defect"},
+          'Reviewed.', ${createdAt})`;
+    yield* give("1", "thread:a", "approve", "2026-10-02T00:00:00.000Z");
+    yield* give("2", "thread:b", "changes_requested", "2026-10-03T00:00:00.000Z");
+    yield* give("3", "thread:b", "approve", "2026-10-04T00:00:00.000Z");
+    yield* give("4", "thread:c", "approve", "2026-10-05T00:00:00.000Z");
+    yield* give("5", "thread:d", "changes_requested", "2026-09-30T00:00:00.000Z");
+    yield* give("6", "thread:d", "approve", "2026-10-06T00:00:00.000Z");
+    yield* give("7", "thread:e", "approve", "2026-10-07T00:00:00.000Z");
+  });
+
+/**
+ * The learning plugin's rows for the window. The `defect` item was handed over on 10-04, then a
+ * person closed it, and a later piece of evidence moved its own `updated_at` to 10-09, so only
+ * the promotion says when, and a closed item still counts as known.
+ * Of the six corrections with a declared mode in the window, two are `defect` after 10-04.
+ */
+const seedLearning = (sql: SqlClient.SqlClient) =>
+  Effect.gen(function* () {
+    const { projectId } = measuresInput;
+    const item = (id: number, project: string, mode: string, state: string, updatedAt: string) =>
+      sql`INSERT INTO learning_items
+          (id, project_id, failure_mode, occurrences, state, owner_kind, disposition_by, reason,
+           created_at, updated_at)
+        VALUES (${id}, ${project}, ${mode}, 2, ${state}, 'prompt', 'rule', 'Routed by rule.',
+          '2026-10-01T00:00:00.000Z', ${updatedAt})`;
+    yield* item(1, projectId, "defect", "closed", "2026-10-09T00:00:00.000Z");
+    yield* item(2, projectId, "incomplete", "open", "2026-10-09T00:00:00.000Z");
+    // Another project's promoted item for a mode this project has not handed over.
+    yield* item(3, "project:elsewhere", "convention", "promoted", "2026-10-02T00:00:00.000Z");
+    yield* sql`INSERT INTO learning_promotions
+        (id, item_id, project_id, failure_mode, owner_kind, state, attempts, created_at, updated_at)
+      VALUES (1, 1, ${projectId}, 'defect', 'prompt', 'delivered', 0, '2026-10-02T00:00:00.000Z',
+        '2026-10-04T00:00:00.000Z'),
+        (2, 3, 'project:elsewhere', 'convention', 'prompt', 'delivered', 0,
+        '2026-10-02T00:00:00.000Z', '2026-10-02T00:00:00.000Z')`;
+
+    const give = (id: number, mode: string | null, createdAt: string) =>
+      sql`INSERT INTO corrections
+          (id, project_id, thread_id, failure_kind, cause_class, declared_mode, description,
+           source_event_ids, created_at, updated_at)
+        VALUES (${id}, ${projectId}, 'thread:a', 'review_verdict', 'unclassified', ${mode},
+          'Wrong.', '[]', ${createdAt}, ${createdAt})`;
+    yield* give(1, "defect", "2026-10-03T00:00:00.000Z");
+    yield* give(2, "defect", "2026-10-05T00:00:00.000Z");
+    // At the moment of the promotion, which is not before it.
+    yield* give(3, "defect", "2026-10-04T00:00:00.000Z");
+    yield* give(4, "incomplete", "2026-10-06T00:00:00.000Z");
+    yield* give(5, "defect", "2026-10-08T00:00:00.000Z");
+    yield* give(6, null, "2026-10-06T00:00:00.000Z");
+    // At the window's end, which the window excludes and the learning plugin lists.
+    yield* give(7, "defect", measuresInput.to);
+    yield* give(8, "convention", "2026-10-07T00:00:00.000Z");
+  });
+
+/** `telemetry.measures` through the gateway and through the MCP tool, which must agree. */
+const answers = Effect.gen(function* () {
+  const fromGateway = yield* measures().pipe(Effect.flatMap(decodeMeasures));
+  const call = yield* mcp;
+  const called = yield* call("tools/call", {
+    name: "telemetry_measures",
+    arguments: measuresInput,
+  });
+  assert.deepEqual(decodeMeasuresJson(called.content?.[0]?.text ?? ""), fromGateway);
+  return new Map(fromGateway.map((measure) => [measure.measure, measure]));
+});
+
 it.effect(
   "enabled: its file is migrated, the reactor and sweep run, and the tool and RPC agree",
   () =>
@@ -283,6 +362,63 @@ it.effect(
         }).pipe(Effect.provide(layerHost));
       }),
     ).pipe(Effect.provide(layerTest)),
+);
+
+it.effect("review and learning on: both review measures answer ok on a fixture", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      yield* writeStateFile("plugins.json", onlyPlugins(["telemetry", "learning", "review"]));
+      yield* Effect.gen(function* () {
+        const host = yield* PluginHost.PluginHost;
+        yield* seedReview(host.databases.get("review")!);
+        yield* seedLearning(host.databases.get("learning")!);
+        const byName = yield* answers;
+        const pick = (name: string) => {
+          const measure = byName.get(name);
+          return [measure?.state, measure?.value, measure?.sampleSize, measure?.missingReason];
+        };
+        assert.deepEqual(pick("first_review_acceptance"), ["ok", 0.75, 4, null]);
+        assert.deepEqual(pick("known_error_recurrence"), ["ok", 2 / 6, 6, null]);
+      }).pipe(Effect.provide(layerHost));
+    }),
+  ).pipe(Effect.provide(layerTest)),
+);
+
+it.effect("review off: its measure names the review plugin, and learning's still answers", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      yield* writeStateFile("plugins.json", onlyPlugins(["telemetry", "learning"]));
+      yield* Effect.gen(function* () {
+        const host = yield* PluginHost.PluginHost;
+        yield* seedLearning(host.databases.get("learning")!);
+        const byName = yield* answers;
+        const review = byName.get("first_review_acceptance");
+        assert.deepEqual(
+          [review?.state, review?.value, review?.sampleSize],
+          ["unavailable", null, 0],
+        );
+        assert.match(review?.missingReason ?? "", /review plugin/);
+        assert.strictEqual(byName.get("known_error_recurrence")?.state, "ok");
+      }).pipe(Effect.provide(layerHost));
+    }),
+  ).pipe(Effect.provide(layerTest)),
+);
+
+it.effect("learning off: its measure names the learning plugin", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      yield* writeStateFile("plugins.json", onlyPlugins(["telemetry"]));
+      yield* Effect.gen(function* () {
+        const byName = yield* answers;
+        const learning = byName.get("known_error_recurrence");
+        assert.deepEqual(
+          [learning?.state, learning?.value, learning?.sampleSize],
+          ["unavailable", null, 0],
+        );
+        assert.match(learning?.missingReason ?? "", /learning plugin/);
+      }).pipe(Effect.provide(layerHost));
+    }),
+  ).pipe(Effect.provide(layerTest)),
 );
 
 it.effect("a dry run runs the heartbeat the same way", () =>

@@ -1,7 +1,9 @@
 import {
+  CheckpointId,
   CommandId,
   EventId,
   type LearningCorrection,
+  type LearningPromotion,
   MessageId,
   NodeId,
   type OrchestrationV2AppThread,
@@ -13,11 +15,14 @@ import {
   ProviderInstanceId,
   ProviderThreadId,
   ProviderTurnId,
+  type ReviewVerdict,
   RunId,
   ThreadId,
   TurnItemId,
 } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
+
+import type { ItemDelivery } from "../learning/items/ItemStore.ts";
 
 /** Events for the reactor and provenance tests, each with every field the measures read set. */
 export const at = DateTime.makeUnsafe("2026-10-02T12:00:00.000Z");
@@ -227,7 +232,7 @@ export const correction: LearningCorrection = {
   threadId,
   failureKind: "manual",
   causeClass: "unclassified",
-  declaredMode: null,
+  declaredMode: "defect",
   description: "Wrong file.",
   sourceEventIds: [],
   sourceKey: null,
@@ -235,4 +240,40 @@ export const correction: LearningCorrection = {
   classificationReason: null,
   createdAt: "2026-10-02T12:00:00.000Z",
   updatedAt: "2026-10-02T12:00:00.000Z",
+};
+
+/** A reviewer's approval of the fixture thread. */
+export const verdict: ReviewVerdict = {
+  id: "thread%3Areviewer:checkpoint%3Atelemetry",
+  projectId,
+  reviewedThreadId: threadId,
+  reviewerThreadId: ThreadId.make("thread:reviewer"),
+  checkpointId: CheckpointId.make("checkpoint:telemetry"),
+  outcome: "approve",
+  failureMode: null,
+  summary: "Looks right.",
+  correctionId: null,
+  createdAt: "2026-10-02T12:00:00.000Z",
+  invalidatedAt: null,
+};
+
+/** A promotion delivered after its record was opened. */
+export const promotion: LearningPromotion = {
+  id: 1,
+  itemId: 1,
+  projectId,
+  failureMode: "defect",
+  ownerKind: "prompt",
+  state: "delivered",
+  attempts: 0,
+  nextAttemptAt: null,
+  lastError: null,
+  createdAt: "2026-10-01T12:00:00.000Z",
+  updatedAt: "2026-10-02T12:00:00.000Z",
+};
+
+/** The handover `ItemStore.deliveredAt` lists for that promotion. */
+export const delivery: ItemDelivery = {
+  failureMode: promotion.failureMode,
+  deliveredAt: promotion.updatedAt,
 };

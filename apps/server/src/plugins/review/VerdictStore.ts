@@ -86,6 +86,17 @@ export class VerdictStore extends Context.Service<
     readonly list: (
       input: ReviewVerdictsInput,
     ) => Effect.Effect<ReadonlyArray<ReviewVerdict>, ReviewVerdictError>;
+    /**
+     * A project's verdicts given in `[from, to)`, oldest first, ties by id. One query for every
+     * thread of a window, which `list` would take one call per thread to answer. The instants are
+     * the normalized ISO strings the rows hold, so they compare as text. Internal: it has no
+     * gateway method.
+     */
+    readonly listWindow: (input: {
+      readonly projectId: ProjectId;
+      readonly from: string;
+      readonly to: string;
+    }) => Effect.Effect<ReadonlyArray<ReviewVerdict>, ReviewVerdictError>;
   }
 >()("t3/plugins/review/VerdictStore") {}
 
@@ -215,7 +226,15 @@ const make = Effect.gen(function* () {
       Effect.catchTags({ SqlError: io }),
     );
 
-  return VerdictStore.of({ record, list });
+  const listWindow: VerdictStore["Service"]["listWindow"] = ({ projectId, from, to }) =>
+    sql<Row>`SELECT * FROM review_verdicts
+      WHERE project_id = ${projectId} AND created_at >= ${from} AND created_at < ${to}
+      ORDER BY created_at, id`.pipe(
+      Effect.map((rows) => rows.map(toVerdict)),
+      Effect.catchTags({ SqlError: io }),
+    );
+
+  return VerdictStore.of({ record, list, listWindow });
 });
 
 export const layer = Layer.effect(VerdictStore, make);

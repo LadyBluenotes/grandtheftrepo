@@ -25,6 +25,15 @@ const verdicts: PluginMigration[2] = Effect.gen(function* () {
   yield* sql`CREATE INDEX review_verdicts_reviewed ON review_verdicts (reviewed_thread_id, created_at)`;
 });
 
+// Telemetry reads a project's verdicts by time, oldest first and ties by id, so the index serves
+// the range and the order without a sort.
+const projectWindow: PluginMigration[2] = Effect.gen(function* () {
+  const sql = yield* SqlClient.SqlClient;
+  yield* sql`CREATE INDEX review_verdicts_project_created
+    ON review_verdicts (project_id, created_at, id)`;
+});
+
 export const migrations = [
   [1, "Verdicts", verdicts],
+  [2, "ProjectWindow", projectWindow],
 ] as const satisfies ReadonlyArray<PluginMigration>;
