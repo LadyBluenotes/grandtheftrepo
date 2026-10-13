@@ -192,7 +192,17 @@ them half-evaluated. The host hands `toolkitRegistration` to `ServerPlugin.mcp` 
   day, and opens or strengthens an `efficiency_regression:<measure>` item, with no owner kind, for
   each measure worse by its threshold in `regressions/thresholds.ts`, except a volume measure
   such as `tool_output_total`, which that file lists as not compared; with telemetry off it does
-  nothing. Server:
+  nothing. A fourth sweep, `outcomes`, checks each bet once its 28 days after delivery are
+  complete: it counts the project's corrections declaring the item's mode in the 28 days before
+  and after the promotion's `updated_at`, writes one `promotion_outcome` row, and raises a
+  `promotion_ineffective` flag when three or more recurred after and more than half as many as
+  before, or a `promotion_settled` flag when none did, keyed
+  `promotion:<projectId>:<promotionId>` (the rule is `judge` in `compare.ts`). Below three before
+  there is nothing to compare. A verdict is permanent, so the sweep is built with the learning
+  reactor's `drain` and judges nothing, counting what it held back, until the reactor holds every
+  committed event and `host_reactor_failure` is empty. A person setting the item's disposition
+  after the delivery answers the flag, so none is raised, and the next tick clears one that is
+  open; the sweep never closes or reroutes an item, and never judges `local_only`. Server:
   `apps/server/src/plugins/learning/`. Contracts:
   `packages/contracts/src/plugins/learning.ts`. Web: `apps/web/src/plugins/learning/`, the Learning screen at `/plugins/learning` with the items, corrections and reviews of a project.
 - **policy**: reviewed working rules per project (`*` is the whole environment), versioned in the

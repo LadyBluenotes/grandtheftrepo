@@ -64,6 +64,7 @@ it.effect(
             { plugin: "learning", name: "classify" },
             { plugin: "learning", name: "promote" },
             { plugin: "learning", name: "regressions" },
+            { plugin: "learning", name: "outcomes" },
           ]);
           const sql = host.databases.get("learning")!;
           yield* CorrectionStore.insert({
@@ -84,6 +85,8 @@ it.effect(
               ["promote", "ok", 1, 1, 0],
               // Telemetry is off, so there is nothing to compare.
               ["regressions", "ok", 0, 0, 0],
+              // The one promotion is still pending, so nothing is delivered to judge.
+              ["outcomes", "ok", 0, 0, 0],
             ],
           );
           const items = yield* PluginHost.handlers[PLUGIN_GATEWAY_WS_METHODS.read]({

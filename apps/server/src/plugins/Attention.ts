@@ -22,6 +22,8 @@ const AttentionKind = Schema.Literals([
   "security_hold",
   "unowned_finding",
   "delivery_drift",
+  "promotion_ineffective",
+  "promotion_settled",
 ]);
 type AttentionKind = typeof AttentionKind.Type;
 

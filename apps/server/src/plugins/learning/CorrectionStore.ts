@@ -93,6 +93,23 @@ export const insert = Effect.fn("CorrectionStore.insert")(function* (input: NewC
   return toCorrection(rows[0]!);
 });
 
+/**
+ * How many of a project's corrections declare `mode`, created in `[from, to)`, the instants ISO
+ * strings. The outcome sweep counts recurrences with it; it has no gateway method.
+ */
+export const countDeclared = (input: {
+  readonly projectId: ProjectId;
+  readonly mode: string;
+  readonly from: string;
+  readonly to: string;
+}) =>
+  Effect.flatMap(
+    SqlClient.SqlClient,
+    (sql) => sql<{ readonly n: number }>`SELECT COUNT(*) AS n FROM corrections
+      WHERE project_id = ${input.projectId} AND declared_mode = ${input.mode}
+        AND created_at >= ${input.from} AND created_at < ${input.to}`,
+  ).pipe(Effect.map((rows) => rows[0]?.n ?? 0));
+
 export class CorrectionStore extends Context.Service<
   CorrectionStore,
   {

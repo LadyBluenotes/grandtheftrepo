@@ -12,9 +12,9 @@ const SWEEPS: Readiness.Check = { id: "sweeps", label: "Sweeps registered", targ
 const PROMOTERS: Readiness.Check = { id: "promoters", label: "Promoters", target: "plugin" };
 
 /** The sweeps the plugin's layer registers, in the order a tick runs them. */
-const SWEEP_NAMES = ["classify", "promote", "regressions"];
+const SWEEP_NAMES = ["classify", "promote", "regressions", "outcomes"];
 
-/** The three sweeps are on the supervisor's tick, and a dry run would keep them from acting. */
+/** The four sweeps are on the supervisor's tick, and a dry run would keep them from acting. */
 export const sweepsCheck = (status: Pick<SupervisorStatus, "dryRun" | "sweeps">) => {
   const registered = new Set(
     status.sweeps.filter((sweep) => sweep.plugin === "learning").map((sweep) => sweep.name),
@@ -23,7 +23,7 @@ export const sweepsCheck = (status: Pick<SupervisorStatus, "dryRun" | "sweeps">)
   if (missing.length > 0) {
     return Readiness.attention(
       SWEEPS,
-      `The ${Readiness.list(missing)} ${missing.length === 1 ? "sweep is" : "sweeps are"} not registered, so corrections are not turned into items; restart the server.`,
+      `The ${Readiness.list(missing)} ${missing.length === 1 ? "sweep is" : "sweeps are"} not registered; restart the server.`,
     );
   }
   if (status.dryRun) {
@@ -32,7 +32,10 @@ export const sweepsCheck = (status: Pick<SupervisorStatus, "dryRun" | "sweeps">)
       "The supervisor runs dry (supervisor.json), so the sweeps change nothing.",
     );
   }
-  return Readiness.ready(SWEEPS, "The classify, promote and regressions sweeps run each tick.");
+  return Readiness.ready(
+    SWEEPS,
+    "The classify, promote, regressions and outcomes sweeps run each tick.",
+  );
 };
 
 const kindLabel = (kind: LearningOwnerKind) => kind.replaceAll("_", " ");
