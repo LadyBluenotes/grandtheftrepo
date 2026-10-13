@@ -33,6 +33,7 @@ import * as ProjectService from "../../project/ProjectService.ts";
 import * as ProviderRegistry from "../../provider/ProviderRegistry.ts";
 import type * as ScheduledTaskService from "../../scheduledTasks/ScheduledTaskService.ts";
 import * as ServerSettings from "../../serverSettings.ts";
+import * as Attention from "../Attention.ts";
 import * as PluginHost from "../PluginHost.ts";
 import * as PluginSupervisor from "../PluginSupervisor.ts";
 import { registry } from "../registry.ts";
@@ -663,6 +664,81 @@ it.effect("learning off: its measure names the learning plugin", () =>
           [folded.failures.state, folded.failures.missingReason],
           ["unavailable", "The learning plugin is not running."],
         );
+      }).pipe(Effect.provide(layerHost(fakes.layer)));
+    }),
+  ).pipe(Effect.provide(layerTest)),
+);
+
+it.effect("attention: a report lists the flags keyed to its project and to every project", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      yield* writeStateFile("plugins.json", onlyPlugins(["telemetry"]));
+      const mine = measuresInput.projectId;
+      const other = ProjectId.make("project:other");
+      const fakes = yield* fakeCore({ projects: [project(mine), project(other)] });
+      yield* Effect.gen(function* () {
+        const attention = yield* Attention.Attention;
+        const raise = (
+          kind: "budget_breach" | "delivery_drift" | "two_writers",
+          threadId: string,
+          text: string,
+        ) =>
+          attention.raise({
+            pluginId: "test",
+            threadId,
+            kind,
+            text,
+            resumeAction: { label: "Open settings", target: "settings" },
+          });
+        for (const [name, projectId] of [
+          ["mine", mine],
+          ["other", other],
+        ] as const) {
+          yield* raise("budget_breach", `budget:1:${projectId}`, `Over budget in ${name}.`);
+          yield* raise(
+            "delivery_drift",
+            `policy:${projectId}:claude:/home/me/.claude/CLAUDE.md`,
+            `A policy block of ${name} was edited.`,
+          );
+          yield* raise(
+            "delivery_drift",
+            `knowledge:${projectId}:page:tests:/work/${name}/.knowledge/tests.md`,
+            `A knowledge page of ${name} was removed.`,
+          );
+          // The promotion kind lands with #88; until then its key rides on a drift flag.
+          yield* raise(
+            "delivery_drift",
+            `promotion:${projectId}:promotion-${name}`,
+            `A promotion of ${name} did not help.`,
+          );
+        }
+        yield* raise(
+          "delivery_drift",
+          "policy:*:claude:/home/me/.claude/CLAUDE.md",
+          "A policy of every project was edited.",
+        );
+        yield* raise("two_writers", "thread:elsewhere", "Two writers on a thread of no project.");
+
+        const texts = (projectId: ProjectId) =>
+          report({ ...reportInput, projectId }).pipe(
+            Effect.flatMap(decodeReport),
+            Effect.map(({ report: folded }) => folded.attention.items.map((item) => item.text)),
+          );
+        // In key order, as the report sorts them; the budget flags are listed as before.
+        assert.deepEqual(yield* texts(mine), [
+          "Over budget in mine.",
+          "A knowledge page of mine was removed.",
+          "A policy of every project was edited.",
+          "A policy block of mine was edited.",
+          "A promotion of mine did not help.",
+        ]);
+        assert.deepEqual(yield* texts(other), [
+          "Over budget in other.",
+          "A knowledge page of other was removed.",
+          "A policy of every project was edited.",
+          "A policy block of other was edited.",
+          "A promotion of other did not help.",
+        ]);
       }).pipe(Effect.provide(layerHost(fakes.layer)));
     }),
   ).pipe(Effect.provide(layerTest)),
