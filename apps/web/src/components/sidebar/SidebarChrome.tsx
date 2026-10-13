@@ -146,7 +146,7 @@ function SidebarBrandMark({ onBackdrop }: { onBackdrop: boolean }) {
   );
 }
 
-export function SidebarUtilityItem({
+function SidebarUtilityItem({
   icon,
   label,
   onClick,

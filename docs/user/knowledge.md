@@ -9,7 +9,7 @@ project, so it travels with the repository and reaches your teammates' agents to
 1. Ask the agent working in a thread to propose one, for example "propose a knowledge page on how
    to run the tests here". It uses the `knowledge_propose` tool. A proposed page is a draft, and
    nothing is written to the project yet.
-2. Open **Knowledge** in the sidebar and pick the project. Each draft shows its title and body,
+2. Open **Knowledge** from the sidebar's **Plugins** menu and pick the project. Each draft shows its title and body,
    which you can edit before you accept it. **Discard** drops a draft you do not want.
 3. **Accept** writes the page to `.knowledge/<key>.md` and adds a line for it to the index in the
    project's instruction files: `CLAUDE.md` for Claude Code, `AGENTS.md` for Codex and

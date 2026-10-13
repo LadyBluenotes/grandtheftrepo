@@ -14,7 +14,7 @@ using the `policy_list` tool.
 
 ### The Policies screen
 
-While the policy plugin runs, **Policies** is in the sidebar. Pick the environment or one project
+While the policy plugin runs, **Policies** is in the sidebar's **Plugins** menu. Pick the environment or one project
 at the top: the environment's policies apply everywhere, a project's to that project. The list shows
 each policy with the version on show, its state and when it last changed; a draft waiting above the
 accepted version is marked.

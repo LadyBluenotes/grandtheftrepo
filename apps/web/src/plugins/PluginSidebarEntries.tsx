@@ -1,13 +1,18 @@
 import { PlugIcon } from "lucide-react";
 import { useNavigate } from "@tanstack/react-router";
 
-import { SidebarUtilityItem } from "~/components/sidebar/SidebarChrome";
-import { useSidebar } from "~/components/ui/sidebar";
+import { Menu, MenuItem, MenuPopup, MenuSeparator, MenuTrigger } from "~/components/ui/menu";
+import { SidebarMenuButton, SidebarMenuItem, useSidebar } from "~/components/ui/sidebar";
+import { Tooltip, TooltipPopup, TooltipTrigger } from "~/components/ui/tooltip";
 import { sidebarPlugins } from "./pluginRoute";
 import { usePluginStatuses } from "./pluginState";
 import { pluginRegistry } from "./registry";
 
-/** Sidebar buttons for the Plugins page and each running plugin that has a screen. */
+/**
+ * One sidebar button for everything plugins add: a menu with the Plugins page and each running
+ * plugin that has a screen. One button, however many plugins run, so the utility row never wraps
+ * or spills past the sidebar's bottom edge.
+ */
 export function PluginSidebarEntries() {
   const { statuses } = usePluginStatuses();
   const navigate = useNavigate();
@@ -18,21 +23,39 @@ export function PluginSidebarEntries() {
     if (isMobile) setOpenMobile(false);
     void open();
   };
+  const screens = sidebarPlugins(statuses, pluginRegistry);
   return (
-    <>
-      <SidebarUtilityItem
-        icon={<PlugIcon />}
-        label="Plugins"
-        onClick={go(() => navigate({ to: "/plugins" }))}
-      />
-      {sidebarPlugins(statuses, pluginRegistry).map((entry) => (
-        <SidebarUtilityItem
-          key={entry.id}
-          icon={<entry.icon />}
-          label={entry.title}
-          onClick={go(() => navigate({ to: "/plugins/$pluginId", params: { pluginId: entry.id } }))}
-        />
-      ))}
-    </>
+    <SidebarMenuItem className="shrink-0">
+      <Menu>
+        <Tooltip>
+          <TooltipTrigger
+            render={
+              <MenuTrigger render={<SidebarMenuButton aria-label="Plugins" size="icon" />}>
+                <PlugIcon />
+              </MenuTrigger>
+            }
+          />
+          <TooltipPopup side="top">Plugins</TooltipPopup>
+        </Tooltip>
+        <MenuPopup side="top" align="end">
+          <MenuItem onClick={go(() => navigate({ to: "/plugins" }))}>
+            <PlugIcon />
+            Plugins
+          </MenuItem>
+          {screens.length === 0 ? null : <MenuSeparator />}
+          {screens.map((entry) => (
+            <MenuItem
+              key={entry.id}
+              onClick={go(() =>
+                navigate({ to: "/plugins/$pluginId", params: { pluginId: entry.id } }),
+              )}
+            >
+              <entry.icon />
+              {entry.title}
+            </MenuItem>
+          ))}
+        </MenuPopup>
+      </Menu>
+    </SidebarMenuItem>
   );
 }
