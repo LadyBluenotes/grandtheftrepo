@@ -1,4 +1,4 @@
-import { type ProjectId, TelemetryError, type TelemetryMeasuresInput } from "@t3tools/contracts";
+import { TelemetryError, type TelemetryMeasuresInput } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
@@ -20,7 +20,6 @@ import {
 import * as CorrectionStore from "../learning/CorrectionStore.ts";
 import * as ItemStore from "../learning/items/ItemStore.ts";
 import * as VerdictStore from "../review/VerdictStore.ts";
-import { promotedItemFields } from "./fields.ts";
 import { computeMeasures, unavailableMeasures } from "./measures/index.ts";
 import type { RunRow, ThreadRow, ToolCallRow, TurnUsageRow } from "./measures/input.ts";
 
@@ -40,26 +39,6 @@ const failWith =
     Effect.logWarning("telemetry: measures could not be computed", { cause }).pipe(
       Effect.andThen(Effect.fail(new TelemetryError({ message }))),
     );
-
-/**
- * The project's learning items that were handed over, each with the time of its earliest delivered
- * promotion. An item's state now does not matter: a person may close it or move it to another
- * owner kind after the handover, and a past window must still read the lesson as known. An item
- * with no delivered promotion is left out.
- */
-const promotedItemsOf = (items: ItemStore.ItemStore["Service"], projectId: ProjectId) =>
-  items.list({ projectId }).pipe(
-    Effect.flatMap((all) => Effect.forEach(all, (item) => items.get(item.id))),
-    Effect.map((details) =>
-      details.flatMap((detail) => {
-        const fields = promotedItemFields(detail);
-        const promotedAt = fields["learning.promotion.updatedAt"];
-        return promotedAt === null
-          ? []
-          : [{ failureMode: fields["learning.item.failureMode"], promotedAt }];
-      }),
-    ),
-  );
 
 /**
  * Reads a window's rows from the plugin's tables and runs every measure over them. The queries
@@ -138,8 +117,8 @@ export const make = Effect.fn("MeasureService.make")(function* (
         ? yield* store.value.list({ projectId, ...window })
         : undefined;
       const items = yield* Effect.serviceOption(ItemStore.ItemStore);
-      const promotedItems = Option.isSome(items)
-        ? yield* promotedItemsOf(items.value, projectId)
+      const deliveries = Option.isSome(items)
+        ? yield* items.value.deliveredAt(projectId)
         : undefined;
       const verdictStore = yield* Effect.serviceOption(VerdictStore.VerdictStore);
       const verdicts = Option.isSome(verdictStore)
@@ -153,7 +132,7 @@ export const make = Effect.fn("MeasureService.make")(function* (
         toolCalls,
         turnUsage,
         corrections,
-        promotedItems,
+        deliveries,
         verdicts,
         pricing: {
           rates: yield* rates,

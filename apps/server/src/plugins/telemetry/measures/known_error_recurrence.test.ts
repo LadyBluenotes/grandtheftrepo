@@ -30,12 +30,12 @@ const correction = (
   updatedAt: createdAt,
 });
 
-const defectPromoted = { failureMode: "defect", promotedAt: PROMOTED };
+const defectPromoted = { failureMode: "defect", deliveredAt: PROMOTED };
 
 it("is the share of the window's declared corrections whose mode was already promoted", () => {
   const result = knownErrorRecurrence(
     input({
-      promotedItems: [defectPromoted],
+      deliveries: [defectPromoted],
       corrections: [
         correction("defect", AFTER),
         correction("defect", INSIDE),
@@ -54,7 +54,7 @@ it("is unavailable in an empty window, and while the learning plugin is off", ()
     input(),
     // Corrections that name no mode, or fall outside the window, are not in the sample.
     input({
-      promotedItems: [defectPromoted],
+      deliveries: [defectPromoted],
       corrections: [correction(null, AFTER), correction("defect", TO)],
     }),
   ]) {
@@ -66,8 +66,8 @@ it("is unavailable in an empty window, and while the learning plugin is off", ()
   }
 
   for (const off of [
-    input({ corrections: undefined, promotedItems: undefined }),
-    input({ corrections: [correction("defect", AFTER)], promotedItems: undefined }),
+    input({ corrections: undefined, deliveries: undefined }),
+    input({ corrections: [correction("defect", AFTER)], deliveries: undefined }),
   ]) {
     const result = knownErrorRecurrence(off);
     assert.deepEqual(
@@ -85,7 +85,7 @@ it("is unavailable in an empty window, and while the learning plugin is off", ()
 it("does not count a correction made before, or at the moment of, the promotion", () => {
   const result = knownErrorRecurrence(
     input({
-      promotedItems: [defectPromoted],
+      deliveries: [defectPromoted],
       corrections: [
         correction("defect", FROM),
         correction("defect", INSIDE),
@@ -98,7 +98,7 @@ it("does not count a correction made before, or at the moment of, the promotion"
 
 it("answers zero, not unavailable, when nothing was promoted before a declared correction", () => {
   const result = knownErrorRecurrence(
-    input({ promotedItems: [], corrections: [correction("defect", AFTER)] }),
+    input({ deliveries: [], corrections: [correction("defect", AFTER)] }),
   );
   assert.deepEqual([result.state, result.value, result.sampleSize], ["ok", 0, 1]);
 });

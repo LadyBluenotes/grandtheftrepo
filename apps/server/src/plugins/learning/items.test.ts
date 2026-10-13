@@ -472,6 +472,49 @@ it.effect("a handover is stamped when the promoter returns, not when the tick be
   ),
 );
 
+it.effect("lists each failure mode's earliest delivery, whatever its item's state now", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const learning = yield* setup;
+      const elsewhere = ProjectId.make("project:elsewhere");
+      const itemFor = (project: ProjectId, mode: string) =>
+        learning.items.strengthen(project, mode, `key:${project}:${mode}`, "Again.");
+      const defect = yield* itemFor(projectId, "defect");
+      const convention = yield* itemFor(projectId, "convention");
+      const incomplete = yield* itemFor(projectId, "incomplete");
+      const otherDefect = yield* itemFor(elsewhere, "defect");
+      const promotion = (
+        item: { readonly id: number; readonly projectId: ProjectId; readonly failureMode: string },
+        ownerKind: LearningOwnerKind,
+        state: string,
+        updatedAt: string,
+      ) =>
+        learning.sql`INSERT INTO learning_promotions
+          (item_id, project_id, failure_mode, owner_kind, state, attempts, created_at, updated_at)
+          VALUES (${item.id}, ${item.projectId}, ${item.failureMode}, ${ownerKind}, ${state}, 0,
+            '2026-10-01T00:00:00.000Z', ${updatedAt})`;
+      // Two delivered promotions of one mode: the earlier one is when it was first handed over.
+      yield* promotion(defect, "policy", "delivered", "2026-10-06T00:00:00.000Z");
+      yield* promotion(defect, "prompt", "delivered", "2026-10-04T00:00:00.000Z");
+      yield* promotion(convention, "prompt", "delivered", "2026-10-05T00:00:00.000Z");
+      yield* promotion(incomplete, "prompt", "pending", "2026-10-02T00:00:00.000Z");
+      yield* promotion(otherDefect, "prompt", "delivered", "2026-10-01T00:00:00.000Z");
+      // A person closes the item after the handover; the handover stands.
+      yield* learning.items.setDisposition({ id: defect.id, state: "closed" });
+      assert.strictEqual((yield* learning.items.get(defect.id)).item.state, "closed");
+
+      assert.deepEqual(yield* learning.items.deliveredAt(projectId), [
+        { failureMode: "convention", deliveredAt: "2026-10-05T00:00:00.000Z" },
+        { failureMode: "defect", deliveredAt: "2026-10-04T00:00:00.000Z" },
+      ]);
+      assert.deepEqual(yield* learning.items.deliveredAt(elsewhere), [
+        { failureMode: "defect", deliveredAt: "2026-10-01T00:00:00.000Z" },
+      ]);
+      assert.deepEqual(yield* learning.items.deliveredAt(ProjectId.make("project:none")), []);
+    }),
+  ),
+);
+
 it.effect("an item a person moves during its handover stays a candidate for the new owner", () =>
   Effect.scoped(
     Effect.gen(function* () {

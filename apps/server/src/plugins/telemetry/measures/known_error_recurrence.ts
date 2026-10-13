@@ -1,4 +1,4 @@
-import { correctionFields } from "../fields.ts";
+import { correctionFields, deliveredFields } from "../fields.ts";
 import { inWindow, type Measure, ok, type Spec, unavailable } from "./input.ts";
 
 const spec = {
@@ -8,7 +8,7 @@ const spec = {
   provenance: [
     "learning.correction.createdAt",
     "learning.correction.declaredMode",
-    "learning.item.failureMode",
+    "learning.promotion.failureMode",
     "learning.promotion.updatedAt",
   ],
 } as const satisfies Spec;
@@ -18,8 +18,8 @@ const spec = {
  * learning item had already handed over, strictly before the correction was made.
  */
 export const knownErrorRecurrence: Measure = (input) => {
-  const { corrections, promotedItems } = input;
-  if (corrections === undefined || promotedItems === undefined) {
+  const { corrections, deliveries } = input;
+  if (corrections === undefined || deliveries === undefined) {
     return unavailable(
       spec,
       "Corrections and learning items come from the learning plugin, which is not running.",
@@ -35,8 +35,13 @@ export const knownErrorRecurrence: Measure = (input) => {
   if (declared.length === 0) {
     return unavailable(spec, "No correction with a declared failure mode in the window.");
   }
+  const handedOver = deliveries.map(deliveredFields);
   const recurred = declared.filter(({ mode, at }) =>
-    promotedItems.some((item) => item.failureMode === mode && item.promotedAt < at),
+    handedOver.some(
+      (delivery) =>
+        delivery["learning.promotion.failureMode"] === mode &&
+        delivery["learning.promotion.updatedAt"] < at,
+    ),
   );
   return ok(spec, recurred.length / declared.length, declared.length);
 };

@@ -2,8 +2,8 @@ import { assert, it } from "@effect/vitest";
 import * as Fixtures from "./eventFixtures.ts";
 import {
   correctionFields,
+  deliveredFields,
   pinnedFields,
-  promotedItemFields,
   runFields,
   settledFields,
   threadFields,
@@ -29,7 +29,7 @@ const accessed: ReadonlyArray<Readonly<Record<string, unknown>>> = [
   pinnedFields(pinned),
   correctionFields(Fixtures.correction),
   verdictFields(Fixtures.verdict),
-  promotedItemFields(Fixtures.promotedItem),
+  deliveredFields(Fixtures.delivery),
 ];
 
 /** The fixture each provenance root names, so a path can be walked on the real event shape. */
@@ -42,8 +42,7 @@ const roots: ReadonlyArray<readonly [string, ReadonlyArray<unknown>]> = [
   ["thread.pinned", [pinned]],
   ["thread", [Fixtures.thread]],
   ["learning.correction", [Fixtures.correction]],
-  ["learning.item", [Fixtures.promotedItem.item]],
-  ["learning.promotion", Fixtures.promotedItem.promotions],
+  ["learning.promotion", [Fixtures.promotion]],
   ["review.verdict", [Fixtures.verdict]],
 ];
 

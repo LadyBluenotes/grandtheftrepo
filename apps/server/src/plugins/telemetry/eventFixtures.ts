@@ -3,7 +3,7 @@ import {
   CommandId,
   EventId,
   type LearningCorrection,
-  type LearningItemDetail,
+  type LearningPromotion,
   MessageId,
   NodeId,
   type OrchestrationV2AppThread,
@@ -21,6 +21,8 @@ import {
   TurnItemId,
 } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
+
+import type { ItemDelivery } from "../learning/items/ItemStore.ts";
 
 /** Events for the reactor and provenance tests, each with every field the measures read set. */
 export const at = DateTime.makeUnsafe("2026-10-02T12:00:00.000Z");
@@ -255,34 +257,23 @@ export const verdict: ReviewVerdict = {
   invalidatedAt: null,
 };
 
-/** An item whose one promotion was delivered after its evidence arrived. */
-export const promotedItem: LearningItemDetail = {
-  item: {
-    id: 1,
-    projectId,
-    failureMode: "defect",
-    occurrences: 2,
-    state: "promoted",
-    ownerKind: "prompt",
-    dispositionBy: "rule",
-    reason: "Routed by rule.",
-    createdAt: "2026-10-01T12:00:00.000Z",
-    updatedAt: "2026-10-03T12:00:00.000Z",
-  },
-  evidence: [],
-  promotions: [
-    {
-      id: 1,
-      itemId: 1,
-      projectId,
-      failureMode: "defect",
-      ownerKind: "prompt",
-      state: "delivered",
-      attempts: 0,
-      nextAttemptAt: null,
-      lastError: null,
-      createdAt: "2026-10-01T12:00:00.000Z",
-      updatedAt: "2026-10-02T12:00:00.000Z",
-    },
-  ],
+/** A promotion delivered after its record was opened. */
+export const promotion: LearningPromotion = {
+  id: 1,
+  itemId: 1,
+  projectId,
+  failureMode: "defect",
+  ownerKind: "prompt",
+  state: "delivered",
+  attempts: 0,
+  nextAttemptAt: null,
+  lastError: null,
+  createdAt: "2026-10-01T12:00:00.000Z",
+  updatedAt: "2026-10-02T12:00:00.000Z",
+};
+
+/** The handover `ItemStore.deliveredAt` lists for that promotion. */
+export const delivery: ItemDelivery = {
+  failureMode: promotion.failureMode,
+  deliveredAt: promotion.updatedAt,
 };
