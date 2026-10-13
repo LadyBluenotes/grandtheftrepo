@@ -1,26 +1,18 @@
 import {
+  createKanbanActiveAtomFamily,
+  createKanbanBoardAtomFamily,
+} from "@t3tools/client-runtime/plugins/kanban";
+import {
   createPluginRpcCommand,
   createPluginRpcQueryAtomFamily,
 } from "@t3tools/client-runtime/plugins/rpc";
-import { createEnvironmentRpcSubscriptionAtomFamily } from "@t3tools/client-runtime/state/runtime";
-import {
-  HOST_METHODS,
-  KANBAN_METHODS,
-  KANBAN_WS_METHODS,
-  type KanbanDecision,
-  type KanbanIssue,
-} from "@t3tools/contracts";
-import { AsyncResult, Atom } from "effect/reactivity";
-import * as Option from "effect/Option";
+import { KANBAN_METHODS, type KanbanDecision, type KanbanIssue } from "@t3tools/contracts";
+import { Atom } from "effect/reactivity";
 
 import { connectionAtomRuntime } from "~/connection/runtime";
 import { environmentSummaries } from "~/state/presentation";
 
-/** Live board: a snapshot on subscribe, a fresh one after every change on disk or in the app. */
-export const kanbanBoard = createEnvironmentRpcSubscriptionAtomFamily(connectionAtomRuntime, {
-  label: "environment-data:kanban:board",
-  tag: KANBAN_WS_METHODS.subscribe,
-});
+export const kanbanBoard = createKanbanBoardAtomFamily(connectionAtomRuntime);
 
 /** One issue with its body and log; re-read whenever the board changes. */
 export const kanbanIssue = createPluginRpcQueryAtomFamily(connectionAtomRuntime, {
@@ -64,25 +56,7 @@ export const kanbanStopClear = createPluginRpcCommand(connectionAtomRuntime, {
   method: KANBAN_METHODS.stopClear,
 });
 
-const pluginStatuses = createPluginRpcQueryAtomFamily(connectionAtomRuntime, {
-  label: "environment-data:plugins",
-  method: HOST_METHODS.list,
-  staleTimeMs: 60_000,
-});
-
-/** Whether `environmentId` runs the kanban plugin; null while unknown. A server without the
-    plugin RPCs (upstream T3 Code) fails the call, which counts as off. */
-export const kanbanActiveAtom = Atom.family(
-  (environmentId: Parameters<typeof pluginStatuses>[0]["environmentId"]) =>
-    Atom.make((get) => {
-      const result = get(pluginStatuses({ environmentId, input: {} }));
-      if (result._tag === "Failure") return false;
-      return Option.match(AsyncResult.value(result), {
-        onNone: () => null,
-        onSome: (statuses) => statuses.some((status) => status.id === "kanban" && status.active),
-      });
-    }),
-);
+export const kanbanActiveAtom = createKanbanActiveAtomFamily(connectionAtomRuntime);
 
 /** Any connected environment runs the plugin, so the Board entry points show. */
 export const kanbanSupportedAtom = Atom.make((get) =>
