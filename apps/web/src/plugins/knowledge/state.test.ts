@@ -1,7 +1,7 @@
 import { ProjectId, type KnowledgeEntry } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
-import { acceptInput, draftProblem, groupKnowledge, needsInstall } from "./state";
+import { acceptInput, canRestore, draftProblem, groupKnowledge, needsInstall } from "./state";
 
 const projectId = ProjectId.make("project-1");
 
@@ -87,5 +87,22 @@ describe("needsInstall", () => {
       true,
     );
     expect(needsInstall([{ ...ok, status: "missing" }])).toBe(true);
+  });
+});
+
+describe("canRestore", () => {
+  it("offers a retired page again only while no draft or accepted page holds its key", () => {
+    const retired = entry(1, "tests", "retired", {
+      created: "2026-10-01T00:00:00.000Z",
+      retired: "2026-10-02T00:00:00.000Z",
+    });
+    const alone = groupKnowledge([retired]);
+    expect(canRestore(retired, alone)).toBe(true);
+    for (const state of ["draft", "accepted"] as const) {
+      const live = entry(2, "tests", state, { created: "2026-10-03T00:00:00.000Z" });
+      expect(canRestore(retired, groupKnowledge([retired, live]))).toBe(false);
+    }
+    const other = entry(3, "db", "accepted", { created: "2026-10-03T00:00:00.000Z" });
+    expect(canRestore(retired, groupKnowledge([retired, other]))).toBe(true);
   });
 });

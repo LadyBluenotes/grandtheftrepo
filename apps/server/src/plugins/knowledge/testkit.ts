@@ -161,6 +161,9 @@ export const world = Effect.gen(function* () {
     codexFile: path.join(root, "AGENTS.md"),
     copilotFile: path.join(root, ".github", "copilot-instructions.md"),
     page: (key: string) => path.join(root, ".knowledge", `${key}.md`),
+    pagesDirectory: path.join(root, ".knowledge"),
+    /** Takes Claude out of use, which leaves no agent in use. */
+    dropClaude: fs.remove(path.join(home, ".claude"), { recursive: true }),
     /** Puts Codex in use, as installing it would. */
     useCodex: fs.makeDirectory(path.join(home, ".codex"), { recursive: true }),
     setThreads: (shells: Shells) => Ref.set(threads, shells),

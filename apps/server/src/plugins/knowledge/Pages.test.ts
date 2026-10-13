@@ -2,7 +2,15 @@ import { assert, it } from "@effect/vitest";
 import { knowledgePagePath } from "@t3tools/contracts";
 
 import { findBlock, sha256 } from "../InstructionBlocks.ts";
-import { INDEX_MARKERS, blockStatus, needsInstall, pageStatus, render, worse } from "./Pages.ts";
+import {
+  INDEX_MARKERS,
+  blockStatus,
+  needsInstall,
+  pagesNeedInstall,
+  pageStatus,
+  render,
+  worse,
+} from "./Pages.ts";
 
 const pages = [
   { key: "tests", title: "Running the tests", body: "Use `vp test run <files>`.\n\n" },
@@ -82,4 +90,23 @@ it("reads a block and a page as ok, drifted or missing, the gone one outranking 
   assert.strictEqual(worse("missing", "drifted"), "missing");
   assert.strictEqual(worse("drifted", "missing"), "missing");
   assert.strictEqual(worse("ok", "ok"), "ok");
+});
+
+it("the page files need an install with no agent in use, until their delivery is recorded", () => {
+  const rendered = render(pages);
+  const path = "/project/.knowledge";
+  const recorded = { hash: rendered.pagesHash, path };
+  assert.isTrue(pagesNeedInstall({ rendered, path, delivery: undefined }));
+  assert.isFalse(pagesNeedInstall({ rendered: render([]), path, delivery: undefined }));
+  assert.isFalse(pagesNeedInstall({ rendered, path, delivery: recorded }));
+  // A page retired since, a page edited since, or a project that moved.
+  assert.isTrue(pagesNeedInstall({ rendered: render([pages[0]!]), path, delivery: recorded }));
+  assert.isTrue(
+    pagesNeedInstall({
+      rendered: render([{ ...pages[0]!, title: "Renamed" }, pages[1]!]),
+      path,
+      delivery: recorded,
+    }),
+  );
+  assert.isTrue(pagesNeedInstall({ rendered, path: "/moved/.knowledge", delivery: recorded }));
 });

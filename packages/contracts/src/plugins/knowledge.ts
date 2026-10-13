@@ -75,9 +75,9 @@ export const KnowledgeAcceptInput = Schema.Struct({
 });
 export type KnowledgeAcceptInput = typeof KnowledgeAcceptInput.Type;
 
-/** Retires an accepted page, or discards a draft. */
-export const KnowledgeRetireInput = Schema.Struct({ id: Schema.Int });
-export type KnowledgeRetireInput = typeof KnowledgeRetireInput.Type;
+/** One page, by id: an accepted page to retire, or a draft to discard. */
+export const KnowledgeIdInput = Schema.Struct({ id: Schema.Int });
+export type KnowledgeIdInput = typeof KnowledgeIdInput.Type;
 
 export const KnowledgeProjectInput = Schema.Struct({ projectId: ProjectId });
 export type KnowledgeProjectInput = typeof KnowledgeProjectInput.Type;
@@ -106,7 +106,10 @@ export class KnowledgeError extends Schema.TaggedError<KnowledgeError>()("Knowle
   message: Schema.String,
 }) {}
 
-/** Agents and people propose; accepting, retiring and installing write the project and need settings access. */
+/**
+ * Agents and people propose; accepting, retiring, discarding and installing are a person's
+ * decision about the project and need settings access.
+ */
 export const KNOWLEDGE_METHODS = definePluginMethods({
   list: {
     method: "knowledge.list",
@@ -129,10 +132,19 @@ export const KNOWLEDGE_METHODS = definePluginMethods({
     output: KnowledgeEntry,
     error: KnowledgeError,
   },
+  /** Only an accepted page; its file and index line go on the install that follows. */
   retire: {
     method: "knowledge.retire",
     gateway: "settingsWrite",
-    input: KnowledgeRetireInput,
+    input: KnowledgeIdInput,
+    output: KnowledgeEntry,
+    error: KnowledgeError,
+  },
+  /** Only a draft, which was never written; it is kept as retired so it can be proposed again. */
+  discard: {
+    method: "knowledge.discard",
+    gateway: "settingsWrite",
+    input: KnowledgeIdInput,
     output: KnowledgeEntry,
     error: KnowledgeError,
   },

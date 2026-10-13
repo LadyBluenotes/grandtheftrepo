@@ -36,6 +36,7 @@ import { usePluginEnvironmentId } from "../pluginState";
 import {
   AGENT_LABEL,
   acceptInput,
+  canRestore,
   deliveryBadge,
   draftProblem,
   groupKnowledge,
@@ -189,7 +190,7 @@ export default function KnowledgePage() {
                         )
                       }
                       onDiscard={() =>
-                        void run("Could not discard the draft", () => commands.retire(draft.id))
+                        void run("Could not discard the draft", () => commands.discard(draft.id))
                       }
                     />
                   ))
@@ -232,8 +233,11 @@ export default function KnowledgePage() {
                       key={page.id}
                       page={page}
                       locked={locked || !commands.canPropose}
-                      onRestore={() =>
-                        void run("Could not restore the page", () => commands.restore(page))
+                      onRestore={
+                        canRestore(page, groups)
+                          ? () =>
+                              void run("Could not restore the page", () => commands.restore(page))
+                          : undefined
                       }
                     />
                   ))}
@@ -302,7 +306,10 @@ function DraftRow({
   );
 }
 
-/** A retired page or discarded draft; restoring proposes it again as a draft. */
+/**
+ * A retired page or discarded draft. Restoring proposes it again as a draft; there is no
+ * `onRestore` while a draft or accepted page holds its key.
+ */
 function RetiredRow({
   page,
   locked,
@@ -310,16 +317,18 @@ function RetiredRow({
 }: {
   readonly page: KnowledgeEntry;
   readonly locked: boolean;
-  readonly onRestore: () => void;
+  readonly onRestore: (() => void) | undefined;
 }) {
   return (
     <SettingsRow
       title={page.title}
       description={knowledgePagePath(page.key)}
       control={
-        <Button size="xs" variant="ghost-muted" disabled={locked} onClick={onRestore}>
-          Restore as draft
-        </Button>
+        onRestore === undefined ? undefined : (
+          <Button size="xs" variant="ghost-muted" disabled={locked} onClick={onRestore}>
+            Restore as draft
+          </Button>
+        )
       }
     />
   );

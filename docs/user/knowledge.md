@@ -30,12 +30,13 @@ an accepted page, retire it, restore it, edit the draft and accept it.
 A project's instruction files are written only for the agents set up on the machine that runs T3
 Code: Claude Code, Codex or Copilot with its home directory present. **Delivery** shows, for each
 one, whether its files are up to date, changed by hand, or missing, and **Reinstall** writes them
-again.
+again. The pages in `.knowledge/` are written even when none of these agents is set up.
 
 Accepting and retiring write the files at once. When that write fails, or an agent is set up
 later, T3 Code catches up by itself once no thread in the project has a run, so the files never
-change under a working agent. It never overwrites an edit made by hand to a page file or inside the
-index block; that shows as changed by hand until you reinstall.
+change under a working agent. That catch-up leaves an edit made by hand to a page file or inside the
+index block alone, and it shows as changed by hand. **Reinstall**, **Accept** and **Retire** rewrite
+every accepted page and the index, so they replace such an edit.
 
 Turning the knowledge plugin off on the **Plugins** page removes the screen and the tools after the
 next restart. Pages and index blocks already in the project stay.

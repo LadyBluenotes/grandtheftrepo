@@ -44,6 +44,11 @@ const knowledgeRetire = createPluginRpcCommand(connectionAtomRuntime, {
   method: KNOWLEDGE_METHODS.retire,
 });
 
+const knowledgeDiscard = createPluginRpcCommand(connectionAtomRuntime, {
+  label: "knowledge:discard",
+  method: KNOWLEDGE_METHODS.discard,
+});
+
 const knowledgeInstall = createPluginRpcCommand(connectionAtomRuntime, {
   label: "knowledge:install",
   method: KNOWLEDGE_METHODS.install,
@@ -82,13 +87,14 @@ const notConnected = () =>
   );
 
 /**
- * Commands on the plugin's environment. Accepting, retiring and installing write the project and
- * follow the settings grant (`canWrite`); restoring a retired page proposes it again (`canPropose`).
+ * Commands on the plugin's environment. Accepting, retiring, discarding and installing follow the
+ * settings grant (`canWrite`); restoring a retired page proposes it again (`canPropose`).
  */
 export function useKnowledgeCommands() {
   const environmentId = usePluginEnvironmentId();
   const runAccept = useAtomCommand(knowledgeAccept, { reportFailure: false });
   const runRetire = useAtomCommand(knowledgeRetire, { reportFailure: false });
+  const runDiscard = useAtomCommand(knowledgeDiscard, { reportFailure: false });
   const runInstall = useAtomCommand(knowledgeInstall, { reportFailure: false });
   const runPropose = useAtomCommand(knowledgePropose, { reportFailure: false });
   const canWrite = useAtomValue(knowledgeAccept.permissionAtom(environmentId));
@@ -100,6 +106,8 @@ export function useKnowledgeCommands() {
       environmentId === null ? notConnected() : runAccept({ environmentId, input }),
     retire: (id: number) =>
       environmentId === null ? notConnected() : runRetire({ environmentId, input: { id } }),
+    discard: (id: number) =>
+      environmentId === null ? notConnected() : runDiscard({ environmentId, input: { id } }),
     install: (projectId: ProjectId) =>
       environmentId === null ? notConnected() : runInstall({ environmentId, input: { projectId } }),
     restore: (page: KnowledgeEntry) =>
@@ -146,6 +154,10 @@ export function groupKnowledge(entries: ReadonlyArray<KnowledgeEntry>): Knowledg
       .toReversed(),
   };
 }
+
+/** A retired page can be proposed again only while no draft or accepted page holds its key. */
+export const canRestore = (page: Pick<KnowledgeEntry, "key">, groups: KnowledgeGroups) =>
+  ![...groups.drafts, ...groups.accepted].some((live) => live.key === page.key);
 
 const isTitle = Schema.is(KnowledgeTitle);
 const isBody = Schema.is(KnowledgeBody);

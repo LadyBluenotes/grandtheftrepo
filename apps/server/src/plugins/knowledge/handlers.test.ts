@@ -65,6 +65,18 @@ it.effect("each method answers through its own gateway and is refused through an
       state: "retired",
     });
 
+    const other = yield* decodeId(
+      yield* call("operate", KNOWLEDGE_METHODS.propose.method, { ...page, key: "other" }),
+    );
+    const discard = yield* refusal("operate", KNOWLEDGE_METHODS.discard.method, other);
+    assert.strictEqual(
+      discard.message,
+      'Method "knowledge.discard" needs the settingsWrite scope.',
+    );
+    assert.deepInclude(yield* call("settingsWrite", KNOWLEDGE_METHODS.discard.method, other), {
+      state: "retired",
+    });
+
     const badKey = yield* refusal("operate", KNOWLEDGE_METHODS.propose.method, {
       ...page,
       key: "Not A Slug",

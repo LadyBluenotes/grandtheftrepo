@@ -5,6 +5,7 @@ import {
   KnowledgeSource,
   KnowledgeState,
   KnowledgeTitle,
+  KNOWLEDGE_DIRECTORY,
   knowledgePagePath,
   POLICY_AGENTS,
   ProjectId,
@@ -14,7 +15,7 @@ import {
   type KnowledgeListInput,
   type KnowledgeProjectInput,
   type KnowledgeProposeInput,
-  type KnowledgeRetireInput,
+  type KnowledgeIdInput,
   type KnowledgeVerifyResult,
   type PolicyAgent,
   type ServerSettingsError,
@@ -52,8 +53,14 @@ const EntryRow = Schema.Struct({
 });
 const encodeSource = Schema.encodeEffect(Schema.fromJsonString(KnowledgeSource));
 
+/**
+ * The `agent` of the project's one row for its page files, which are shared by every agent and
+ * written even when none is in use; its `path` is the knowledge directory.
+ */
+const PAGES_DELIVERY = "pages";
+
 interface DeliveryRow {
-  readonly agent: PolicyAgent;
+  readonly agent: PolicyAgent | typeof PAGES_DELIVERY;
   readonly path: string;
   readonly hash: string;
 }
@@ -65,15 +72,26 @@ export class KnowledgeStore extends Context.Service<
     readonly list: (
       input: KnowledgeListInput,
     ) => Effect.Effect<ReadonlyArray<KnowledgeEntry>, KnowledgeError>;
-    /** Saves a draft. Nothing is written to the project until a person accepts it. */
+    /**
+     * Saves a draft for a project the server knows; an unknown one is `not_found`. Nothing is
+     * written to the project until a person accepts it.
+     */
     readonly propose: (
       input: KnowledgeProposeInput,
       source: KnowledgeSource,
     ) => Effect.Effect<KnowledgeEntry, KnowledgeError>;
-    /** Accepts a draft, with the edits given, then installs the project. */
+    /**
+     * Accepts a draft, with the edits given, then installs the project. The move from draft is one
+     * statement, so of two requests for one draft the second is refused.
+     */
     readonly accept: (input: KnowledgeAcceptInput) => Effect.Effect<KnowledgeEntry, KnowledgeError>;
-    /** Retires an accepted page and installs the project, or discards a draft. */
-    readonly retire: (input: KnowledgeRetireInput) => Effect.Effect<KnowledgeEntry, KnowledgeError>;
+    /**
+     * Retires an accepted page, then installs the project. Like `accept`, the move is one
+     * statement, so a page another request moved first is refused.
+     */
+    readonly retire: (input: KnowledgeIdInput) => Effect.Effect<KnowledgeEntry, KnowledgeError>;
+    /** Discards a draft, which was never written, so nothing is installed; it is kept as retired. */
+    readonly discard: (input: KnowledgeIdInput) => Effect.Effect<KnowledgeEntry, KnowledgeError>;
     /**
      * Writes every accepted page, removes retired ones, and rewrites the index block in the
      * project instruction file of each agent in use; a file whose bytes would not change is not
@@ -88,7 +106,10 @@ export class KnowledgeStore extends Context.Service<
     readonly verify: (
       input: KnowledgeProjectInput,
     ) => Effect.Effect<ReadonlyArray<KnowledgeVerifyResult>, KnowledgeError>;
-    /** Whether an agent in use holds a delivery other than what the accepted pages render to now. */
+    /**
+     * Whether the page files, or an agent in use, hold a delivery other than what the accepted
+     * pages render to now. The pages are compared even when no agent is in use.
+     */
     readonly outdated: (projectId: ProjectId) => Effect.Effect<boolean, KnowledgeError>;
   }
 >()("t3/plugins/knowledge/KnowledgeStore") {}
@@ -156,6 +177,35 @@ const make = Effect.gen(function* () {
       FROM knowledge_entry WHERE id = ${id}
     `,
   });
+  /** Accepts the row only while it is a draft, in the one statement that reads and moves it. */
+  const acceptRow = SqlSchema.findOneOption({
+    Request: Schema.Struct({
+      id: Schema.Int,
+      title: Schema.NullOr(Schema.String),
+      body: Schema.NullOr(Schema.String),
+      at: Schema.String,
+    }),
+    Result: EntryRow,
+    execute: ({ id, title, body, at }) => sql`
+      UPDATE knowledge_entry
+      SET state = 'accepted', title = COALESCE(${title}, title), body = COALESCE(${body}, body),
+        accepted_at = ${at}
+      WHERE id = ${id} AND state = 'draft'
+      RETURNING id, project_id AS "projectId", "key", title, body, state, source,
+        created_at AS "createdAt", accepted_at AS "acceptedAt", retired_at AS "retiredAt"
+    `,
+  });
+  /** Moves the row from `from` to retired, only while it is still there, in one statement. */
+  const retireRow = SqlSchema.findOneOption({
+    Request: Schema.Struct({ id: Schema.Int, from: KnowledgeState, at: Schema.String }),
+    Result: EntryRow,
+    execute: ({ id, from, at }) => sql`
+      UPDATE knowledge_entry SET state = 'retired', retired_at = ${at}
+      WHERE id = ${id} AND state = ${from}
+      RETURNING id, project_id AS "projectId", "key", title, body, state, source,
+        created_at AS "createdAt", accepted_at AS "acceptedAt", retired_at AS "retiredAt"
+    `,
+  });
   const entryById = (id: number) =>
     Effect.flatMap(
       entryRow(id),
@@ -166,6 +216,12 @@ const make = Effect.gen(function* () {
           ),
         onSome: Effect.succeed,
       }),
+    );
+
+  /** Why a transition moved nothing: the page is gone, or it is not in the state `only` names. */
+  const refused = (id: number, only: string) =>
+    Effect.flatMap(entryById(id), (entry) =>
+      Effect.fail(invalid(`Page "${entry.key}" is ${entry.state}; only ${only}.`)),
     );
 
   /** The project's root, from the host's project service where the call runs. */
@@ -209,6 +265,7 @@ const make = Effect.gen(function* () {
     return {
       rendered: Pages.render(accepted),
       pageFile: (relative: string) => path.join(root, relative),
+      pagesPath: path.join(root, KNOWLEDGE_DIRECTORY),
       agents: agents.map((agent) => ({
         agent,
         path: path.join(root, Pages.PROJECT_INSTRUCTION_FILES[agent]),
@@ -278,14 +335,22 @@ const make = Effect.gen(function* () {
 
       const at = yield* nowIso;
       const delivered = yield* deliveriesOf(projectId);
-      for (const { agent, path: filePath } of plan.agents) {
-        const row = delivered.get(agent);
-        if (row?.hash === rendered.hash && row.path === filePath) continue;
-        yield* sql`INSERT OR REPLACE INTO knowledge_delivery ${sql.insert({
-          project_id: projectId,
+      const records: ReadonlyArray<DeliveryRow> = [
+        { agent: PAGES_DELIVERY, path: plan.pagesPath, hash: rendered.pagesHash },
+        ...plan.agents.map(({ agent, path: filePath }) => ({
           agent,
           path: filePath,
           hash: rendered.hash,
+        })),
+      ];
+      for (const record of records) {
+        const row = delivered.get(record.agent);
+        if (row?.hash === record.hash && row.path === record.path) continue;
+        yield* sql`INSERT OR REPLACE INTO knowledge_delivery ${sql.insert({
+          project_id: projectId,
+          agent: record.agent,
+          path: record.path,
+          hash: record.hash,
           installed_at: at,
           verified_at: null,
         })}`;
@@ -352,12 +417,19 @@ const make = Effect.gen(function* () {
     function* (projectId: ProjectId) {
       const plan = yield* planOf(projectId);
       const delivered = yield* deliveriesOf(projectId);
-      return plan.agents.some(({ agent, path: filePath }) =>
-        Pages.needsInstall({
+      return (
+        Pages.pagesNeedInstall({
           rendered: plan.rendered,
-          path: filePath,
-          delivery: delivered.get(agent),
-        }),
+          path: plan.pagesPath,
+          delivery: delivered.get(PAGES_DELIVERY),
+        }) ||
+        plan.agents.some(({ agent, path: filePath }) =>
+          Pages.needsInstall({
+            rendered: plan.rendered,
+            path: filePath,
+            delivery: delivered.get(agent),
+          }),
+        )
       );
     },
     provided,
@@ -401,6 +473,8 @@ const make = Effect.gen(function* () {
         return yield* invalid(`Key "${input.key}" must match [a-z0-9][a-z0-9-]{0,63}.`);
       }
       yield* checkText(input.title, input.body);
+      // A draft names a project the server knows, so accepting it has somewhere to install.
+      yield* projectRoot(input.projectId);
       const encodedSource = yield* encodeSource(source);
       const at = yield* nowIso;
       const id = yield* sql.withTransaction(
@@ -435,26 +509,19 @@ const make = Effect.gen(function* () {
     Effect.catchTags({
       SqlError: io("Could not save the page."),
       SchemaError: io("Could not save the page."),
+      ProjectOperationError: io("Could not read the project."),
     }),
   );
 
   const accept = Effect.fn("KnowledgeStore.accept")(
     function* ({ id, title, body }: KnowledgeAcceptInput) {
-      const entry = yield* entryById(id);
-      if (entry.state !== "draft") {
-        return yield* invalid(`Page "${entry.key}" is ${entry.state}; only a draft is accepted.`);
-      }
       yield* checkText(title, body);
       const at = yield* nowIso;
-      yield* sql`
-        UPDATE knowledge_entry
-        SET state = 'accepted', title = ${title ?? entry.title}, body = ${body ?? entry.body},
-          accepted_at = ${at}
-        WHERE id = ${id} AND state = 'draft'
-      `;
-      const accepted = yield* entryById(id);
-      yield* installAfter(accepted, "accepted");
-      return accepted;
+      const moved = yield* acceptRow({ id, title: title ?? null, body: body ?? null, at });
+      // Gone, or no longer a draft: a second client is refused, not told the first one's result.
+      if (Option.isNone(moved)) return yield* refused(id, "a draft is accepted");
+      yield* installAfter(moved.value, "accepted");
+      return moved.value;
     },
     Effect.catchTags({
       SqlError: io("Could not accept the page."),
@@ -463,20 +530,12 @@ const make = Effect.gen(function* () {
   );
 
   const retire = Effect.fn("KnowledgeStore.retire")(
-    function* ({ id }: KnowledgeRetireInput) {
-      const entry = yield* entryById(id);
-      if (entry.state === "retired") {
-        return yield* invalid(`Page "${entry.key}" is already retired.`);
-      }
+    function* ({ id }: KnowledgeIdInput) {
       const at = yield* nowIso;
-      yield* sql`
-        UPDATE knowledge_entry SET state = 'retired', retired_at = ${at}
-        WHERE id = ${id} AND state = ${entry.state}
-      `;
-      const retired = yield* entryById(id);
-      // A draft was never written, so discarding one leaves the project as it is.
-      if (entry.state === "accepted") yield* installAfter(retired, "retired");
-      return retired;
+      const moved = yield* retireRow({ id, from: "accepted", at });
+      if (Option.isNone(moved)) return yield* refused(id, "an accepted page is retired");
+      yield* installAfter(moved.value, "retired");
+      return moved.value;
     },
     Effect.catchTags({
       SqlError: io("Could not retire the page."),
@@ -484,7 +543,20 @@ const make = Effect.gen(function* () {
     }),
   );
 
-  return KnowledgeStore.of({ list, propose, accept, retire, install, verify, outdated });
+  const discard = Effect.fn("KnowledgeStore.discard")(
+    function* ({ id }: KnowledgeIdInput) {
+      const at = yield* nowIso;
+      const moved = yield* retireRow({ id, from: "draft", at });
+      if (Option.isNone(moved)) return yield* refused(id, "a draft is discarded");
+      return moved.value;
+    },
+    Effect.catchTags({
+      SqlError: io("Could not discard the draft."),
+      SchemaError: io("Could not discard the draft."),
+    }),
+  );
+
+  return KnowledgeStore.of({ list, propose, accept, retire, discard, install, verify, outdated });
 });
 
 export const layer = Layer.effect(KnowledgeStore, make);

@@ -1,7 +1,8 @@
 import { assert, it } from "@effect/vitest";
-import { ProjectId, ThreadId, type KnowledgeError } from "@t3tools/contracts";
+import { ProjectId, ThreadId, type KnowledgeEntry, type KnowledgeError } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Result from "effect/Result";
 
 import * as KnowledgeStore from "./KnowledgeStore.ts";
 import { onHost, projectId, world } from "./testkit.ts";
@@ -215,7 +216,10 @@ it.effect(
       const idle = yield* w.writing(store.install({ projectId }));
       assert.deepStrictEqual(idle.writes, []);
 
-      assert.include(yield* failure(store.retire({ id: tests.id })), "already retired");
+      assert.strictEqual(
+        yield* failure(store.retire({ id: tests.id })),
+        'Page "tests" is retired; only an accepted page is retired.',
+      );
       // A retired key is free again.
       const reused = yield* store.propose(
         { projectId, key: "db", title: "The database", body: "Moved." },
@@ -223,10 +227,18 @@ it.effect(
       );
       assert.strictEqual(reused.state, "draft");
 
-      // Discarding a draft writes nothing.
-      const discarded = yield* w.writing(store.retire({ id: reused.id }));
+      // Retiring is for accepted pages; a draft is discarded, which writes nothing.
+      assert.strictEqual(
+        yield* failure(store.retire({ id: reused.id })),
+        'Page "db" is draft; only an accepted page is retired.',
+      );
+      const discarded = yield* w.writing(store.discard({ id: reused.id }));
       assert.strictEqual(discarded.value.state, "retired");
       assert.deepStrictEqual(discarded.writes, []);
+      assert.strictEqual(
+        yield* failure(store.discard({ id: tests.id })),
+        'Page "tests" is retired; only a draft is discarded.',
+      );
     }).pipe(Effect.provide(layerTest)),
 );
 
@@ -254,10 +266,88 @@ it.effect("a damaged block refuses the install; the acceptance stands and nothin
   }).pipe(Effect.provide(layerTest)),
 );
 
+/** Runs the requests at once, as two clients would, and keeps each one's outcome. */
+const atOnce = <A>(requests: ReadonlyArray<Effect.Effect<A, KnowledgeError>>) =>
+  Effect.all(requests.map(Effect.result), { concurrency: "unbounded" });
+
+it.effect("of two requests to accept one draft, one accepts it and the other is refused", () =>
+  Effect.gen(function* () {
+    const store = yield* KnowledgeStore.KnowledgeStore;
+    const draft = yield* store.propose(
+      { projectId, key: "tests", title: "Running the tests", body: "Use vp." },
+      { kind: "person" },
+    );
+    const outcomes = yield* atOnce([
+      store.accept({ id: draft.id, title: "First" }),
+      store.accept({ id: draft.id, title: "Second" }),
+    ]);
+    const won = outcomes.filter(Result.isSuccess);
+    const lost = outcomes.filter(Result.isFailure);
+    assert.strictEqual(won.length, 1);
+    assert.strictEqual(lost.length, 1);
+    assert.strictEqual(lost[0]?.failure.code, "invalid");
+    assert.strictEqual(
+      lost[0]?.failure.message,
+      'Page "tests" is accepted; only a draft is accepted.',
+    );
+    // The page holds the winner's edit, never the loser's.
+    const [page] = yield* store.list({ projectId, state: "accepted" });
+    assert.strictEqual(page?.title, won[0]?.success.title);
+  }).pipe(Effect.provide(layerTest)),
+);
+
+it.effect("of two requests to retire one page, one retires it and the other is refused", () =>
+  Effect.gen(function* () {
+    const store = yield* KnowledgeStore.KnowledgeStore;
+    const w = yield* world;
+    const page = yield* accepted("tests", "Running the tests", "Use vp.");
+    const outcomes = yield* atOnce([store.retire({ id: page.id }), store.retire({ id: page.id })]);
+    assert.strictEqual(outcomes.filter(Result.isSuccess).length, 1);
+    const lost = outcomes.filter(Result.isFailure);
+    assert.strictEqual(lost.length, 1);
+    assert.strictEqual(lost[0]?.failure.code, "invalid");
+    assert.strictEqual(
+      lost[0]?.failure.message,
+      'Page "tests" is retired; only an accepted page is retired.',
+    );
+    assert.isFalse(yield* w.fs.exists(w.page("tests")));
+  }).pipe(Effect.provide(layerTest)),
+);
+
+it.effect("accepting and discarding one draft at once: one wins and the other is refused", () =>
+  Effect.gen(function* () {
+    const store = yield* KnowledgeStore.KnowledgeStore;
+    const w = yield* world;
+    const draft = yield* store.propose(
+      { projectId, key: "tests", title: "Running the tests", body: "Use vp." },
+      { kind: "person" },
+    );
+    const outcomes = yield* atOnce<KnowledgeEntry>([
+      store.accept({ id: draft.id }),
+      store.discard({ id: draft.id }),
+    ]);
+    const won = outcomes.filter(Result.isSuccess);
+    assert.strictEqual(won.length, 1);
+    assert.strictEqual(outcomes.filter(Result.isFailure).length, 1);
+    const [now] = yield* store.list({ projectId });
+    assert.strictEqual(now?.state, won[0]?.success.state);
+    assert.strictEqual(yield* w.fs.exists(w.page("tests")), now?.state === "accepted");
+  }).pipe(Effect.provide(layerTest)),
+);
+
 it.effect("an unknown project or page answers not found", () =>
   Effect.gen(function* () {
     const store = yield* KnowledgeStore.KnowledgeStore;
     const elsewhere = ProjectId.make("project:elsewhere");
+    const proposed = yield* Effect.flip(
+      store.propose(
+        { projectId: elsewhere, key: "tests", title: "Running the tests", body: "Use vp." },
+        { kind: "person" },
+      ),
+    );
+    assert.strictEqual(proposed.code, "not_found");
+    assert.strictEqual(proposed.message, 'Project "project:elsewhere" was not found.');
+    assert.deepStrictEqual(yield* store.list({ projectId: elsewhere }), []);
     assert.strictEqual(
       (yield* Effect.flip(store.install({ projectId: elsewhere }))).code,
       "not_found",

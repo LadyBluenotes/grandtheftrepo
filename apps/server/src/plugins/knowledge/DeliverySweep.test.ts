@@ -60,6 +60,45 @@ it.effect(
     }).pipe(Effect.provide(layerTest)),
 );
 
+it.effect("with no agent in use, a page write that failed after accepting is retried", () =>
+  Effect.gen(function* () {
+    const store = yield* KnowledgeStore.KnowledgeStore;
+    const sweep = yield* Sweep;
+    const w = yield* world;
+    yield* w.dropClaude;
+    // A file where the knowledge directory goes makes every page write fail.
+    yield* w.fs.writeFileString(w.pagesDirectory, "");
+    const draft = yield* store.propose(
+      { projectId, key: "tests", title: "Running the tests", body: "Body." },
+      { kind: "person" },
+    );
+    const refused = yield* Effect.flip(store.accept({ id: draft.id }));
+    assert.include(refused.message, 'Page "tests" is accepted, but the install failed:');
+    assert.deepStrictEqual(yield* sweep.run({ dryRun: false }), {
+      examined: 1,
+      acted: 0,
+      flags: 1,
+    });
+
+    yield* w.fs.remove(w.pagesDirectory);
+    assert.deepStrictEqual(yield* sweep.run({ dryRun: false }), {
+      examined: 1,
+      acted: 1,
+      flags: 0,
+    });
+    assert.strictEqual(
+      yield* w.fs.readFileString(w.page("tests")),
+      "# Running the tests\n\nBody.\n",
+    );
+    assert.isFalse(yield* w.fs.exists(w.claudeFile));
+    assert.deepStrictEqual(yield* sweep.run({ dryRun: false }), {
+      examined: 1,
+      acted: 0,
+      flags: 0,
+    });
+  }).pipe(Effect.provide(layerTest)),
+);
+
 it.effect(
   "leaves a hand edit for a person, and flags an install that fails until the file is fixed",
   () =>

@@ -22,6 +22,7 @@ export const table = PluginRpc.defineHandlers(KNOWLEDGE_METHODS)({
   propose: (input) => Effect.flatMap(store, (pages) => pages.propose(input, { kind: "person" })),
   accept: (input) => Effect.flatMap(store, (pages) => pages.accept(input)),
   retire: (input) => Effect.flatMap(store, (pages) => pages.retire(input)),
+  discard: (input) => Effect.flatMap(store, (pages) => pages.discard(input)),
   install: (input) => Effect.flatMap(store, (pages) => pages.install(input)),
   verify: (input) => Effect.flatMap(store, (pages) => pages.verify(input)),
 });

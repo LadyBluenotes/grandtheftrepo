@@ -28,6 +28,8 @@ export interface Rendered {
   readonly block: { readonly text: string; readonly hash: string } | undefined;
   /** sha256 of everything an install writes, recorded per agent so the sweep sees a change. */
   readonly hash: string;
+  /** sha256 of the page files alone, recorded once per project whatever agents are in use. */
+  readonly pagesHash: string;
 }
 
 /** What the accepted pages render to: each page with its title as the heading, and the index. */
@@ -39,6 +41,7 @@ export const render = (
     path: knowledgePagePath(page.key),
     text: `# ${page.title}\n\n${page.body.trim()}\n`,
   }));
+  const files = pages.map((page) => `${page.path}\n${page.text}`);
   const content =
     sorted.length === 0
       ? undefined
@@ -52,7 +55,8 @@ export const render = (
             text: `${INDEX_MARKERS.start}\n${content}${INDEX_MARKERS.end}`,
             hash: sha256(content),
           },
-    hash: sha256([content ?? "", ...pages.map((page) => `${page.path}\n${page.text}`)].join("\0")),
+    hash: sha256([content ?? "", ...files].join("\0")),
+    pagesHash: sha256(files.join("\0")),
   };
 };
 
@@ -69,6 +73,20 @@ export const needsInstall = (input: {
   input.delivery === undefined
     ? input.rendered.block !== undefined
     : input.delivery.hash !== input.rendered.hash || input.delivery.path !== input.path;
+
+/**
+ * Whether the page files need an install, with or without an agent in use: their recorded
+ * delivery is of other pages or another directory, or there is none while a page is accepted.
+ */
+export const pagesNeedInstall = (input: {
+  readonly rendered: Rendered;
+  /** The project's knowledge directory today. */
+  readonly path: string;
+  readonly delivery: { readonly hash: string; readonly path: string } | undefined;
+}) =>
+  input.delivery === undefined
+    ? input.rendered.pages.length > 0
+    : input.delivery.hash !== input.rendered.pagesHash || input.delivery.path !== input.path;
 
 type Status = KnowledgeVerifyResult["status"];
 

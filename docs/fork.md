@@ -197,11 +197,16 @@ them half-evaluated. The host hands `toolkitRegistration` to `ServerPlugin.mcp` 
   `AGENTS.md` and `.github/copilot-instructions.md`, for the agents in use as the policy plugin
   resolves them. The block helpers both plugins use are in
   `apps/server/src/plugins/InstructionBlocks.ts`. Agents propose drafts with the
-  `knowledge_propose` MCP tool, from a thread only, and read accepted pages with `knowledge_list`. `knowledge.accept` and `.retire` install at once; an
-  install failure is their error, though the change stands. `knowledge.install` and `.verify` are
-  gateway methods too. The `knowledge/delivery` sweep installs a project whose recorded delivery
-  differs from what its accepted pages render to, only while no thread in the project has a run,
-  and never over a hand edit, which `verify` reports as `drifted`. Server:
+  `knowledge_propose` MCP tool, from a thread only, for a project the server knows, and read
+  accepted pages with `knowledge_list`. `knowledge.accept` (from `draft`) and `.retire` (from
+  `accepted`) move a page in one conditional update, so a request that lost a race is refused, and
+  install at once; an install failure is their error, though the change stands.
+  `knowledge.discard` keeps a draft as retired without writing. `knowledge.install` and `.verify`
+  are gateway methods too. Each install records the hash of the page files under the reserved
+  agent `pages`, and of the index block per agent in use. The `knowledge/delivery` sweep installs a
+  project when either differs from what its accepted pages render to, even with no agent in use,
+  only while no thread in the project has a run, and never over a hand edit, which `verify`
+  reports as `drifted`. Server:
   `apps/server/src/plugins/knowledge/`. Contracts: `packages/contracts/src/plugins/knowledge.ts`.
   Web: `apps/web/src/plugins/knowledge/`, at `/plugins/knowledge`. User guide:
   [Project knowledge](./user/knowledge.md).
