@@ -6,6 +6,7 @@ import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as SqlClient from "effect/sql/SqlClient";
+import type * as SqlError from "effect/sql/SqlError";
 import * as Stream from "effect/Stream";
 import * as EventSink from "../orchestration-v2/EventSink.ts";
 import { forkParked } from "../serverActivation.ts";
@@ -27,7 +28,7 @@ export type Handlers<E = never> = {
 };
 
 /** Attempts after which a failed event stays in the failure table for a person to look at. */
-const MAX_ATTEMPTS = 5;
+export const MAX_ATTEMPTS = 5;
 /** The cursor is saved at every multiple of this even when no handler ran, bounding replay after a restart. */
 const CURSOR_SAVE_INTERVAL = 256;
 const RESUBSCRIBE_DELAY = Duration.minutes(1);
@@ -47,6 +48,11 @@ export const start = Effect.fn("PluginReactor.start")(function* <E = never>(opti
   /** Where a brand-new cursor begins: at the first event ever, or at the newest one now. */
   readonly from: "start" | "now";
   readonly handlers: Handlers<E>;
+  /**
+   * Runs once, in the transaction that saves a brand-new cursor, just after `from` was sampled:
+   * a plugin that must tell events before its cursor from later ones records the boundary here.
+   */
+  readonly onCursorCreated?: Effect.Effect<void, SqlError.SqlError, SqlClient.SqlClient>;
 }) {
   const sql = yield* SqlClient.SqlClient;
   const sink = yield* EventSink.EventSinkV2;
@@ -81,7 +87,14 @@ export const start = Effect.fn("PluginReactor.start")(function* <E = never>(opti
     const saved = rows[0]?.sequence;
     if (saved === undefined) {
       const initial = options.from === "now" ? latest : 0;
-      yield* saveCursor(initial);
+      yield* sql.withTransaction(
+        Effect.andThen(
+          saveCursor(initial),
+          (options.onCursorCreated ?? Effect.void).pipe(
+            Effect.provideService(SqlClient.SqlClient, sql),
+          ),
+        ),
+      );
       return initial;
     }
     if (saved > latest) {

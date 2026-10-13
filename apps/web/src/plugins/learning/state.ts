@@ -165,6 +165,7 @@ export const FAILURE_KINDS = [
   "changes_requested",
   "reopened_after_settlement",
   "review_verdict",
+  "security",
   "manual",
 ] as const satisfies ReadonlyArray<LearningFailureKind>;
 export const isFailureKind = oneOf(FAILURE_KINDS);
@@ -174,6 +175,7 @@ export const FAILURE_KIND_LABEL: Record<LearningFailureKind, string> = {
   changes_requested: "Changes requested",
   reopened_after_settlement: "Reopened after done",
   review_verdict: "Review verdict",
+  security: "Security finding",
   manual: "Manual",
 };
 

@@ -180,7 +180,21 @@ them half-evaluated. The host hands `toolkitRegistration` to `ServerPlugin.mcp` 
   the request; once the thread's latest is another checkpoint, the `review/invalidation` sweep marks
   the request stale for good, invalidates the verdicts on its checkpoint, opens a request at the
   latest, and keeps a `stale_review` attention flag until that one is answered. `ReviewGate.check`
-  is the completion gate a ticket asks before it finishes; nothing calls it yet. Server:
+  is the completion gate a ticket asks before it finishes; nothing calls it yet. The plugin's
+  reactor tests the lines each root-run turn adds against six fixed patterns unless the project's
+  security mode is `off`, and the `review/security` sweep records each finding as a `security`
+  correction, because a reactor sees only its own plugin's services; in `block` a finding refuses
+  `review.request`, verdicts and `ReviewGate.check`, holds back the invalidation sweep's
+  replacement request and keeps a `security_hold` flag until `review.security.ack`. The same sweep calls the reactor's
+  `retryFailed` each tick and settles an event the reactor gave up on as a scan row, with a
+  `scan_failed` finding in `block`; in `block` a turn the scan cannot read, a stopped or failed
+  one included, is held as a `scan_failed` finding rather than passed. The checkpoint becomes visible
+  before the reactor reaches it, so the reactor writes a `security_scan` row with each checkpoint's
+  findings, and in `block` `review.request` (code `scan_pending`) and the invalidation sweep wait
+  for that row. A checkpoint captured before `security_scan_since` never gets one and does not
+  wait; the reactor records that time through `PluginReactor.start`'s `onCursorCreated`, in the
+  transaction that creates its cursor from the newest event, so the boundary and the cursor agree.
+  Server:
   `apps/server/src/plugins/review/`. Contracts: `packages/contracts/src/plugins/review.ts`. No
   screen yet. User guide: [Policies and reviews](./user/policies-and-reviews.md#reviews).
 - **caveman**: whether each provider instance's model traffic goes through caveman's loopback

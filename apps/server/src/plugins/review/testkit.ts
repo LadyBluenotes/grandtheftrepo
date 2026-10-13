@@ -2,6 +2,7 @@ import {
   CheckpointId,
   OrchestrationV2Checkpoint,
   OrchestrationV2CheckpointScope,
+  type OrchestrationV2Run,
   ProjectId,
   ThreadId,
   type ReviewVerdictInput,
@@ -24,6 +25,7 @@ import { migrations } from "./migrations.ts";
 import * as ReviewGate from "./ReviewGate.ts";
 import * as ReviewInvalidationSweep from "./ReviewInvalidationSweep.ts";
 import * as ReviewRequests from "./ReviewRequests.ts";
+import * as SecurityHold from "./security/SecurityHold.ts";
 import * as VerdictStore from "./VerdictStore.ts";
 
 export const reviewed = ThreadId.make("thread:reviewed");
@@ -100,6 +102,7 @@ const initialCheckpoints: Readonly<Record<string, ReadonlyArray<OrchestrationV2C
  */
 export const readModel = Effect.gen(function* () {
   const checkpoints = yield* Ref.make(initialCheckpoints);
+  const runs = yield* Ref.make<Readonly<Record<string, ReadonlyArray<OrchestrationV2Run>>>>({});
   const setLater = (status: "ready" | "stale") =>
     Ref.update(checkpoints, (all) => ({
       ...all,
@@ -112,14 +115,18 @@ export const readModel = Effect.gen(function* () {
     layer: Layer.mock(ThreadManagementService.ThreadManagementService)({
       getThreadShell: (id) => Effect.succeed(id === nobody ? null : liveThreadShell(id)),
       getThreadRecords: (id) =>
-        Effect.map(Ref.get(checkpoints), (all) => ({
+        Effect.map(Effect.all([Ref.get(checkpoints), Ref.get(runs)]), ([all, allRuns]) => ({
           ...idleThreadProjection(liveThreadShell(id)),
           checkpointScopes: [rootScope(id)],
           checkpoints: all[id] ?? [],
+          runs: allRuns[id] ?? [],
         })),
     }),
     captureLater: setLater("ready"),
     rollBackLater: setLater("stale"),
+    /** Replaces the runs `threadId`'s records hold, which start empty. */
+    setRuns: (threadId: ThreadId, list: ReadonlyArray<OrchestrationV2Run>) =>
+      Ref.update(runs, (all) => ({ ...all, [threadId]: list })),
   };
 });
 
@@ -174,16 +181,21 @@ export const harness = Effect.gen(function* () {
     threads.layer,
     Attention.layer.pipe(Layer.provide(Layer.succeed(HostDatabase.HostDatabase, host.sql))),
   );
-  const { store, requests, gate, sweep } = yield* Effect.all({
+  const { store, requests, gate, sweep, security, attention } = yield* Effect.all({
     store: VerdictStore.VerdictStore,
     requests: ReviewRequests.ReviewRequests,
     gate: ReviewGate.ReviewGate,
     sweep: ReviewInvalidationSweep.sweep,
+    security: SecurityHold.SecurityHold,
+    attention: Attention.Attention,
   }).pipe(
     Effect.provide(
-      Layer.mergeAll(VerdictStore.layer, ReviewRequests.layer, ReviewGate.layer).pipe(
-        Layer.provideMerge(layerDeps),
-      ),
+      Layer.mergeAll(
+        VerdictStore.layer,
+        ReviewRequests.layer,
+        ReviewGate.layer,
+        SecurityHold.layer,
+      ).pipe(Layer.provideMerge(layerDeps)),
     ),
   );
   const count = (sql: SqlClient.SqlClient, table: string) =>
@@ -195,6 +207,8 @@ export const harness = Effect.gen(function* () {
     store,
     requests,
     gate,
+    security,
+    attention,
     corrections,
     sweep: sweep.run,
     verdictCount: count(review.sql, "review_verdicts"),
@@ -206,6 +220,7 @@ export const harness = Effect.gen(function* () {
     list: store.list,
     captureLater: threads.captureLater,
     rollBackLater: threads.rollBackLater,
+    setRuns: threads.setRuns,
     /** Rows the review and host connections have inserted, updated or deleted since they opened. */
     changes: Effect.map(
       Effect.forEach(

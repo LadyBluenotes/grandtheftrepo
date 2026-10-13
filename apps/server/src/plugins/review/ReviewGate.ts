@@ -8,13 +8,15 @@ import type * as SqlError from "effect/sql/SqlError";
 import type * as Orchestrator from "../../orchestration-v2/Orchestrator.ts";
 import * as ThreadManagementService from "../../orchestration-v2/ThreadManagementService.ts";
 import { latestCheckpoint, type RequestRow } from "./ReviewRequests.ts";
+import { securityGate } from "./security/SecurityHold.ts";
 
 export class ReviewGate extends Context.Service<
   ReviewGate,
   {
     /**
      * Whether review lets the thread's work complete; a ticket's completion asks it first. A thread
-     * nobody asked to review passes. Otherwise its newest open or answered request decides, or its
+     * the security scan holds, or in a `block` project one whose latest checkpoint the scan has not
+     * handled yet, does not pass. Otherwise a thread nobody asked to review passes. Otherwise its newest open or answered request decides, or its
      * newest stale one when none stands, and the refusal is a `gated` error saying why: the request
      * is stale or names a checkpoint the thread has moved past, it has no verdict yet, or the
      * newest verdict on its checkpoint asked for changes.
@@ -43,6 +45,11 @@ const make = Effect.gen(function* () {
 
   const check: ReviewGate["Service"]["check"] = (threadId) =>
     Effect.gen(function* () {
+      const latest = yield* latestCheckpoint(threads, threadId).pipe(Effect.catch(io));
+      const shell = yield* threads.getThreadShell(threadId).pipe(Effect.catch(io));
+      if (latest !== null && latest !== undefined && shell !== null) {
+        yield* securityGate(sql, { threadId, projectId: shell.projectId, checkpoint: latest });
+      }
       // The standing request decides, not the row made last: a sweep can supersede a newer
       // request with an older one still standing at the thread's latest checkpoint.
       const [deciding] = yield* sql<RequestRow>`SELECT * FROM review_request
@@ -51,7 +58,6 @@ const make = Effect.gen(function* () {
       if (deciding === undefined) return;
       if (deciding.status === "stale") return yield* outOfDate(deciding.checkpoint_id);
       // The sweep marks a request stale on its next tick; until then the thread itself says so.
-      const latest = yield* latestCheckpoint(threads, threadId).pipe(Effect.catch(io));
       if (latest !== null && latest !== undefined && latest.id !== deciding.checkpoint_id) {
         return yield* outOfDate(deciding.checkpoint_id);
       }
