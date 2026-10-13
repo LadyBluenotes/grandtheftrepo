@@ -396,13 +396,19 @@ it.effect(
 );
 
 it.effect(
-  "a window where only the tool output total doubles opens no item and is not compared again",
+  "a window where the tool output total doubles and the largest result does not opens no item",
   () =>
     Effect.scoped(
       Effect.gen(function* () {
         const learning = yield* setup();
-        learning.windows.set(day("2026-09-28"), [measure("tool_output_total", 5000)]);
-        learning.windows.set(day("2026-10-05"), [measure("tool_output_total", 10_000)]);
+        learning.windows.set(day("2026-09-28"), [
+          measure("tool_output_total", 5000),
+          measure("tool_output_max_per_call", 4000),
+        ]);
+        learning.windows.set(day("2026-10-05"), [
+          measure("tool_output_total", 10_000),
+          measure("tool_output_max_per_call", 4000),
+        ]);
 
         assert.deepEqual(yield* learning.sweep(), { examined: 1, acted: 0, flags: 0 });
         assert.deepEqual(yield* learning.itemsOf(projectId), []);
