@@ -19,10 +19,13 @@ import * as PolicyService from "./PolicyService.ts";
 
 const projectId = POLICY_ENVIRONMENT_PROJECT_ID;
 const decodeError = Schema.decodeUnknownEffect(PolicyError);
+const decodeListing = Schema.decodeUnknownEffect(POLICY_METHODS.list.output);
 
 /** A policy call through the operate gateway, as a client sends it. */
 const operate = (method: string, input: unknown) =>
   PluginRpc.dispatch("operate", table, { method, input });
+const read = (method: string, input: unknown) =>
+  PluginRpc.dispatch("read", table, { method, input });
 
 /** A temp home with only Codex's directory, so Claude and Copilot are skipped. */
 const layerHome = Layer.effect(
@@ -110,6 +113,49 @@ it.layer(layerTest)("policy methods through the operate gateway", (it) => {
       assert.deepEqual(verified, [
         { agent: "codex", status: "ok", path: codexFile, blockMatches: true, rulesCurrent: true },
       ]);
+    }),
+  );
+
+  it.effect("list answers through the read gateway with versions and each agent's status", () =>
+    Effect.gen(function* () {
+      const path = yield* Path.Path;
+      const home = yield* HostProcess.HomeDirectory;
+      const codexFile = path.join(home, ".codex", "AGENTS.md");
+      yield* operate(POLICY_METHODS.create.method, {
+        projectId,
+        key: "review",
+        title: "Review",
+        body: "Run the tests twice.",
+      });
+      const listed = yield* read(POLICY_METHODS.list.method, { projectId });
+      const decoded = yield* decodeListing(listed);
+      const review = decoded.find((policy) => policy.key === "review");
+      assert.deepEqual(
+        review?.versions.map((version) => [version.version, version.state]),
+        [
+          [1, "accepted"],
+          [2, "draft"],
+        ],
+      );
+      // The accepted version stays on show while the draft waits.
+      assert.deepEqual(
+        [review?.version, review?.state, review?.body],
+        [1, "accepted", "Run the tests."],
+      );
+      assert.deepEqual(
+        review?.status.map((agent) => [agent.agent, agent.status]),
+        [
+          ["claude", "missing"],
+          ["codex", "ok"],
+          ["copilot", "missing"],
+        ],
+      );
+      assert.strictEqual(review?.deliveries[0]?.path, codexFile);
+      const refused = yield* operate(POLICY_METHODS.list.method, { projectId }).pipe(
+        Effect.andThen(Effect.die("expected a failure")),
+        Effect.flip,
+      );
+      assert.strictEqual(refused.message, 'Method "policy.list" needs the read scope.');
     }),
   );
 });

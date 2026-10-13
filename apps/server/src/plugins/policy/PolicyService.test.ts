@@ -45,6 +45,23 @@ const layerDatabase = Layer.effect(
   ),
 );
 
+/** Every path a text read asked for, so a test can count how often a file is read. */
+const reads: Array<string> = [];
+
+const layerCountedReads = Layer.effect(
+  FileSystem.FileSystem,
+  Effect.map(FileSystem.FileSystem, (fs) =>
+    FileSystem.FileSystem.of({
+      ...fs,
+      readFileString: (filePath, encoding) =>
+        Effect.suspend(() => {
+          reads.push(filePath);
+          return fs.readFileString(filePath, encoding);
+        }),
+    }),
+  ),
+);
+
 const layerTest = PolicyService.layer.pipe(
   Layer.provideMerge(layerDatabase),
   Layer.provideMerge(
@@ -63,6 +80,7 @@ const layerTest = PolicyService.layer.pipe(
   Layer.provideMerge(
     Layer.fresh(ServerConfig.layerTest(process.cwd(), { prefix: "t3code-policy-test-" })),
   ),
+  Layer.provideMerge(layerCountedReads),
   Layer.provideMerge(NodeServices.layer),
 );
 
@@ -327,7 +345,7 @@ it.layer(layerTest)("PolicyService", (it) => {
         yield* fs.readFileString(codex!.path),
         "<!-- fork-policy:start key=project-1/local -->",
       );
-      const listed = yield* policies.list(local);
+      const listed = yield* policies.listWithStatus(local);
       assert.include(
         listed.map((policy) => `${policy.projectId}/${policy.key}@${policy.version}`),
         "project-1/local@1",
@@ -344,6 +362,35 @@ it.layer(layerTest)("PolicyService", (it) => {
         (yield* policies.list(ProjectId.make("project-2"))).map((policy) => policy.projectId),
         ["*", "*", "*", "*", "*"],
       );
+
+      // Every version in its latest state, the shown body, and each agent's file as it is now.
+      const restored = listed.find((policy) => policy.key === key);
+      assert.deepStrictEqual(
+        restored?.versions.map((version) => [version.version, version.state, version.title]),
+        [
+          [1, "accepted", "Restore"],
+          [2, "superseded", "Restore"],
+        ],
+      );
+      assert.strictEqual(restored?.body, "First.");
+      assert.deepStrictEqual(
+        restored?.status.map((agent) => [agent.agent, agent.status]),
+        [
+          ["claude", "missing"],
+          ["codex", "ok"],
+          ["copilot", "missing"],
+        ],
+      );
+      // Listing marks nothing verified: that is verify's job.
+      assert.strictEqual(restored?.deliveries[0]?.verifiedAt, null);
+      const text = yield* fs.readFileString(codex!.path);
+      yield* fs.writeFileString(codex!.path, text.replace("First.", "Edited."));
+      const drifted = (yield* policies.listWithStatus(local)).find((policy) => policy.key === key);
+      assert.strictEqual(
+        drifted?.status.find((agent) => agent.agent === "codex")?.status,
+        "drifted",
+      );
+      yield* fs.writeFileString(codex!.path, text);
     }),
   );
 
@@ -453,5 +500,231 @@ it.layer(layerTest)("PolicyService", (it) => {
       );
       yield* fs.remove(rulesPath);
     }),
+  );
+
+  it.effect("list reads each instruction file once however many policies it holds", () =>
+    Effect.gen(function* () {
+      const policies = yield* PolicyService.PolicyService;
+      const path = yield* Path.Path;
+      const home = yield* HostProcess.HomeDirectory;
+      const claudeFile = path.join(home, "claude-config", "CLAUDE.md");
+      const codexFile = path.join(home, ".codex", "AGENTS.md");
+      const local = ProjectId.make("project-reads");
+      const keys = ["alpha", "beta", "gamma"];
+      for (const key of keys) {
+        yield* policies.create({ projectId: local, key, title: key, body: `Reads ${key}.` });
+        yield* policies.accept({ projectId: local, key, version: 1 });
+        yield* policies.install({ projectId: local, key, agents: ["claude", "codex"] });
+      }
+
+      reads.length = 0;
+      const listed = yield* policies.listWithStatus(local);
+
+      assert.strictEqual(reads.filter((file) => file === claudeFile).length, 1);
+      assert.strictEqual(reads.filter((file) => file === codexFile).length, 1);
+      for (const key of keys) {
+        assert.deepStrictEqual(
+          listed
+            .find((policy) => policy.key === key)
+            ?.status.map((agent) => [agent.agent, agent.status]),
+          [
+            ["claude", "ok"],
+            ["codex", "ok"],
+            ["copilot", "missing"],
+          ],
+        );
+      }
+    }),
+  );
+
+  it.effect("a delivery of another version than the accepted one lists as outdated", () =>
+    Effect.gen(function* () {
+      const policies = yield* PolicyService.PolicyService;
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const home = yield* HostProcess.HomeDirectory;
+      const codexFile = path.join(home, ".codex", "AGENTS.md");
+      const local = ProjectId.make("project-outdated");
+      const key = "stale";
+      const codexStatus = Effect.map(
+        policies.listWithStatus(local),
+        (listed) =>
+          listed
+            .find((policy) => policy.key === key)
+            ?.status.find((agent) => agent.agent === "codex")?.status,
+      );
+
+      yield* policies.create({ projectId: local, key, title: "Stale", body: "Outdated one." });
+      yield* policies.accept({ projectId: local, key, version: 1 });
+      yield* policies.install({ projectId: local, key, agents: ["codex"] });
+      assert.strictEqual(yield* codexStatus, "ok");
+
+      // Version 2 is accepted but not delivered: the file still holds version 1, intact.
+      yield* policies.create({ projectId: local, key, title: "Stale", body: "Outdated two." });
+      yield* policies.accept({ projectId: local, key, version: 2 });
+      assert.strictEqual(yield* codexStatus, "outdated");
+      // verify still answers whether the block is what was installed.
+      assert.strictEqual(
+        (yield* policies.verify({ projectId: local, key, agents: ["codex"] }))[0]?.status,
+        "ok",
+      );
+
+      // A hand edit is reported over the older version.
+      const text = yield* fs.readFileString(codexFile);
+      yield* fs.writeFileString(codexFile, text.replace("Outdated one.", "Edited by hand."));
+      assert.strictEqual(yield* codexStatus, "drifted");
+
+      yield* policies.install({ projectId: local, key, agents: ["codex"] });
+      assert.strictEqual(yield* codexStatus, "ok");
+      // Restoring version 1 leaves version 2 in the file, which is not the accepted one either.
+      yield* policies.accept({ projectId: local, key, version: 1 });
+      assert.strictEqual(yield* codexStatus, "outdated");
+    }),
+  );
+
+  it.effect("list gives a key held by the environment and a project each its own rows", () =>
+    Effect.gen(function* () {
+      const policies = yield* PolicyService.PolicyService;
+      const local = ProjectId.make("project-same-key");
+      const key = "shared";
+      // The environment's policy has one version and a delivery; the project's has two and none.
+      yield* policies.create({ projectId, key, title: "Wide", body: "Same key, environment." });
+      yield* policies.accept({ projectId, key, version: 1 });
+      yield* policies.install({ projectId, key, agents: ["codex"] });
+      yield* policies.create({ projectId: local, key, title: "Local", body: "Same key, project." });
+      yield* policies.create({ projectId: local, key, title: "Local", body: "Same key, again." });
+
+      const listed = yield* policies.list(local);
+      const of = (owner: ProjectId) =>
+        listed.find((policy) => policy.projectId === owner && policy.key === key);
+      assert.deepStrictEqual(
+        of(projectId)?.versions.map((version) => version.version),
+        [1],
+      );
+      assert.deepStrictEqual(
+        of(projectId)?.deliveries.map((delivery) => delivery.agent),
+        ["codex"],
+      );
+      assert.deepStrictEqual(
+        of(local)?.versions.map((version) => version.version),
+        [1, 2],
+      );
+      assert.deepStrictEqual(of(local)?.deliveries, []);
+    }),
+  );
+
+  it.effect("list reads no instruction file, so one that cannot be read does not fail it", () =>
+    Effect.gen(function* () {
+      const policies = yield* PolicyService.PolicyService;
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const home = yield* HostProcess.HomeDirectory;
+      const claudeFile = path.join(home, "claude-config", "CLAUDE.md");
+      const local = ProjectId.make("project-unreadable");
+      const key = "locked";
+      yield* policies.create({ projectId: local, key, title: "Locked", body: "Locked in." });
+      yield* policies.accept({ projectId: local, key, version: 1 });
+      yield* policies.install({ projectId: local, key, agents: ["claude"] });
+
+      // A directory where the delivered file was: it exists and cannot be read as text.
+      const text = yield* fs.readFileString(claudeFile);
+      yield* fs.remove(claudeFile);
+      yield* fs.makeDirectory(claudeFile);
+      yield* Effect.gen(function* () {
+        reads.length = 0;
+        const listed = yield* policies.list(local);
+        assert.deepStrictEqual(reads, []);
+        assert.deepStrictEqual(
+          listed.find((policy) => policy.key === key)?.deliveries.map((delivery) => delivery.agent),
+          ["claude"],
+        );
+        const error = yield* Effect.flip(policies.listWithStatus(local));
+        assert.deepStrictEqual(
+          [error.code, error.message],
+          ["io", "Could not read an instruction file."],
+        );
+      }).pipe(
+        Effect.ensuring(
+          Effect.orDie(
+            Effect.andThen(
+              fs.remove(claudeFile, { recursive: true }),
+              fs.writeFileString(claudeFile, text),
+            ),
+          ),
+        ),
+      );
+    }),
+  );
+
+  it.effect(
+    "a delivery into a file the agent no longer reads lists as missing where it reads now",
+    () =>
+      Effect.gen(function* () {
+        const policies = yield* PolicyService.PolicyService;
+        const path = yield* Path.Path;
+        const home = yield* HostProcess.HomeDirectory;
+        const codexFile = path.join(home, ".codex", "AGENTS.md");
+        const movedFile = path.join(home, "codex-moved", "AGENTS.md");
+        const local = ProjectId.make("project-moved");
+        const key = "moved";
+        yield* policies.create({
+          projectId: local,
+          key,
+          title: "Moved",
+          body: "Where Codex reads.",
+        });
+        yield* policies.accept({ projectId: local, key, version: 1 });
+        yield* policies.install({ projectId: local, key, agents: ["codex"] });
+
+        // What the list and verify say of Codex, from whichever service is in context.
+        const codexNow = Effect.gen(function* () {
+          const service = yield* PolicyService.PolicyService;
+          const listed = yield* service.listWithStatus(local);
+          const [verified] = yield* service.verify({ projectId: local, key, agents: ["codex"] });
+          return {
+            listed: listed
+              .find((policy) => policy.key === key)
+              ?.status.find((agent) => agent.agent === "codex"),
+            verified,
+          };
+        });
+        const where = (file: string, status: "ok" | "missing") => {
+          const found = status === "ok";
+          return {
+            agent: "codex" as const,
+            status,
+            path: file,
+            blockMatches: found,
+            rulesCurrent: found,
+          };
+        };
+        assert.deepStrictEqual(yield* codexNow, {
+          listed: where(codexFile, "ok"),
+          verified: where(codexFile, "ok"),
+        });
+
+        // Codex's home moves: the same database, settings that point Codex somewhere else.
+        // Fresh, or the test's own memoized service would answer instead.
+        const movedHome = Layer.fresh(PolicyService.layer).pipe(
+          Layer.provide(
+            ServerSettings.layerTest({
+              providerInstances: {
+                [ProviderInstanceId.make("claudeAgent")]: {
+                  driver: ProviderDriverKind.make("claudeAgent"),
+                  config: { homePath: "~/claude-config" },
+                },
+                [ProviderInstanceId.make("codex")]: {
+                  driver: ProviderDriverKind.make("codex"),
+                  config: { homePath: "~/codex-moved" },
+                },
+              },
+            }),
+          ),
+        );
+        assert.deepStrictEqual(yield* codexNow.pipe(Effect.provide(movedHome)), {
+          listed: where(movedFile, "missing"),
+          verified: where(movedFile, "missing"),
+        });
+      }),
   );
 });

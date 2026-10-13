@@ -7,7 +7,9 @@ import {
   type PolicyAgent,
   type PolicyAgentsInput,
   type PolicyCreateInput,
+  type PolicyDeliveryStatus,
   type PolicyInstallResult,
+  type PolicyListing,
   type PolicyState,
   type PolicyVerifyResult,
   type PolicyVersionRef,
@@ -56,21 +58,12 @@ interface DeliveryRow {
   readonly verified_at: string | null;
 }
 
-/** One policy as `policies` shows it, with the last delivery per agent. */
-export interface PolicyListing {
-  readonly projectId: ProjectId;
-  readonly key: string;
-  readonly title: string;
-  readonly version: number;
-  readonly state: PolicyState;
-  readonly updatedAt: string;
-  readonly deliveries: ReadonlyArray<{
-    readonly agent: PolicyAgent;
-    readonly version: number;
-    readonly path: string;
-    readonly installedAt: string;
-    readonly verifiedAt: string | null;
-  }>;
+/** One policy with the rows `list` and `listWithStatus` build from: its versions and deliveries. */
+interface ListedPolicy {
+  readonly policy: PolicyRow;
+  /** Each version in its latest state, earliest first. */
+  readonly versions: ReadonlyArray<VersionRow & { readonly at: string }>;
+  readonly deliveries: ReadonlyArray<DeliveryRow>;
 }
 
 export class PolicyService extends Context.Service<
@@ -101,8 +94,21 @@ export class PolicyService extends Context.Service<
     readonly verify: (
       input: PolicyAgentsInput,
     ) => Effect.Effect<ReadonlyArray<PolicyVerifyResult>, PolicyError>;
-    /** The project's policies and the environment-wide ones. */
+    /**
+     * The project's policies and the environment-wide ones, each with its versions and recorded
+     * deliveries. It reads only the database, so an instruction file that cannot be read cannot
+     * fail it: the `policy_list` tool and the startup seeders use it.
+     */
     readonly list: (
+      projectId: ProjectId,
+    ) => Effect.Effect<ReadonlyArray<Omit<PolicyListing, "status">>, PolicyError>;
+    /**
+     * `list` with every agent's file re-read now, each file once however many policies it holds.
+     * Unlike `verify` it marks nothing verified and takes no lock, so a read during an install can
+     * show a block as drifted until the next one. It also tells an intact block of another version
+     * than the accepted one (`outdated`), which `verify` does not. The gateway's `policy.list`.
+     */
+    readonly listWithStatus: (
       projectId: ProjectId,
     ) => Effect.Effect<ReadonlyArray<PolicyListing>, PolicyError>;
   }
@@ -341,6 +347,56 @@ const make = Effect.gen(function* () {
     }),
   );
 
+  /**
+   * The delivery if it went into the file the agent reads now. One into another file, such as the
+   * agent's old home, counts as none, as `needsDelivery` has it, so the agent shows as missing
+   * where it reads now.
+   */
+  const intoCurrentFile = (
+    targets: Record<PolicyAgent, string>,
+    delivery: DeliveryRow | undefined,
+  ) =>
+    delivery !== undefined && delivery.target_path === targets[delivery.agent]
+      ? delivery
+      : undefined;
+
+  /**
+   * One agent's delivery against the text of the file it went into; an agent never delivered to is
+   * missing. `text` is that file's contents, undefined when there is no such file, so a caller
+   * checking many blocks reads each file once.
+   */
+  const inspect = (input: {
+    readonly id: string;
+    readonly rulesHash: string;
+    readonly agent: PolicyAgent;
+    readonly targetPath: string;
+    readonly delivery: DeliveryRow | undefined;
+    readonly text: string | undefined;
+  }) => {
+    const { agent, delivery, text } = input;
+    if (delivery === undefined) {
+      return {
+        agent,
+        status: "missing",
+        path: input.targetPath,
+        blockMatches: false,
+        rulesCurrent: false,
+      } satisfies PolicyVerifyResult;
+    }
+    const found =
+      text === undefined
+        ? ({ kind: "absent" } as const)
+        : Blocks.findBlock(text, policyMarkers(input.id));
+    const blockMatches = found.kind === "found" && found.hash === delivery.rendered_hash;
+    return {
+      agent,
+      status: blockMatches ? "ok" : found.kind === "absent" ? "missing" : "drifted",
+      path: delivery.target_path,
+      blockMatches,
+      rulesCurrent: delivery.rules_hash === input.rulesHash,
+    } satisfies PolicyVerifyResult;
+  };
+
   const verify = Effect.fn("PolicyService.verify")(
     function* ({ projectId, key, agents = POLICY_AGENTS }: PolicyAgentsInput) {
       const id = blockId(projectId, key);
@@ -354,32 +410,22 @@ const make = Effect.gen(function* () {
       const at = yield* nowIso;
       const results: Array<PolicyVerifyResult> = [];
       for (const agent of agents) {
-        const delivery = deliveries.get(agent);
-        if (delivery === undefined) {
-          results.push({
-            agent,
-            status: "missing",
-            path: targets[agent],
-            blockMatches: false,
-            rulesCurrent: false,
-          });
-          continue;
-        }
-        const found = yield* Files.verify(delivery.target_path, id);
-        const blockMatches = found.kind === "found" && found.hash === delivery.rendered_hash;
-        if (blockMatches) {
+        const delivery = intoCurrentFile(targets, deliveries.get(agent));
+        const result = inspect({
+          id,
+          rulesHash,
+          agent,
+          targetPath: targets[agent],
+          delivery,
+          text: delivery === undefined ? undefined : yield* Blocks.read(delivery.target_path),
+        });
+        if (result.blockMatches) {
           yield* sql`
             UPDATE deliveries SET verified_at = ${at}, verification_method = 'reread_hash'
             WHERE project_id = ${projectId} AND "key" = ${key} AND agent = ${agent}
           `;
         }
-        results.push({
-          agent,
-          status: blockMatches ? "ok" : found.kind === "absent" ? "missing" : "drifted",
-          path: delivery.target_path,
-          blockMatches,
-          rulesCurrent: delivery.rules_hash === rulesHash,
-        });
+        results.push(result);
       }
       return results;
     },
@@ -394,37 +440,131 @@ const make = Effect.gen(function* () {
     }),
   );
 
-  const list = Effect.fn("PolicyService.list")(
-    function* (projectId: ProjectId) {
+  /** The scope's policies, each with its versions and recorded deliveries. Reads only the database. */
+  const rowsOf = (projectId: ProjectId) =>
+    Effect.gen(function* () {
       const scope = sql.in("project_id", [projectId, POLICY_ENVIRONMENT_PROJECT_ID]);
       const policies = yield* sql<PolicyRow>`
         SELECT * FROM policies WHERE ${scope} ORDER BY project_id, "key"
       `;
+      if (policies.length === 0) return [];
+      const versions = yield* sql<
+        VersionRow & { readonly project_id: ProjectId; readonly key: string; readonly at: string }
+      >`
+        SELECT project_id, "key", version, state, title, at FROM policy_versions
+        WHERE ${scope} ORDER BY id
+      `;
       const deliveries = yield* sql<DeliveryRow>`
         SELECT * FROM deliveries WHERE ${scope} ORDER BY agent
       `;
-      return policies.map((policy): PolicyListing => ({
-        projectId: policy.project_id,
-        key: policy.key,
-        title: policy.title,
-        version: policy.version,
-        state: policy.state,
-        updatedAt: policy.updated_at,
-        deliveries: deliveries
-          .filter((row) => row.project_id === policy.project_id && row.key === policy.key)
-          .map((row) => ({
-            agent: row.agent,
-            version: row.version,
-            path: row.target_path,
-            installedAt: row.installed_at,
-            verifiedAt: row.verified_at,
-          })),
-      }));
+      // Rows are grouped by policy once, so each policy takes its own without scanning the rest.
+      // A key never holds "/", so the project id and key cannot run together.
+      const ownerOf = (row: { readonly project_id: ProjectId; readonly key: string }) =>
+        `${row.project_id}/${row.key}`;
+      const versionRows = Map.groupBy(versions, ownerOf);
+      const deliveryRows = Map.groupBy(deliveries, ownerOf);
+      return policies.map((policy): ListedPolicy => {
+        const owner = ownerOf(policy);
+        // Ordered by id, so the last row for a version is its state.
+        const byVersion = new Map((versionRows.get(owner) ?? []).map((row) => [row.version, row]));
+        return {
+          policy,
+          versions: [...byVersion.values()],
+          deliveries: deliveryRows.get(owner) ?? [],
+        };
+      });
+    });
+
+  const recordOf = ({ policy, versions, deliveries }: ListedPolicy) =>
+    ({
+      projectId: policy.project_id,
+      key: policy.key,
+      title: policy.title,
+      body: policy.body,
+      version: policy.version,
+      state: policy.state,
+      updatedAt: policy.updated_at,
+      versions: versions.map((row) => ({
+        version: row.version,
+        state: row.state,
+        title: row.title,
+        at: row.at,
+      })),
+      deliveries: deliveries.map((row) => ({
+        agent: row.agent,
+        version: row.version,
+        path: row.target_path,
+        installedAt: row.installed_at,
+        verifiedAt: row.verified_at,
+      })),
+    }) satisfies Omit<PolicyListing, "status">;
+
+  const list = Effect.fn("PolicyService.list")(
+    function* (projectId: ProjectId) {
+      return (yield* rowsOf(projectId)).map(recordOf);
     },
     Effect.catchTags({ SqlError: io("Could not read the policies.") }),
   );
 
-  return PolicyService.of({ create, createForPromotion, accept, install, verify, list });
+  const listWithStatus = Effect.fn("PolicyService.listWithStatus")(
+    function* (projectId: ProjectId) {
+      const listed = yield* rowsOf(projectId);
+      if (listed.length === 0) return [];
+      const targets = yield* Blocks.targets();
+      const rulesHash = Blocks.sha256(yield* readRules);
+      // An instruction file holds every policy's block, so each file the deliveries went into is
+      // read once here and every block is found in that text.
+      const texts = new Map<string, string | undefined>();
+      const filePaths = new Set(
+        listed.flatMap(({ deliveries }) =>
+          deliveries.flatMap((row) => intoCurrentFile(targets, row)?.target_path ?? []),
+        ),
+      );
+      for (const filePath of filePaths) texts.set(filePath, yield* Blocks.read(filePath));
+      return listed.map((row) => {
+        const { policy } = row;
+        const id = blockId(policy.project_id, policy.key);
+        const status = POLICY_AGENTS.map((agent): PolicyDeliveryStatus => {
+          const delivery = intoCurrentFile(
+            targets,
+            row.deliveries.find((candidate) => candidate.agent === agent),
+          );
+          const result = inspect({
+            id,
+            rulesHash,
+            agent,
+            targetPath: targets[agent],
+            delivery,
+            text: delivery === undefined ? undefined : texts.get(delivery.target_path),
+          });
+          // An intact block still hashes as installed after a newer version is accepted, so `ok`
+          // alone would hide that the file holds another version than the accepted one.
+          return result.status === "ok" &&
+            policy.state === "accepted" &&
+            delivery?.version !== policy.version
+            ? { ...result, status: "outdated" }
+            : result;
+        });
+        return { ...recordOf(row), status } satisfies PolicyListing;
+      });
+    },
+    provided,
+    Effect.catchTags({
+      SqlError: io("Could not read the policies."),
+      PlatformError: io("Could not read an instruction file."),
+      ServerSettingsError: io("Could not read the server settings."),
+    }),
+  );
+
+  return PolicyService.of({
+    create,
+    createForPromotion,
+    accept,
+    install,
+    verify,
+    list,
+    listWithStatus,
+  });
 });
 
 export const layer = Layer.effect(PolicyService, make);

@@ -104,6 +104,25 @@ it.effect("seeds the style once as an accepted policy of the whole environment",
   }).pipe(Effect.provide(layerTest)),
 );
 
+it.effect("seeds the style even when a delivered instruction file cannot be read", () =>
+  Effect.gen(function* () {
+    const policies = yield* PolicyService.PolicyService;
+    const fs = yield* FileSystem.FileSystem;
+    yield* policies.create({ projectId, key: "other", title: "Other", body: "Another policy." });
+    yield* policies.accept({ projectId, key: "other", version: 1 });
+    const [claude] = yield* policies.install({ projectId, key: "other", agents: ["claude"] });
+    // A directory where the delivered file was: it exists and cannot be read as text.
+    yield* fs.remove(claude!.path);
+    yield* fs.makeDirectory(claude!.path);
+
+    yield* Caveman.seed();
+    assert.deepStrictEqual(
+      (yield* stored).map(({ version, state, body }) => ({ version, state, body })),
+      [{ version: 1, state: "accepted", body: Caveman.CAVEMAN_TEXT }],
+    );
+  }).pipe(Effect.provide(layerTest)),
+);
+
 it.effect("leaves an edited style alone when the plugin starts again", () =>
   Effect.gen(function* () {
     const policies = yield* PolicyService.PolicyService;
