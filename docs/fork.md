@@ -56,6 +56,7 @@ them is resolved by keeping the line.
 | `apps/web/src/components/sidebar/mainAppLocation.ts`         | `/board` and the `/plugins` paths in `isSidebarUtilityPage`                                                                                                            |
 | `apps/web/src/components/sidebar/SidebarChrome.tsx`          | the board's `SidebarUtilityItem`, gated on `kanbanSupportedAtom`, and `<PluginSidebarEntries />` after the Usage entry, plus imports; `SidebarUtilityItem` is exported |
 | `apps/web/src/components/CommandPalette.tsx`                 | the board's `actionItems.push` block, gated the same way, plus imports                                                                                                 |
+| `third-party-licenses.config.json`                           | the `Caveman reply rules` entry at the end of `customNotices`, so the adapted policy text is credited in the app's license list                                        |
 
 ## Plugin services and the type system
 
