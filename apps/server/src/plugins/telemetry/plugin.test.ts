@@ -241,8 +241,9 @@ const seedReview = (sql: SqlClient.SqlClient) =>
   });
 
 /**
- * The learning plugin's rows for the window. The `defect` item was handed over on 10-04, and a
- * later piece of evidence moved its own `updated_at` to 10-09, so only the promotion says when.
+ * The learning plugin's rows for the window. The `defect` item was handed over on 10-04, then a
+ * person closed it, and a later piece of evidence moved its own `updated_at` to 10-09, so only
+ * the promotion says when, and a closed item still counts as known.
  * Of the six corrections with a declared mode in the window, two are `defect` after 10-04.
  */
 const seedLearning = (sql: SqlClient.SqlClient) =>
@@ -254,7 +255,7 @@ const seedLearning = (sql: SqlClient.SqlClient) =>
            created_at, updated_at)
         VALUES (${id}, ${project}, ${mode}, 2, ${state}, 'prompt', 'rule', 'Routed by rule.',
           '2026-10-01T00:00:00.000Z', ${updatedAt})`;
-    yield* item(1, projectId, "defect", "promoted", "2026-10-09T00:00:00.000Z");
+    yield* item(1, projectId, "defect", "closed", "2026-10-09T00:00:00.000Z");
     yield* item(2, projectId, "incomplete", "open", "2026-10-09T00:00:00.000Z");
     // Another project's promoted item for a mode this project has not handed over.
     yield* item(3, "project:elsewhere", "convention", "promoted", "2026-10-02T00:00:00.000Z");

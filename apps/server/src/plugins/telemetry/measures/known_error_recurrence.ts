@@ -15,8 +15,7 @@ const spec = {
 
 /**
  * Of the window's corrections with a declared failure mode, the share whose mode the project's
- * learning item had already handed over, strictly before the correction was made. An item a
- * person has since closed or moved is no longer promoted and does not count.
+ * learning item had already handed over, strictly before the correction was made.
  */
 export const knownErrorRecurrence: Measure = (input) => {
   const { corrections, promotedItems } = input;

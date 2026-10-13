@@ -42,13 +42,14 @@ const failWith =
     );
 
 /**
- * The project's promoted items and when each was handed over. An item no delivered promotion
- * explains is left out, since there is no time to compare a correction with; one a person has
- * since closed or moved to another owner kind is no longer promoted and is not listed.
+ * The project's learning items that were handed over, each with the time of its earliest delivered
+ * promotion. An item's state now does not matter: a person may close it or move it to another
+ * owner kind after the handover, and a past window must still read the lesson as known. An item
+ * with no delivered promotion is left out.
  */
 const promotedItemsOf = (items: ItemStore.ItemStore["Service"], projectId: ProjectId) =>
-  items.list({ projectId, state: "promoted" }).pipe(
-    Effect.flatMap((promoted) => Effect.forEach(promoted, (item) => items.get(item.id))),
+  items.list({ projectId }).pipe(
+    Effect.flatMap((all) => Effect.forEach(all, (item) => items.get(item.id))),
     Effect.map((details) =>
       details.flatMap((detail) => {
         const fields = promotedItemFields(detail);

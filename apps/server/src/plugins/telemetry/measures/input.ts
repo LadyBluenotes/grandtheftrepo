@@ -78,8 +78,9 @@ export interface MeasureInput {
   /** Undefined while the learning plugin is not running. */
   readonly corrections: ReadonlyArray<LearningCorrection> | undefined;
   /**
-   * The project's learning items now promoted, each with the ISO instant the earliest delivered
-   * promotion of it was delivered. Undefined while the learning plugin is not running.
+   * The project's learning items that were handed over, whatever their state now, each with the
+   * ISO instant its earliest delivered promotion was delivered. Undefined while the learning
+   * plugin is not running.
    */
   readonly promotedItems:
     | ReadonlyArray<{ readonly failureMode: string; readonly promotedAt: string }>

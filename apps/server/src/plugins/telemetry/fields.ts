@@ -135,9 +135,10 @@ export const verdictFields = (verdict: ReviewVerdict) => ({
 });
 
 /**
- * A promoted learning item and when it was handed over: the earliest delivered promotion's
+ * A learning item and when it was first handed over: the earliest delivered promotion's
  * `updatedAt`, which delivery sets and nothing changes after. The item's own `updatedAt` moves
- * with every later piece of evidence. Null when none of its promotions was delivered.
+ * with every later piece of evidence, and its state with a person's later choice. Null when none
+ * of its promotions was delivered.
  */
 export const promotedItemFields = (detail: LearningItemDetail) => ({
   "learning.item.failureMode": detail.item.failureMode,

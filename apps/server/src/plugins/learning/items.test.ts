@@ -449,6 +449,29 @@ it.effect("an interrupted handover is offered again with the same key", () =>
   ),
 );
 
+it.effect("a handover is stamped when the promoter returns, not when the tick began", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const learning = yield* setup;
+      // A slow promoter: two hours pass before it hands the item over.
+      const { promoter } = yield* fakePromoter("project_knowledge", () =>
+        TestClock.adjust("2 hours"),
+      );
+      yield* learning.promoters.register(promoter);
+      yield* learning.correction("convention");
+      yield* learning.tick;
+
+      const [item] = yield* learning.items.list({ projectId });
+      const detail = yield* learning.items.get(item!.id);
+      assert.deepEqual(
+        detail.promotions.map(({ state, createdAt, updatedAt }) => [state, createdAt, updatedAt]),
+        [["delivered", "1970-01-01T00:00:00.000Z", "1970-01-01T02:00:00.000Z"]],
+      );
+      assert.deepInclude(detail.item, { state: "promoted", updatedAt: "1970-01-01T02:00:00.000Z" });
+    }),
+  ),
+);
+
 it.effect("an item a person moves during its handover stays a candidate for the new owner", () =>
   Effect.scoped(
     Effect.gen(function* () {
