@@ -1,4 +1,9 @@
-import type { LearningCorrection, ReviewVerdict, TelemetryMeasure } from "@t3tools/contracts";
+import type {
+  LearningCorrection,
+  ReviewVerdict,
+  RoutingTier,
+  TelemetryMeasure,
+} from "@t3tools/contracts";
 import { classifyToolActivity } from "@t3tools/shared/toolActivity";
 import * as DateTime from "effect/DateTime";
 
@@ -32,6 +37,8 @@ export interface RunRow {
   readonly turn_id: string;
   readonly ordinal: number;
   readonly status: string;
+  /** Null only until the replay after migration 3 rewrites the run. */
+  readonly provider_instance_id: string | null;
   readonly model: string;
   readonly started_at: string | null;
   readonly completed_at: string | null;
@@ -72,6 +79,11 @@ export interface Pricing {
 export interface MeasureInput {
   readonly from: string;
   readonly to: string;
+  /**
+   * Set when `MeasureService` kept only the runs on this routing tier's model, with their tool
+   * calls and turn usage; threads are all the project's either way.
+   */
+  readonly tier: RoutingTier | undefined;
   readonly threads: ReadonlyArray<ThreadRow>;
   readonly runs: ReadonlyArray<RunRow>;
   readonly toolCalls: ReadonlyArray<ToolCallRow>;

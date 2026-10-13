@@ -77,6 +77,8 @@ export const runFields = (run: OrchestrationV2Run) => ({
   "run.userMessageId": run.userMessageId,
   "run.ordinal": run.ordinal,
   "run.status": run.status,
+  /** With the model, which routing tier the run was on. */
+  "run.providerInstanceId": run.providerInstanceId,
   "run.modelSelection.model": run.modelSelection.model,
   "run.startedAt": iso(run.startedAt),
   "run.completedAt": iso(run.completedAt),
