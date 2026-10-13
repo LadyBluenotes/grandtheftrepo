@@ -33,7 +33,7 @@ const RoutingTiersTool = Tool.make("routing_tiers", {
 
 const RoutingAdherenceTool = Tool.make("routing_adherence", {
   description:
-    "Whether the recommended model is the one that ran. Over the recommendations a project made from (inclusive) to (exclusive), ISO instants in UTC: measure is the share whose thread's first run used the recommended provider instance and model, with how many were observed (sampleSize) and state unavailable with the reason below five; mismatches lists each recommendation that ran something else, with its thread, tier, recommended and observed entry, time and a one-sentence flag.",
+    "Whether the recommended model is the one that ran. Over the recommendations a project made from (inclusive) to (exclusive), ISO instants in UTC: measure is the share whose thread's first run used the recommended provider instance and model, with how many were observed (sampleSize), and state unavailable with the reason below five observed launches, while the event log is still being read, or after an event failed to replay; mismatches lists each recommendation that ran something else, with its thread, tier, recommended and observed entry, time and a one-sentence flag.",
   parameters: RoutingAdherenceInput,
   success: RoutingAdherence,
   failure: OrchestratorMcpFailure,

@@ -52,7 +52,7 @@ describe("adherence", () => {
     });
     assert.deepEqual(result.mismatches, [
       {
-        threadId: "thread-3",
+        threadId: ThreadId.make("thread-3"),
         tier: "cheap",
         recommended: alpha,
         observed: beta,

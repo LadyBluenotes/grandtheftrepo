@@ -124,7 +124,8 @@ export type RoutingMismatch = typeof RoutingMismatch.Type;
 
 /**
  * Whether the recommended model is the one that ran: the share of observed recommendations whose
- * first run matched, and each recommendation that did not. `unavailable` below the minimum sample.
+ * first run matched, and each recommendation that did not. `unavailable` below the minimum sample, or
+ * while the plugin has not finished reading the event log or an event failed to replay.
  */
 export const RoutingAdherence = Schema.Struct({
   measure: TelemetryMeasure,

@@ -18,7 +18,7 @@ import * as SqlClient from "effect/sql/SqlClient";
 import * as SqlSchema from "effect/sql/SqlSchema";
 
 import type * as EventSink from "../../orchestration-v2/EventSink.ts";
-import { adherence } from "./adherence.ts";
+import { adherence, unavailableAdherence } from "./adherence.ts";
 
 /** How long a request waits for the reactor to catch up before it gives up. */
 const CATCH_UP_WAIT = Duration.seconds(3);
@@ -67,10 +67,12 @@ const unreadable = (cause: unknown) =>
 
 /**
  * Reads a project's recommendation and observation rows and folds them over the window.
- * `caughtUp` is the drain of the reactor that writes the observations: they trail the event log,
- * by all of it while the reactor replays from the first event, and a ratio over half the rows
- * would look final, so a request waits for the reactor and gives up with an error when it is not
- * caught up within `CATCH_UP_WAIT`.
+ * `caughtUp` is the drain of the reactor that writes the observations. They trail the event log,
+ * by all of it while the reactor replays from the first event, and the reactor also advances past
+ * an event whose handler failed, leaving a row in `host_reactor_failure`; a ratio over rows
+ * missing observations would look final. So a request waits for the reactor, and answers
+ * `unavailable` with the reason when it is not caught up within `CATCH_UP_WAIT` or any event
+ * failed. Only a read error fails.
  */
 export const make = (caughtUp: Effect.Effect<void, EventSink.EventSinkV2Error>) =>
   Effect.gen(function* () {
@@ -113,10 +115,16 @@ export const make = (caughtUp: Effect.Effect<void, EventSink.EventSinkV2Error>) 
           Effect.catch(unreadable),
         );
         if (Option.isNone(inTime)) {
-          return yield* new RoutingError({
-            code: "io",
-            message: "Routing is still reading the event log; try again shortly.",
-          });
+          return unavailableAdherence("Routing is still reading the event log.");
+        }
+        const failures = yield* sql<{
+          readonly failed: number;
+        }>`SELECT COUNT(*) AS failed FROM host_reactor_failure`.pipe(Effect.catch(unreadable));
+        const failed = failures[0]?.failed ?? 0;
+        if (failed > 0) {
+          return unavailableAdherence(
+            `${failed} event(s) failed to replay into routing; retry them before reading adherence.`,
+          );
         }
         const rows = yield* recommended(input.projectId).pipe(Effect.catch(unreadable));
         return adherence({

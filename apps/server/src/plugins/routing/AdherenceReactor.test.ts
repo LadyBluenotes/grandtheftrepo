@@ -353,27 +353,57 @@ it.effect("a window that is not ISO instants is refused, and offsets are read as
   ).pipe(Effect.provide(layerSink)),
 );
 
-it.effect(
-  "a request that cannot wait for the reactor to catch up says so instead of answering",
-  () =>
-    Effect.scoped(
-      Effect.gen(function* () {
-        const { sql } = yield* PluginDatabase.open({
-          id: "routing",
-          filename: ":memory:",
-          migrations,
-        });
-        const service = yield* AdherenceService.make(Effect.never).pipe(
-          Effect.provideService(SqlClient.SqlClient, sql),
-        );
-        const call = yield* Effect.forkChild(Effect.flip(service.adherence(window)));
-        yield* TestClock.adjust("3 seconds");
-        const error = yield* Fiber.join(call);
-        assert.strictEqual(error.code, "io");
-        assert.strictEqual(
-          error.message,
-          "Routing is still reading the event log; try again shortly.",
-        );
-      }),
-    ),
+it.effect("a request the reactor has not caught up for answers unavailable, not a ratio", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const { sql } = yield* PluginDatabase.open({
+        id: "routing",
+        filename: ":memory:",
+        migrations,
+      });
+      const service = yield* AdherenceService.make(Effect.never).pipe(
+        Effect.provideService(SqlClient.SqlClient, sql),
+      );
+      const call = yield* Effect.forkChild(service.adherence(window));
+      yield* TestClock.adjust("3 seconds");
+      const report = yield* Fiber.join(call);
+      assert.strictEqual(report.measure.state, "unavailable");
+      assert.strictEqual(report.measure.value, null);
+      assert.strictEqual(report.measure.missingReason, "Routing is still reading the event log.");
+      assert.deepEqual(report.mismatches, []);
+    }),
+  ),
+);
+
+it.effect("an event that failed to replay makes the answer unavailable until it is retried", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const { sql, drain, service } = yield* boot;
+      for (const n of [1, 2, 3, 4, 5]) yield* recommend(sql, thread(n));
+      yield* publish(
+        ...[1, 2, 3, 4].map((n) => runEvent("run.created", run(thread(n), 1, alpha))),
+        runEvent("run.created", run(thread(5), 1, beta)),
+      );
+      yield* drain;
+      assert.strictEqual((yield* service.adherence(window)).measure.state, "ok");
+
+      // The reactor advances past an event whose handler failed and keeps it here for a retry.
+      yield* sql`INSERT INTO host_reactor_failure (sequence, type, attempts, last_error, failed_at)
+        VALUES (1, 'run.created', 1, 'boom', '2026-10-05T12:00:00.000Z')`;
+      const failed = yield* service.adherence(window);
+      assert.strictEqual(failed.measure.state, "unavailable");
+      assert.strictEqual(failed.measure.value, null);
+      assert.strictEqual(
+        failed.measure.missingReason,
+        "1 event(s) failed to replay into routing; retry them before reading adherence.",
+      );
+      // Thread 5's mismatch is in the rows, but a list from incomplete rows is not offered either.
+      assert.deepEqual(failed.mismatches, []);
+
+      yield* sql`DELETE FROM host_reactor_failure`;
+      const retried = yield* service.adherence(window);
+      assert.strictEqual(retried.measure.value, 0.8);
+      assert.lengthOf(retried.mismatches, 1);
+    }),
+  ).pipe(Effect.provide(layerSink)),
 );
