@@ -844,7 +844,7 @@ describe("SpecService", () => {
             threadCreated(input.threadId!),
             planned(input.threadId!, RunId.make("run:spec-race-run-first"), 1, validSpec),
             runUpdated(input.threadId!, RunId.make("run:spec-race-run-first"), "completed"),
-          ]).pipe(Effect.provideService(EventSink.EventSinkV2, sink)),
+          ]).pipe(Effect.provideService(EventSink.EventSinkV2, sink), Effect.orDie),
         );
         failLaunch("dispatch-message");
         const error = yield* refusal(specify({ projectId, id }));
