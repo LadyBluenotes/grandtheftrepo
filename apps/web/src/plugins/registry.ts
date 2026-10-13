@@ -4,6 +4,7 @@ import {
   BookOpenTextIcon,
   GraduationCapIcon,
   RouteIcon,
+  ScrollTextIcon,
   ShrinkIcon,
   SquareKanbanIcon,
   type LucideIcon,
@@ -43,6 +44,14 @@ export const pluginRegistry: ReadonlyArray<PluginEntry> = [
   { id: "routing", title: "Routing", icon: RouteIcon, SettingsPanel: RoutingSettingsPanel },
   { id: "learning", title: "Learning", icon: GraduationCapIcon, Screen: LearningScreen },
   { id: "caveman", title: "Caveman", icon: ShrinkIcon, SettingsPanel: CavemanSettingsPanel },
+  {
+    id: "policy",
+    title: "Policies",
+    icon: ScrollTextIcon,
+    Screen: lazy(() =>
+      import("./policy/PolicyScreen").then((module) => ({ default: module.PolicyScreen })),
+    ),
+  },
   {
     id: "knowledge",
     title: "Knowledge",
