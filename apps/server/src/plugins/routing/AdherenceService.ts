@@ -53,6 +53,9 @@ const RecommendedRow = Schema.Struct({
   model: Schema.NullOr(TrimmedNonEmptyString),
 });
 
+/** A project's window with `from` and `to` as `DateTime.formatIso` strings, so they compare with `at`. */
+const Window = Schema.Struct({ projectId: Schema.String, from: Schema.String, to: Schema.String });
+
 const ObservedRow = Schema.Struct({
   recommendationId: Schema.Int,
   detail: Schema.fromJsonString(RoutingObservedDetail),
@@ -78,26 +81,33 @@ export const make = (caughtUp: Effect.Effect<void, EventSink.EventSinkV2Error>) 
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
 
+    // The window is applied here as well as in the fold, so a project's history before and after
+    // it is never read. The rows are ordered by the (project_id, kind, at) index.
     const recommended = SqlSchema.findAll({
-      Request: Schema.String,
+      Request: Window,
       Result: RecommendedRow,
-      execute: (projectId) =>
+      execute: ({ projectId, from, to }) =>
         sql`
           SELECT id, at, thread_id AS "threadId", tier, provider_instance_id AS "providerInstanceId",
             model
           FROM routing_events
           WHERE kind = 'routing_recommended' AND project_id = ${projectId} AND tier IS NOT NULL
+            AND at >= ${from} AND at < ${to}
           ORDER BY at, id
         `,
     });
+    // Only the observations of those recommendations.
     const observed = SqlSchema.findAll({
-      Request: Schema.String,
+      Request: Window,
       Result: ObservedRow,
-      execute: (projectId) =>
+      execute: ({ projectId, from, to }) =>
         sql`
-          SELECT recommendation_id AS "recommendationId", detail
-          FROM routing_events
-          WHERE kind = 'routing_observed' AND project_id = ${projectId}
+          SELECT observed.recommendation_id AS "recommendationId", observed.detail
+          FROM routing_events AS recommended
+          JOIN routing_events AS observed ON observed.recommendation_id = recommended.id
+          WHERE recommended.kind = 'routing_recommended' AND recommended.project_id = ${projectId}
+            AND recommended.at >= ${from} AND recommended.at < ${to}
+            AND observed.kind = 'routing_observed'
         `,
     });
 
@@ -126,16 +136,21 @@ export const make = (caughtUp: Effect.Effect<void, EventSink.EventSinkV2Error>) 
             `${failed} event(s) failed to replay into routing; retry them before reading adherence.`,
           );
         }
-        const rows = yield* recommended(input.projectId).pipe(Effect.catch(unreadable));
+        const window = {
+          projectId: input.projectId,
+          from: DateTime.formatIso(from.value),
+          to: DateTime.formatIso(to.value),
+        };
+        const rows = yield* recommended(window).pipe(Effect.catch(unreadable));
         return adherence({
           recommended: rows.map(({ providerInstanceId, model, ...row }) => ({
             ...row,
             entry:
               providerInstanceId === null || model === null ? null : { providerInstanceId, model },
           })),
-          observed: yield* observed(input.projectId).pipe(Effect.catch(unreadable)),
-          from: DateTime.formatIso(from.value),
-          to: DateTime.formatIso(to.value),
+          observed: yield* observed(window).pipe(Effect.catch(unreadable)),
+          from: window.from,
+          to: window.to,
         });
       }),
     });

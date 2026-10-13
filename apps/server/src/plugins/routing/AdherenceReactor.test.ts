@@ -288,6 +288,36 @@ it.effect("a recommendation whose thread has not run is left out, then counted o
   ).pipe(Effect.provide(layerSink)),
 );
 
+it.effect("recommendations outside the window, and their observations, are never read", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const { sql, drain, service } = yield* boot;
+      for (const n of [1, 2, 3, 4, 5]) yield* recommend(sql, thread(n));
+      yield* publish(
+        ...[1, 2, 3, 4, 5].map((n) => runEvent("run.created", run(thread(n), 1, alpha))),
+      );
+      yield* drain;
+
+      // Rows the report cannot decode, recommended just before `from` and exactly at `to`, whose
+      // observations were written inside the window. Reading either would fail the request.
+      for (const time of ["2026-09-30T23:59:59.999Z", window.to]) {
+        const [outside] = yield* sql<{ readonly id: number }>`
+          INSERT INTO routing_events (at, kind, project_id, thread_id, tier, detail)
+          VALUES (${time}, 'routing_recommended', ${projectId}, 'thread:outside', 'unreadable', '{}')
+          RETURNING id`;
+        yield* sql`
+          INSERT INTO routing_events (at, kind, project_id, thread_id, recommendation_id, detail)
+          VALUES ('2026-10-05T12:00:00.000Z', 'routing_observed', ${projectId}, 'thread:outside',
+                  ${outside!.id}, 'not json')`;
+      }
+
+      const report = yield* service.adherence(window);
+      assert.strictEqual(report.measure.value, 1);
+      assert.strictEqual(report.measure.sampleSize, 5);
+    }),
+  ).pipe(Effect.provide(layerSink)),
+);
+
 it.effect("a run seen before its recommendation exists is observed by the run's next event", () =>
   Effect.scoped(
     Effect.gen(function* () {

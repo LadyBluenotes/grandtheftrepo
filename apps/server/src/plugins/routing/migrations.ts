@@ -8,6 +8,8 @@ import type { PluginMigration } from "../Plugin.ts";
  * event; `kind` names it and `detail` is its JSON. The kind-specific columns are nullable because
  * later kinds need not carry them. `recommendation_id` is the id of the `routing_recommended` row
  * a `routing_observed` row answers, unique among observed rows so a replay cannot add a second.
+ * The other two indexes serve the adherence reactor (a thread's recommendation) and the adherence
+ * report (a project's recommendations in a window, in time order).
  */
 export const migrations = [
   [
@@ -57,6 +59,10 @@ export const migrations = [
         CREATE UNIQUE INDEX routing_events_observed_recommendation
         ON routing_events (recommendation_id)
         WHERE kind = 'routing_observed'
+      `;
+      yield* sql`CREATE INDEX routing_events_thread ON routing_events (thread_id, kind)`;
+      yield* sql`
+        CREATE INDEX routing_events_project_kind_at ON routing_events (project_id, kind, at)
       `;
     }),
   ],
