@@ -355,3 +355,44 @@ it.effect("an unknown project or page answers not found", () =>
     assert.strictEqual((yield* Effect.flip(store.accept({ id: 99 }))).code, "not_found");
   }).pipe(Effect.provide(layerTest)),
 );
+
+it.effect(
+  "a promotion saves one page, found again in any state; another promotion saves its own",
+  () =>
+    Effect.gen(function* () {
+      const store = yield* KnowledgeStore.KnowledgeStore;
+      const page = {
+        projectId,
+        key: "learned-convention-7",
+        title: "Learned: convention",
+        body: "Reason.",
+      };
+      const first = yield* store.proposeForPromotion(page, { itemId: 7, promotionId: 3 });
+      assert.deepStrictEqual(first.source, { kind: "item", itemId: 7, promotionId: 3 });
+
+      // A repeat answers with the saved page, whatever text or key it brings.
+      const again = yield* store.proposeForPromotion(
+        { ...page, key: "other", body: "Changed." },
+        { itemId: 7, promotionId: 3 },
+      );
+      assert.deepStrictEqual(again, first);
+
+      yield* store.discard({ id: first.id });
+      const discarded = yield* store.proposeForPromotion(page, { itemId: 7, promotionId: 3 });
+      assert.deepStrictEqual([discarded.id, discarded.state], [first.id, "retired"]);
+
+      const second = yield* store.proposeForPromotion(page, { itemId: 7, promotionId: 4 });
+      assert.notStrictEqual(second.id, first.id);
+      assert.strictEqual(
+        yield* failure(store.proposeForPromotion(page, { itemId: 8, promotionId: 5 })),
+        'This project already has a draft page "learned-convention-7".',
+      );
+      assert.deepStrictEqual(
+        (yield* store.list({ projectId })).map((entry) => [entry.state, entry.source]),
+        [
+          ["retired", { kind: "item", itemId: 7, promotionId: 3 }],
+          ["draft", { kind: "item", itemId: 7, promotionId: 4 }],
+        ],
+      );
+    }).pipe(Effect.provide(layerTest)),
+);

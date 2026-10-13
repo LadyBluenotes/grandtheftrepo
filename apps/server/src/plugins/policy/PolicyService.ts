@@ -71,6 +71,14 @@ export class PolicyService extends Context.Service<
   {
     /** Appends the next version as a draft. */
     readonly create: (input: PolicyCreateInput) => Effect.Effect<PolicyVersionRef, PolicyError>;
+    /**
+     * `create` for a learning promotion, once per `promotionId`: the draft and the record of it
+     * commit together, and a repeat finds the record and writes nothing.
+     */
+    readonly createForPromotion: (
+      input: PolicyCreateInput,
+      promotionId: number,
+    ) => Effect.Effect<void, PolicyError>;
     /** Accepts one version and supersedes every other accepted one, so accepting an older version restores it. */
     readonly accept: (input: PolicyAcceptInput) => Effect.Effect<PolicyVersionRef, PolicyError>;
     /**
@@ -183,22 +191,55 @@ const make = Effect.gen(function* () {
           : Effect.succeed(rows[0]),
     );
 
+  /** Refuses what a policy block could not hold. */
+  const checkDraft = Effect.fn("PolicyService.checkDraft")(function* ({
+    projectId,
+    key,
+    body,
+  }: PolicyCreateInput) {
+    if (!isKey(key)) return yield* invalid(`Policy key "${key}" must match [a-z0-9-]+.`);
+    if (!isMarkerSafe(projectId)) {
+      return yield* invalid(`Project id "${projectId}" cannot be placed in a policy marker.`);
+    }
+    if (body.includes("fork-policy:")) {
+      return yield* invalid('A policy body cannot contain "fork-policy:".');
+    }
+  });
+
+  /** Appends the next version as a draft; the caller holds the transaction. */
+  const appendDraft = ({ projectId, key, title, body }: PolicyCreateInput, at: string) =>
+    Effect.gen(function* () {
+      const version = Math.max(0, ...(yield* versionsOf(projectId, key)).keys()) + 1;
+      yield* appendVersion(projectId, key, { version, state: "draft", title, body }, at);
+      yield* refreshPolicy(projectId, key, at);
+      return { key, version, state: "draft" } satisfies PolicyVersionRef;
+    });
+
   const create = Effect.fn("PolicyService.create")(
-    function* ({ projectId, key, title, body }: PolicyCreateInput) {
-      if (!isKey(key)) return yield* invalid(`Policy key "${key}" must match [a-z0-9-]+.`);
-      if (!isMarkerSafe(projectId)) {
-        return yield* invalid(`Project id "${projectId}" cannot be placed in a policy marker.`);
-      }
-      if (body.includes("fork-policy:")) {
-        return yield* invalid('A policy body cannot contain "fork-policy:".');
-      }
+    function* (input: PolicyCreateInput) {
+      yield* checkDraft(input);
       const at = yield* nowIso;
-      return yield* sql.withTransaction(
+      return yield* sql.withTransaction(appendDraft(input, at));
+    },
+    Effect.catchTags({ SqlError: io("Could not save the policy.") }),
+  );
+
+  const createForPromotion = Effect.fn("PolicyService.createForPromotion")(
+    function* (input: PolicyCreateInput, promotionId: number) {
+      yield* checkDraft(input);
+      const at = yield* nowIso;
+      yield* sql.withTransaction(
         Effect.gen(function* () {
-          const version = Math.max(0, ...(yield* versionsOf(projectId, key)).keys()) + 1;
-          yield* appendVersion(projectId, key, { version, state: "draft", title, body }, at);
-          yield* refreshPolicy(projectId, key, at);
-          return { key, version, state: "draft" } satisfies PolicyVersionRef;
+          const done =
+            yield* sql`SELECT 1 FROM policy_promotion WHERE promotion_id = ${promotionId}`;
+          if (done.length > 0) return;
+          const { key, version } = yield* appendDraft(input, at);
+          yield* sql`INSERT INTO policy_promotion ${sql.insert({
+            promotion_id: promotionId,
+            project_id: input.projectId,
+            key,
+            version,
+          })}`;
         }),
       );
     },
@@ -515,7 +556,15 @@ const make = Effect.gen(function* () {
     }),
   );
 
-  return PolicyService.of({ create, accept, install, verify, list, listWithStatus });
+  return PolicyService.of({
+    create,
+    createForPromotion,
+    accept,
+    install,
+    verify,
+    list,
+    listWithStatus,
+  });
 });
 
 export const layer = Layer.effect(PolicyService, make);

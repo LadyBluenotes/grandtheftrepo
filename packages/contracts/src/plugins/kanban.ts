@@ -317,6 +317,22 @@ export const KanbanAttentionKind = Schema.Literals([
 export type KanbanAttentionKind = typeof KanbanAttentionKind.Type;
 
 /**
+ * How each kind reads on a strip row, as a short label. Keyed by every kind, so a plugin that adds
+ * one fails to typecheck here and no client keeps a list of its own.
+ */
+export const KANBAN_ATTENTION_KIND_LABELS: Record<KanbanAttentionKind, string> = {
+  question: "Question",
+  permission: "Permission",
+  budget_breach: "Budget breach",
+  routing_mismatch: "Routing mismatch",
+  two_writers: "Two writers",
+  stale_review: "Stale review",
+  security_hold: "Security hold",
+  unowned_finding: "Unowned finding",
+  delivery_drift: "Delivery drift",
+};
+
+/**
  * One thing in a project waiting on a person: a live request on one of its threads, or a flag a
  * plugin raised. A row leaves when its cause clears; nothing dismisses it.
  */

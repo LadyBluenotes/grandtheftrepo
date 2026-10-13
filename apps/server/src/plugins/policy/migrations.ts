@@ -53,4 +53,20 @@ export const migrations: ReadonlyArray<PluginMigration> = [
       `;
     }),
   ],
+  [
+    2,
+    "policy_promotion",
+    Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      // What a learning promotion created, so a second delivery of it finds the draft and stops.
+      yield* sql`
+        CREATE TABLE policy_promotion (
+          promotion_id INTEGER PRIMARY KEY,
+          project_id TEXT NOT NULL,
+          "key" TEXT NOT NULL,
+          version INTEGER NOT NULL
+        )
+      `;
+    }),
+  ],
 ];

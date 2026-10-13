@@ -306,6 +306,44 @@ it.effect("a failing promoter is retried after six hours and gives up after five
   ),
 );
 
+it.effect("a promoter whose plugin is not running waits without counting an attempt", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const learning = yield* setup;
+      const running = yield* Ref.make(false);
+      const { promoter, calls } = yield* fakePromoter("policy");
+      yield* learning.promoters.register({ ...promoter, available: Ref.get(running) });
+      yield* learning.correction("scope_drift");
+
+      for (const tick of [1, 2]) {
+        const ticked = yield* learning.tick;
+        // The first tick opens the record; neither offers it to a promoter that is not there.
+        assert.deepEqual(
+          ticked.promote,
+          tick === 1 ? { examined: 1, acted: 1, flags: 0 } : { examined: 0, acted: 0, flags: 0 },
+        );
+        assert.deepEqual(yield* learning.promoters.ownerKinds, []);
+        assert.strictEqual((yield* Ref.get(calls)).length, 0);
+        assert.deepEqual(yield* learning.promotions, [
+          {
+            owner_kind: "policy",
+            state: "pending",
+            attempts: 0,
+            next_attempt_at: null,
+            last_error: null,
+          },
+        ]);
+      }
+
+      yield* Ref.set(running, true);
+      assert.deepEqual(yield* learning.promoters.ownerKinds, ["policy"]);
+      assert.deepEqual((yield* learning.tick).promote, { examined: 1, acted: 1, flags: 0 });
+      assert.strictEqual((yield* Ref.get(calls)).length, 1);
+      assert.strictEqual((yield* learning.promotions)[0]?.state, "delivered");
+    }),
+  ),
+);
+
 it.effect("a person's disposition survives later sweeps; promoted is never set by hand", () =>
   Effect.scoped(
     Effect.gen(function* () {

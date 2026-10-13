@@ -23,6 +23,10 @@ Open a policy to see its versions and accept one. The form below starts from the
 saving it adds a draft. Accepting a draft makes it current and the server delivers it between runs.
 **New policy** starts one from an empty form; its key is lowercase letters, digits and dashes.
 
+The learning plugin adds drafts here too: a recurring failure mode handed over to a policy or a
+prompt arrives as a draft policy keyed `learned-<failure mode>` or `prompt-learned-<failure mode>`.
+Review it, edit it by saving a new version, and accept it, or leave it as a draft.
+
 Delivery shows, for Claude, Codex and Copilot, whether the agent's instruction file holds the
 accepted version: `OK`, `Outdated` when the file holds a different version from the accepted one,
 `Drifted` when the block was edited by hand, or `Missing` when nothing was installed in the file the

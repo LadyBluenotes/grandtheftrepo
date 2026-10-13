@@ -15,6 +15,7 @@ import { useThreadShells } from "../../state/entities";
 import { useEnvironmentQuery } from "../../state/query";
 import { useAdaptiveWorkspaceLayout } from "../layout/AdaptiveWorkspaceLayout";
 import { SettingsScreenContent } from "../settings/components/SettingsScreen";
+import { AttentionStrip } from "./AttentionStrip";
 import { boardState, boardThread, type BoardRow, type BoardState } from "./boardGroups";
 import { kanbanActive, kanbanBoard } from "./state";
 import { useSnoozeWake } from "./useSnoozeWake";
@@ -53,7 +54,10 @@ function listItems(state: BoardState): ReadonlyArray<ListItem> {
   ]);
 }
 
-/** A project's tickets grouped by column. Read-only: tapping a ticket opens its thread. */
+/**
+ * A project's tickets grouped by column, under the strip of what waits on you. Read-only: tapping a
+ * ticket or a strip row about a thread opens that thread.
+ */
 export function KanbanBoardScreen({
   route,
 }: StaticScreenProps<{ readonly environmentId: EnvironmentId; readonly projectId: ProjectId }>) {
@@ -125,6 +129,18 @@ function BoardList(props: {
     },
     [selectThread, threads],
   );
+  // Where the plugin runs, what waits on the person sits above the groups, tickets or not.
+  const attentionStrip = useMemo(
+    () =>
+      active === true ? (
+        <AttentionStrip
+          environmentId={environmentId}
+          projectId={projectId}
+          onOpenThread={openThread}
+        />
+      ) : undefined,
+    [active, environmentId, projectId, openThread],
+  );
   const renderItem = useCallback(
     ({ item }: { readonly item: ListItem }) =>
       item.kind === "header" ? (
@@ -158,6 +174,7 @@ function BoardList(props: {
             getItemType={(item) => item.kind}
             keyExtractor={(item) => item.key}
             ListEmptyComponent={<BoardMessage state={state} onRetry={onRefresh} />}
+            ListHeaderComponent={attentionStrip}
             refreshControl={
               <RefreshControl
                 onRefresh={onRefresh}

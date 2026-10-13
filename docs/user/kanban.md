@@ -73,7 +73,10 @@ exist, so the agent can look them up instead of relitigating them.
 
 In the mobile app, **Board** on a project's overview in Settings lists its tickets grouped by
 column, read-only: tap a ticket to open its thread, and pull down to refresh. The row appears only
-when the server runs the board, and a ticket with no thread yet cannot be opened.
+when the server runs the board, and a ticket with no thread yet cannot be opened. The same
+[Waiting on you](#waiting-on-you) rows sit above the columns, oldest first; tap one to open its
+thread, while a row about the whole project, such as a budget breach, only shows its text. Nothing
+can be dismissed from the phone either.
 
 ## Emergency stop
 

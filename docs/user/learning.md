@@ -23,6 +23,19 @@ item a candidate, and handing it over makes it promoted. Once you set an item's 
 the rules leave it alone. **Local only** is an owner kind with nothing to hand over, so an item with
 it stays open.
 
+## What handing over does
+
+Handing over writes a draft for you to review. Nothing is accepted for you.
+
+- **Project knowledge**: a draft page titled `Learned: <failure mode>` on the **Knowledge** screen.
+- **Policy** and **Prompt**: a draft policy version on the **Policies** screen, keyed
+  `learned-<failure mode>`, or `prompt-learned-<failure mode>` for a prompt. For now an accepted
+  prompt policy reaches agents through the instruction files, like any other policy.
+
+Each draft holds the item's reason and its latest five pieces of evidence. While the knowledge
+plugin is off, items for project knowledge stay candidates; likewise policy items and prompt items
+while the policy plugin is off. They are handed over once it is on again.
+
 ## Corrections
 
 The **Corrections** tab lists the project's corrections over the last 7, 30 or 90 days, with the
