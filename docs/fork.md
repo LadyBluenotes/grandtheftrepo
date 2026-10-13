@@ -106,10 +106,13 @@ them half-evaluated. The host hands `toolkitRegistration` to `ServerPlugin.mcp` 
   drafting thread on routing's cheap tier whose final message the plugin's reactor checks when the
   run ends; a valid spec becomes the issue's criteria and admits it as `spec`, and the description
   is never edited. Mobile shows the board as a read-only list grouped by column, from the Board row
-  on a project's overview; it and the web board share the board and active-plugin atoms in
-  `packages/client-runtime/src/plugins/kanban.ts`. Server: `apps/server/src/plugins/kanban/`.
-  Contracts: `packages/contracts/src/plugins/kanban.ts`. Web: `apps/web/src/plugins/kanban/`.
-  Mobile: `apps/mobile/src/features/kanban/`. User guide: [Kanban board](./user/kanban.md).
+  on a project's overview, under the same attention rows; it and the web board share the board and
+  active-plugin atoms, the attention atom and the strip's row model in
+  `packages/client-runtime/src/plugins/kanban.ts`, and the contract's
+  `KANBAN_ATTENTION_KIND_LABELS` names each kind, so a new kind needs a label there and nothing per
+  client. Server: `apps/server/src/plugins/kanban/`. Contracts:
+  `packages/contracts/src/plugins/kanban.ts`. Web: `apps/web/src/plugins/kanban/`. Mobile:
+  `apps/mobile/src/features/kanban/`. User guide: [Kanban board](./user/kanban.md).
 - **telemetry**: the sixteen efficiency measures of #1 and #35 over a project's window, from the
   `telemetry.measures` gateway method and the `telemetry_measures` MCP tool. Its reactor keeps
   runs, tool calls, threads and provider turn token usage from the event log in the plugin's own

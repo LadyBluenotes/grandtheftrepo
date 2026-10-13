@@ -1,5 +1,6 @@
 import {
   createKanbanActiveAtomFamily,
+  createKanbanAttentionAtomFamily,
   createKanbanBoardAtomFamily,
 } from "@t3tools/client-runtime/plugins/kanban";
 import {
@@ -7,7 +8,6 @@ import {
   createPluginRpcQueryAtomFamily,
 } from "@t3tools/client-runtime/plugins/rpc";
 import { scopeThreadRef } from "@t3tools/client-runtime/environment";
-import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/models";
 import {
   KANBAN_METHODS,
   type EnvironmentId,
@@ -67,42 +67,15 @@ export const kanbanStopClear = createPluginRpcCommand(connectionAtomRuntime, {
   method: KANBAN_METHODS.stopClear,
 });
 
-/** Changes when a thread's pending request starts or ends, or it settles or leaves the project. */
-const pendingRequestsKey = (threads: ReadonlyArray<EnvironmentThreadShell>) =>
-  threads
-    .map(
-      (thread) =>
-        `${thread.id} ${thread.source.pendingRuntimeRequest?.id ?? "-"} ${thread.settledOverride ?? "-"} ${thread.settledAt ?? "-"}`,
-    )
-    .join("\n");
-
-/**
- * What the attention strip refetches on: the window coming back into view, a change in the
- * project's pending requests, and every board snapshot, which follows each board command. Any
- * other shell update, such as streaming text, leaves it equal and refetches nothing.
- */
-const attentionSignal = (environmentId: EnvironmentId, projectId: ProjectId) => {
-  const threads = environmentThreadShells.threadShellsForProjectRefsAtom([
-    { environmentId, projectId },
-  ]);
-  const board = kanbanBoard({ environmentId, input: { projectId } });
-  return Atom.withEquality(
-    Atom.make(
-      (get) => [get(Atom.windowFocusSignal), pendingRequestsKey(get(threads)), get(board)] as const,
-    ),
-    (left, right) => left.every((value, index) => Object.is(value, right[index])),
-  );
-};
-
 /**
  * What waits on a person in a project, for the strip above the board. It re-reads only on the
- * signal above and never polls, so a flag a sweep raises shows on the next of those.
+ * window coming back into view, a change in the project's pending requests and every board
+ * snapshot, and never polls, so a flag a sweep raises shows on the next of those.
  */
-export const kanbanAttention = createPluginRpcQueryAtomFamily(connectionAtomRuntime, {
-  label: "environment-data:kanban:attention",
-  method: KANBAN_METHODS.attentionList,
-  staleTimeMs: 5_000,
-  refreshTrigger: ({ environmentId, input }) => attentionSignal(environmentId, input.projectId),
+export const kanbanAttention = createKanbanAttentionAtomFamily(connectionAtomRuntime, {
+  board: kanbanBoard,
+  threadShells: environmentThreadShells.threadShellsForProjectRefsAtom,
+  focus: Atom.windowFocusSignal,
 });
 
 /**
