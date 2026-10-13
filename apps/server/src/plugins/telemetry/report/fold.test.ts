@@ -255,6 +255,37 @@ it("pull requests: open now or closed in the range, once each, by state", () => 
       [5, "merged"],
     ],
   );
+  // Archived threads with an open pull request, or one only closed, are not loaded.
+  assert.strictEqual(
+    report.pullRequests.missingReason,
+    "Archived threads count only when settled or merged in the range.",
+  );
+});
+
+it("while telemetry replays, the sections built from its thread rows are unavailable, and the rest answer", () => {
+  const reason = "Telemetry is still replaying the event log.";
+  const report = foldReport({ ...fullInput(), threadRowsUnavailable: reason });
+  assert.deepEqual(
+    SECTIONS.map((name) => [name, report[name].state, report[name].missingReason]),
+    [
+      ["delivered", "unavailable", reason],
+      ["findings", "ok", null],
+      ["decisions", "ok", null],
+      ["knowledgeChanges", "ok", null],
+      ["prompts", "ok", null],
+      ["failures", "ok", null],
+      ["pullRequests", "unavailable", reason],
+      ["unresolved", "unavailable", reason],
+      ["attention", "ok", null],
+      ["efficiency", "ok", null],
+    ],
+  );
+  // Once the rows are complete, the same input answers every section.
+  const ready = foldReport(fullInput());
+  assert.deepEqual(
+    (["delivered", "pullRequests", "unresolved"] as const).map((name) => ready[name].state),
+    ["ok", "ok", "ok"],
+  );
 });
 
 it("unresolved: open learning items, most seen first, then pull requests with changes requested", () => {

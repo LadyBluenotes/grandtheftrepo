@@ -49,8 +49,16 @@ export interface ReportInput {
   readonly projectTitle: string;
   readonly from: string;
   readonly to: string;
-  /** The project's threads the report can name: the active ones and those the range touched. */
+  /**
+   * The project's threads the report can name: the active ones, and the archived ones the
+   * plugin's thread rows say settled or merged in the range.
+   */
   readonly threads: ReadonlyArray<ReportThread>;
+  /**
+   * Why the plugin's thread rows cannot be read yet, the reason the measures give; null when
+   * they can. While set, the sections built from the threads those rows name are unavailable.
+   */
+  readonly threadRowsUnavailable: string | null;
   readonly measures: TelemetryMeasuresResult;
   /** Every open attention flag; the fold keeps those on the project's threads. */
   readonly flags: ReadonlyArray<{ readonly threadId: string; readonly text: string }>;
@@ -88,6 +96,9 @@ const unavailable = (missingReason: string) => ({
 });
 
 const notRunning = (plugin: string) => `The ${plugin} plugin is not running.`;
+
+/** Archived threads are loaded only when the plugin's rows say they settled or merged in the range. */
+const ARCHIVED_LIMIT = "Archived threads count only when settled or merged in the range.";
 
 /** Orders by each key in turn. Strings compare by code unit, so the order is the same everywhere. */
 const byKeys =
@@ -179,7 +190,7 @@ export const foldReport = (input: ReportInput): TelemetryReport => {
     (pr) => pr.state === "open" && pr.reviewDecision === "changes-requested",
   );
 
-  const { learning, verdicts } = input;
+  const { learning, verdicts, threadRowsUnavailable } = input;
   const handedTo = (ownerKind: LearningOwnerKind, owner: string) => {
     if (learning === undefined) return unavailable(notRunning("learning"));
     if (!learning.promoters.includes(ownerKind)) {
@@ -227,14 +238,17 @@ export const foldReport = (input: ReportInput): TelemetryReport => {
     projectTitle: input.projectTitle,
     from: input.from,
     to: input.to,
-    delivered: ok(
-      delivered.toSorted(
-        byKeys(
-          (item) => item.settledAt,
-          (item) => item.threadId,
-        ),
-      ),
-    ),
+    delivered:
+      threadRowsUnavailable !== null
+        ? unavailable(threadRowsUnavailable)
+        : ok(
+            delivered.toSorted(
+              byKeys(
+                (item) => item.settledAt,
+                (item) => item.threadId,
+              ),
+            ),
+          ),
     findings:
       verdicts === undefined
         ? unavailable(notRunning("review"))
@@ -310,32 +324,41 @@ export const foldReport = (input: ReportInput): TelemetryReport => {
                 createdAt: correction.createdAt,
               })),
           ),
-    pullRequests: ok(
-      linked
-        .filter((pr) => pr.linkedAt < input.to && (pr.state === "open" || inRange(pr.closedAt)))
-        .map(({ repository, number, url, title, state }) => ({
-          repository,
-          number,
-          url,
-          title,
-          state,
-        })),
-    ),
-    unresolved: ok(
-      [
-        ...openItems,
-        ...changesRequested.map(({ repository, number, url, title }) => ({
-          kind: "pull_request" as const,
-          repository,
-          number,
-          url,
-          title,
-        })),
-      ],
-      learning === undefined
-        ? "Open learning items are left out: the learning plugin is not running."
-        : null,
-    ),
+    pullRequests:
+      threadRowsUnavailable !== null
+        ? unavailable(threadRowsUnavailable)
+        : ok(
+            linked
+              .filter(
+                (pr) => pr.linkedAt < input.to && (pr.state === "open" || inRange(pr.closedAt)),
+              )
+              .map(({ repository, number, url, title, state }) => ({
+                repository,
+                number,
+                url,
+                title,
+                state,
+              })),
+            ARCHIVED_LIMIT,
+          ),
+    unresolved:
+      threadRowsUnavailable !== null
+        ? unavailable(threadRowsUnavailable)
+        : ok(
+            [
+              ...openItems,
+              ...changesRequested.map(({ repository, number, url, title }) => ({
+                kind: "pull_request" as const,
+                repository,
+                number,
+                url,
+                title,
+              })),
+            ],
+            learning === undefined
+              ? `Open learning items are left out: the learning plugin is not running. ${ARCHIVED_LIMIT}`
+              : ARCHIVED_LIMIT,
+          ),
     attention: ok(
       input.flags
         .toSorted(

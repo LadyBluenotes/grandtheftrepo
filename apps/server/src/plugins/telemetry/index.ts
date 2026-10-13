@@ -1,3 +1,4 @@
+import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 
@@ -31,8 +32,11 @@ const make = Effect.gen(function* () {
       ),
     ),
   );
-  // The measures read the reactor's tables, so each request waits for it to catch up.
-  return yield* Telemetry.make(reactor.drain);
+  // The measures and the report read the reactor's tables, so each request waits for it to catch up.
+  const telemetry = yield* Telemetry.make(reactor.drain);
+  return Context.make(Telemetry.Telemetry, telemetry).pipe(
+    Context.add(ReportService.ReportService, yield* ReportService.make(telemetry, reactor.drain)),
+  );
 }).pipe(Effect.orDie);
 
 /**
@@ -46,7 +50,7 @@ export const plugin = {
   id: "telemetry",
   dependsOn: [],
   migrations,
-  layer: ReportService.layer.pipe(Layer.provideMerge(Layer.effect(Telemetry.Telemetry, make))),
+  layer: Layer.effectContext(make),
   mcp: (register) =>
     Layer.merge(
       register(Mcp.TelemetryToolkit, Mcp.handlers),

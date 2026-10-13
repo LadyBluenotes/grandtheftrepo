@@ -147,6 +147,7 @@ export const fullInput = (): ReportInput => ({
       pullRequests: [pullRequest(3, { state: "merged", closedAt: BEFORE })],
     }),
   ],
+  threadRowsUnavailable: null,
   measures: [measure("first_review_acceptance", 0.75), measure("repeated_reads", null)],
   flags: [
     { threadId: "thread:open", text: "2 threads are writing to this project at once." },
