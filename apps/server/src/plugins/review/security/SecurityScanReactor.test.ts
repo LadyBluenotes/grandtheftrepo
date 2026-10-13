@@ -185,7 +185,7 @@ const boot = (
     const startReactor = withDiffs(started);
     const reactor = yield* startReactor;
     const sweep = yield* SecurityScanReactor.sweep(reactor.retryFailed()).pipe(
-      Effect.provide(layerDeps),
+      Effect.provide(Layer.mergeAll(layerDeps, kit.layerThreads)),
     );
     const publish = (...events: ReadonlyArray<OrchestrationV2DomainEvent>) =>
       Effect.flatMap(EventSink.EventSinkV2, (sink) => sink.write({ events })).pipe(
@@ -566,6 +566,66 @@ it.effect("a checkpoint committed before the reactor's cursor was created is not
         kit.requests.request({ threadId: reviewed, requestedBy: "user" }),
       );
       assert.strictEqual(pending.code, "scan_pending");
+    }),
+  ).pipe(Effect.provide(layerSink)),
+);
+
+it.effect("a scan the reactor gave up on settles as a scan row in warn", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const kit = yield* boot({ "0->1": workspaceGone });
+      yield* kit.publish(captured(turnCheckpoint(1)));
+      assert.deepEqual(yield* kit.failures, [{ attempts: 1 }]);
+      // Each tick retries the event once more; the fifth failure ends the retries, and the same
+      // tick settles the event.
+      for (const attempts of [2, 3, 4]) {
+        yield* kit.sweep;
+        assert.deepEqual(yield* kit.failures, [{ attempts }]);
+      }
+      yield* kit.sweep;
+      assert.deepEqual(yield* kit.failures, []);
+      assert.include(yield* kit.scanned, turnCheckpoint(1).id);
+      assert.deepEqual(yield* kit.security.findings({ threadId: reviewed }), []);
+    }),
+  ).pipe(Effect.provide(layerSink)),
+);
+
+it.effect("a scan the reactor gave up on settles as an acknowledgeable hold in block", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      // The capture of `ready` committed before the reactor's cursor; its failure row stands in
+      // for five failed attempts, as a block project's scan can fail before it is caught.
+      const [stored] = yield* Effect.flatMap(EventSink.EventSinkV2, (sink) =>
+        sink.write({ events: [captured({ ...turnCheckpoint(1), id: ready })] }),
+      );
+      const kit = yield* boot({}, "now");
+      yield* kit.review`DELETE FROM security_scan`;
+      yield* kit.security.setMode({ projectId, mode: "block" });
+      yield* kit.review`INSERT INTO host_reactor_failure (sequence, type, attempts, last_error, failed_at)
+        VALUES (${stored!.sequence}, 'checkpoint.captured', 5, 'gave up', '2026-10-05T12:00:00.000Z')`;
+      const pending = yield* refusal(
+        kit.requests.request({ threadId: reviewed, requestedBy: "user" }),
+      );
+      assert.strictEqual(pending.code, "scan_pending");
+
+      assert.deepInclude(yield* kit.sweep, { acted: 2, flags: 1 });
+      assert.deepEqual(yield* kit.failures, []);
+      assert.include(yield* kit.scanned, ready);
+      assert.deepEqual(
+        (yield* kit.security.findings({ threadId: reviewed })).map((finding) => [
+          finding.checkpointId,
+          finding.patternId,
+        ]),
+        [[ready, "scan_failed"]],
+      );
+      const held = yield* refusal(
+        kit.requests.request({ threadId: reviewed, requestedBy: "user" }),
+      );
+      assert.strictEqual(held.code, "gated");
+
+      yield* kit.security.ack({ threadId: reviewed, reason: "Checked the turn by hand." });
+      const asked = yield* kit.requests.request({ threadId: reviewed, requestedBy: "user" });
+      assert.strictEqual(asked.checkpointId, ready);
     }),
   ).pipe(Effect.provide(layerSink)),
 );

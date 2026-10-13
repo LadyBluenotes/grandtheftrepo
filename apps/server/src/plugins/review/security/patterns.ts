@@ -75,9 +75,10 @@ const EVAL = /\beval\s*\(|\bnew\s+Function\s*\(/;
 const FETCHED = /\b(?:fetch|curl|wget)\b/;
 /**
  * `sudo` or `env` ahead of the command, by name or path, with its options, the values of the
- * options that take one, and `env`'s `NAME=value` assignments. The first other word is the command.
+ * options that take one (short, or long with a space or `=`), and `env`'s `NAME=value`
+ * assignments. The first other word is the command.
  */
-const WRAPPER = String.raw`(?:[\w.-]*\/)*(?:sudo(?:\s+(?:-[ugCDhprtU]\s+[^\s|]+|-\S+))*|env(?:\s+(?:-[uCS]\s+[^\s|]+|-\S+|\w+=[^\s|]*))*)\s+`;
+const WRAPPER = String.raw`(?:[\w.-]*\/)*(?:sudo(?:\s+(?:-[ugCDhprtU]\s+[^\s|]+|--(?:user|group|chdir|chroot|host|prompt|role|type|other-user|close-from)\s+[^\s|]+|-\S+))*|env(?:\s+(?:-[uCS]\s+[^\s|]+|--(?:unset|chdir|split-string)\s+[^\s|]+|-\S+|\w+=[^\s|]*))*)\s+`;
 /** A download piped into `sh`, `bash` or `zsh`, by name or path, through `sudo` or `env` or not. */
 const PIPE_TO_SHELL = new RegExp(
   String.raw`\b(?:curl|wget)\b[^|]*\|\s*(?:${WRAPPER})*(?:[\w.-]*\/)*(?:ba|z)?sh\b`,

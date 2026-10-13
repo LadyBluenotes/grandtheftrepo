@@ -28,7 +28,7 @@ export type Handlers<E = never> = {
 };
 
 /** Attempts after which a failed event stays in the failure table for a person to look at. */
-const MAX_ATTEMPTS = 5;
+export const MAX_ATTEMPTS = 5;
 /** The cursor is saved at every multiple of this even when no handler ran, bounding replay after a restart. */
 const CURSOR_SAVE_INTERVAL = 256;
 const RESUBSCRIBE_DELAY = Duration.minutes(1);

@@ -1,12 +1,19 @@
-import type { OrchestrationV2Checkpoint, OrchestrationV2Run, ThreadId } from "@t3tools/contracts";
+import type {
+  CheckpointId,
+  OrchestrationV2Checkpoint,
+  OrchestrationV2Run,
+  ThreadId,
+} from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as SqlClient from "effect/sql/SqlClient";
 import type * as SqlError from "effect/sql/SqlError";
+import * as Stream from "effect/Stream";
 
 import * as CheckpointDiffQuery from "../../../checkpointing/CheckpointDiffQuery.ts";
 import type { CheckpointServiceError } from "../../../checkpointing/Errors.ts";
+import * as EventSink from "../../../orchestration-v2/EventSink.ts";
 import type * as Orchestrator from "../../../orchestration-v2/Orchestrator.ts";
 import * as ThreadManagementService from "../../../orchestration-v2/ThreadManagementService.ts";
 import * as Attention from "../../Attention.ts";
@@ -38,6 +45,41 @@ const UNREADABLE_RUNS: ReadonlySet<OrchestrationV2Run["status"]> = new Set([
 
 /** What a turn the scan could not read records in a `block` project, so the thread is held. */
 const SCAN_FAILED: ReadonlyArray<Match> = [{ patternId: "scan_failed", file: "", line: 0 }];
+
+/** Stores a checkpoint's matches; one per checkpoint, pattern, file and line, so a repeat adds none. */
+const insertFindings = (
+  sql: SqlClient.SqlClient,
+  input: {
+    readonly threadId: ThreadId;
+    readonly checkpointId: CheckpointId;
+    readonly matches: ReadonlyArray<Match>;
+    readonly blocking: boolean;
+    readonly createdAt: string;
+  },
+) =>
+  sql`INSERT INTO security_finding ${sql.insert(
+    input.matches.map((match) => ({
+      thread_id: input.threadId,
+      checkpoint_id: input.checkpointId,
+      pattern_id: match.patternId,
+      file: match.file,
+      line: match.line,
+      blocking: input.blocking ? 1 : 0,
+      created_at: input.createdAt,
+    })),
+  )} ON CONFLICT (checkpoint_id, pattern_id, file, line) DO NOTHING`;
+
+/**
+ * Marks a checkpoint handled, with its findings, whatever the scan found or skipped, so `block` can
+ * tell a scan still to come from one that found nothing.
+ */
+const markScanned = (sql: SqlClient.SqlClient, threadId: ThreadId, checkpointId: CheckpointId) =>
+  Effect.gen(function* () {
+    const scannedAt = DateTime.formatIso(yield* DateTime.now);
+    yield* sql`INSERT INTO security_scan (checkpoint_id, thread_id, scanned_at)
+      VALUES (${checkpointId}, ${threadId}, ${scannedAt})
+      ON CONFLICT (checkpoint_id) DO NOTHING`;
+  });
 
 /**
  * The diff of the turn ending at `ordinal`, from the turn before it. `getTurnDiff` covers completed
@@ -144,18 +186,13 @@ export const handlers = Effect.gen(function* () {
       const matches = typeof scanned === "string" ? SCAN_FAILED : scanned;
       if (matches.length === 0) return;
 
-      const createdAt = DateTime.formatIso(occurredAt);
-      yield* sql`INSERT INTO security_finding ${sql.insert(
-        matches.map((match) => ({
-          thread_id: threadId,
-          checkpoint_id: checkpoint.id,
-          pattern_id: match.patternId,
-          file: match.file,
-          line: match.line,
-          blocking: mode === "block" ? 1 : 0,
-          created_at: createdAt,
-        })),
-      )} ON CONFLICT (checkpoint_id, pattern_id, file, line) DO NOTHING`;
+      yield* insertFindings(sql, {
+        threadId,
+        checkpointId: checkpoint.id,
+        matches,
+        blocking: mode === "block",
+        createdAt: DateTime.formatIso(occurredAt),
+      });
       if (mode !== "block") return;
       const open = yield* holdOf(sql, threadId);
       if (open === 0) return;
@@ -176,12 +213,7 @@ export const handlers = Effect.gen(function* () {
         const { threadId, payload: checkpoint } = event;
         if (checkpoint.status !== "ready" || checkpoint.threadId !== threadId) return;
         yield* scanCheckpoint(threadId, checkpoint, event.occurredAt);
-        // Written with the findings, whatever the scan found or skipped, so `block` can tell a
-        // scan still to come from one that found nothing.
-        const scannedAt = DateTime.formatIso(yield* DateTime.now);
-        yield* sql`INSERT INTO security_scan (checkpoint_id, thread_id, scanned_at)
-          VALUES (${checkpoint.id}, ${threadId}, ${scannedAt})
-          ON CONFLICT (checkpoint_id) DO NOTHING`;
+        yield* markScanned(sql, threadId, checkpoint.id);
       }),
   };
   return result;
@@ -211,7 +243,11 @@ export const markScanStart = Effect.gen(function* () {
 
 /**
  * Builds the security sweep. It first retries the scan's failed events with `retryFailed`, the
- * reactor's own retry, which otherwise runs only at start. It records a `security` correction in
+ * reactor's own retry, which otherwise runs only at start. An event the reactor gave up on, after
+ * `PluginReactor.MAX_ATTEMPTS`, would leave its checkpoint without a scan row, pending in `block`
+ * for good with nothing to acknowledge; the sweep settles it instead. In a project in `block` at
+ * that point the checkpoint gets a `scan_failed` finding, in any other only its scan row, and the
+ * failure row goes, so it is settled once. It records a `security` correction in
  * the learning plugin for each finding without one, which the reactor cannot: a reactor sees only
  * its own plugin's services, and a sweep runs with every active plugin's. The description names the
  * pattern, file and line, never the matched text, and the source key is built from the finding's
@@ -224,6 +260,45 @@ export const sweep = <E>(retryFailed: Effect.Effect<void, E, SqlClient.SqlClient
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
     const attention = yield* Attention.Attention;
+    const threads = yield* ThreadManagementService.ThreadManagementService;
+    const sink = yield* EventSink.EventSinkV2;
+
+    /** The committed event at `sequence`, or undefined once the log no longer holds it. */
+    const readEvent = (sequence: number) =>
+      Effect.gen(function* () {
+        // Past the log the stream would wait for live events forever.
+        if (sequence > (yield* sink.latestSequence())) return undefined;
+        const events = yield* Stream.runCollect(
+          sink.stream({ afterSequence: sequence - 1 }).pipe(Stream.take(1)),
+        );
+        return events.find((stored) => stored.sequence === sequence);
+      });
+
+    /**
+     * Settles one event the reactor gave up on, in one transaction. Should it fail, as when the
+     * thread cannot be read now, the failure row stays for the next tick.
+     */
+    const settle = (sequence: number) =>
+      Effect.gen(function* () {
+        const stored = yield* readEvent(sequence);
+        const event = stored?.event;
+        if (event?.type === "checkpoint.captured" && event.payload.status === "ready") {
+          const shell = yield* threads.getThreadShell(event.threadId);
+          if (shell !== null && shell.deletedAt === null) {
+            if ((yield* modeOf(sql, shell.projectId)) === "block") {
+              yield* insertFindings(sql, {
+                threadId: event.threadId,
+                checkpointId: event.payload.id,
+                matches: SCAN_FAILED,
+                blocking: true,
+                createdAt: DateTime.formatIso(event.occurredAt),
+              });
+            }
+          }
+          yield* markScanned(sql, event.threadId, event.payload.id);
+        }
+        yield* sql`DELETE FROM host_reactor_failure WHERE sequence = ${sequence}`;
+      }).pipe(sql.withTransaction);
 
     const run = Effect.fn("SecurityScanReactor.sweep")(function* (input: {
       readonly dryRun: boolean;
@@ -236,6 +311,26 @@ export const sweep = <E>(retryFailed: Effect.Effect<void, E, SqlClient.SqlClient
           ),
         );
       }
+      const exhausted = yield* sql<{ readonly sequence: number }>`
+        SELECT sequence FROM host_reactor_failure
+        WHERE attempts >= ${PluginReactor.MAX_ATTEMPTS} ORDER BY sequence`;
+      let settled = 0;
+      for (const { sequence } of exhausted) {
+        if (input.dryRun) {
+          settled += 1;
+          continue;
+        }
+        const done = yield* settle(sequence).pipe(
+          Effect.as(true),
+          Effect.catch((cause) =>
+            Effect.logWarning("review: could not settle a failed security scan", {
+              sequence,
+              cause,
+            }).pipe(Effect.as(false)),
+          ),
+        );
+        if (done) settled += 1;
+      }
       const pending = yield* sql<FindingRow>`SELECT * FROM security_finding
       WHERE correction_id IS NULL AND pattern_id <> 'scan_failed'
       ORDER BY id LIMIT ${BATCH_SIZE}`;
@@ -243,7 +338,7 @@ export const sweep = <E>(retryFailed: Effect.Effect<void, E, SqlClient.SqlClient
       const corrections = Option.getOrUndefined(
         yield* Effect.serviceOption(CorrectionStore.CorrectionStore),
       );
-      let acted = 0;
+      let acted = settled;
       for (const row of pending) {
         if (corrections === undefined) break;
         if (input.dryRun) {

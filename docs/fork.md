@@ -185,8 +185,9 @@ them half-evaluated. The host hands `toolkitRegistration` to `ServerPlugin.mcp` 
   correction, because a reactor sees only its own plugin's services; in `block` a finding refuses
   `review.request`, holds back the invalidation sweep's replacement request and keeps a
   `security_hold` flag until `review.security.ack`. The same sweep calls the reactor's
-  `retryFailed` each tick, and in `block` a turn the scan cannot read, a stopped or failed one
-  included, is held as a `scan_failed` finding rather than passed. The checkpoint becomes visible
+  `retryFailed` each tick and settles an event the reactor gave up on as a scan row, with a
+  `scan_failed` finding in `block`; in `block` a turn the scan cannot read, a stopped or failed
+  one included, is held as a `scan_failed` finding rather than passed. The checkpoint becomes visible
   before the reactor reaches it, so the reactor writes a `security_scan` row with each checkpoint's
   findings, and in `block` `review.request` (code `scan_pending`) and the invalidation sweep wait
   for that row. A checkpoint captured before `security_scan_since` never gets one and does not

