@@ -39,6 +39,7 @@ import {
   canRestore,
   deliveryBadge,
   draftProblem,
+  draftSourceLabel,
   groupKnowledge,
   needsInstall,
   useKnowledgeCommands,
@@ -270,7 +271,7 @@ function DraftRow({
   return (
     <SettingsRow
       title={knowledgePagePath(draft.key)}
-      description={draft.source.kind === "agent" ? "Proposed by an agent" : "Proposed by a person"}
+      description={draftSourceLabel(draft.source)}
       control={
         <div className="flex items-center gap-1.5">
           <Button size="xs" variant="ghost-muted" disabled={locked} onClick={onDiscard}>

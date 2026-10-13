@@ -12,6 +12,7 @@ import {
   KnowledgeTitle,
   type KnowledgeAcceptInput,
   type KnowledgeEntry,
+  type KnowledgeSource,
   type KnowledgeVerifyResult,
   type PolicyAgent,
   type ProjectId,
@@ -190,6 +191,21 @@ export function acceptInput(
     ...(nextTitle === draft.title ? {} : { title: nextTitle }),
     ...(nextBody === draft.body ? {} : { body: nextBody }),
   };
+}
+
+/**
+ * Who a draft row says proposed it. A learned draft names its item by number only: the Learning
+ * screen opens an item from local state, so its URL has nothing to link to.
+ */
+export function draftSourceLabel(source: KnowledgeSource): string {
+  switch (source.kind) {
+    case "agent":
+      return "Proposed by an agent";
+    case "item":
+      return `Learned from item #${source.itemId}`;
+    case "person":
+      return "Proposed by a person";
+  }
 }
 
 export const AGENT_LABEL: Record<PolicyAgent, string> = {
