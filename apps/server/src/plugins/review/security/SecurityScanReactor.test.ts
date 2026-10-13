@@ -82,11 +82,8 @@ const turnCheckpoint = (ordinal: number, scopeId = `scope:${reviewed}`) =>
     capturedAt,
   });
 
-/** `reviewed`'s run for turn `ordinal` that ended without completing, as the read model reports it. */
-const unfinishedRun = (
-  ordinal: number,
-  status: "interrupted" | "cancelled" | "failed",
-): OrchestrationV2Run => {
+/** `reviewed`'s run for turn `ordinal`, in `status`, as the read model reports it. */
+const runOf = (ordinal: number, status: OrchestrationV2Run["status"]): OrchestrationV2Run => {
   const providerInstanceId = ProviderInstanceId.make("codex");
   return {
     id: RunId.make(`run:${ordinal}`),
@@ -469,10 +466,10 @@ it.effect(
       Effect.gen(function* () {
         const kit = yield* boot({ "0->1": configDiff([`+export const token = "${token}";`]) });
         yield* kit.setRuns(reviewed, [
-          unfinishedRun(1, "interrupted"),
-          unfinishedRun(2, "failed"),
-          unfinishedRun(3, "cancelled"),
-          unfinishedRun(4, "failed"),
+          runOf(1, "interrupted"),
+          runOf(2, "failed"),
+          runOf(3, "cancelled"),
+          runOf(4, "failed"),
         ]);
 
         // `warn`: a warning, the event done, nothing recorded and nothing to retry.
@@ -626,6 +623,64 @@ it.effect("a scan the reactor gave up on settles as an acknowledgeable hold in b
       yield* kit.security.ack({ threadId: reviewed, reason: "Checked the turn by hand." });
       const asked = yield* kit.requests.request({ threadId: reviewed, requestedBy: "user" });
       assert.strictEqual(asked.checkpointId, ready);
+    }),
+  ).pipe(Effect.provide(layerSink)),
+);
+
+it.effect(
+  "a scan the reactor gave up on is held only while its checkpoint is still a root run's turn",
+  () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        // Both captures committed before the reactor's cursor; their failure rows stand in for five
+        // failed attempts. One checkpoint is a subagent's, the other's turn was rolled back since.
+        const subagent = turnCheckpoint(2, `scope:${reviewed}:subagent`);
+        const rolledBack = turnCheckpoint(3);
+        const stored = yield* Effect.flatMap(EventSink.EventSinkV2, (sink) =>
+          sink.write({ events: [captured(subagent), captured(rolledBack)] }),
+        );
+        const kit = yield* boot({}, "now");
+        yield* kit.security.setMode({ projectId, mode: "block" });
+        yield* kit.setRuns(reviewed, [runOf(3, "rolled_back")]);
+        for (const { sequence } of stored) {
+          yield* kit.review`INSERT INTO host_reactor_failure
+            (sequence, type, attempts, last_error, failed_at)
+            VALUES (${sequence}, 'checkpoint.captured', 5, 'gave up', '2026-10-05T12:00:00.000Z')`;
+        }
+
+        yield* kit.sweep;
+        assert.deepEqual(yield* kit.failures, []);
+        assert.includeMembers(yield* kit.scanned, [subagent.id, rolledBack.id]);
+        assert.deepEqual(yield* kit.security.findings({ threadId: reviewed }), []);
+      }),
+    ).pipe(Effect.provide(layerSink)),
+);
+
+it.effect("a diff as long as the driver's cap may be cut off, so it is unreadable", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      // The git driver's `CHECKPOINT_DIFF_MAX_OUTPUT_BYTES`; the token comes before the cap.
+      const atTheCap = configDiff([
+        `+export const token = "${token}";`,
+        `+${"x".repeat(10_000_000)}`,
+      ]);
+      const kit = yield* boot({ "0->1": atTheCap, "1->2": atTheCap });
+
+      // `warn`: passed over with a warning; nothing from the part that was read is stored.
+      yield* kit.publish(captured(turnCheckpoint(1)));
+      assert.deepEqual(yield* kit.failures, []);
+      assert.deepEqual(yield* kit.security.findings({ threadId: reviewed }), []);
+
+      // `block`: held.
+      yield* kit.security.setMode({ projectId, mode: "block" });
+      yield* kit.publish(captured(turnCheckpoint(2)));
+      assert.deepEqual(
+        (yield* kit.security.findings({ threadId: reviewed })).map((finding) => [
+          finding.checkpointId,
+          finding.patternId,
+        ]),
+        [[turnCheckpoint(2).id, "scan_failed"]],
+      );
     }),
   ).pipe(Effect.provide(layerSink)),
 );

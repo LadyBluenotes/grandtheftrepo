@@ -46,7 +46,15 @@ const UNREADABLE_RUNS: ReadonlySet<OrchestrationV2Run["status"]> = new Set([
 /** What a turn the scan could not read records in a `block` project, so the thread is held. */
 const SCAN_FAILED: ReadonlyArray<Match> = [{ patternId: "scan_failed", file: "", line: 0 }];
 
-/** Stores a checkpoint's matches; one per checkpoint, pattern, file and line, so a repeat adds none. */
+/**
+ * The most patch `getTurnDiff` returns: the git driver keeps the first
+ * `CHECKPOINT_DIFF_MAX_OUTPUT_BYTES` (`apps/server/src/vcs/GitVcsDriver.ts`) of a diff and drops
+ * the rest without saying so. A diff this long may have lost lines past the cap, so the scan
+ * cannot vouch for it.
+ */
+const DIFF_LIMIT_BYTES = 10_000_000;
+
+/** Stores a checkpoint's matches, one per checkpoint, pattern, file and line; repeats add none. */
 const insertFindings = (
   sql: SqlClient.SqlClient,
   input: {
@@ -111,10 +119,10 @@ const turnDiff = Effect.fn("SecurityScanReactor.turnDiff")(function* (
 });
 
 /**
- * Scans each root-run checkpoint's turn: the lines its diff adds, against the fixed patterns, unless
- * the project's mode is `off`. A match is stored once per checkpoint, pattern, file and line, so a
- * replayed event adds nothing. In `block` the thread's hold is open and its flag raised here; the
- * sweep raises it again should that write fail. Every ready checkpoint handled gets a
+ * Scans each root-run checkpoint's turn: the lines its diff adds, against the fixed patterns,
+ * unless the project's mode is `off`. A match is stored once per checkpoint, pattern, file and
+ * line, so a replayed event adds nothing. In `block` the thread's hold is open and its flag raised
+ * here; the sweep raises it again should that write fail. Every ready checkpoint handled gets a
  * `security_scan` row in the same transaction, which `block` waits for before a review.
  */
 export const handlers = Effect.gen(function* () {
@@ -125,7 +133,7 @@ export const handlers = Effect.gen(function* () {
   /**
    * The matches on the lines the turn added, none when the checkpoint is not a root run's, or the
    * warning to log when the turn cannot be read: its run stopped or failed, and `getTurnDiff`
-   * covers completed runs only, or there is no diff query to ask.
+   * covers completed runs only; there is no diff query to ask; or its diff may be cut off.
    */
   const scanTurn = (threadId: ThreadId, checkpoint: OrchestrationV2Checkpoint, ordinal: number) =>
     Effect.gen(function* () {
@@ -147,15 +155,19 @@ export const handlers = Effect.gen(function* () {
       if (Option.isNone(diffs)) {
         return "review: security scan skipped, no checkpoint diff query" as const;
       }
-      return scan(yield* turnDiff(diffs.value, threadId, ordinal));
+      const diff = yield* turnDiff(diffs.value, threadId, ordinal);
+      if (Buffer.byteLength(diff, "utf8") >= DIFF_LIMIT_BYTES) {
+        return "review: security scan cannot read a diff cut off at the size limit" as const;
+      }
+      return scan(diff);
     });
 
   /**
    * Scans one ready checkpoint of `threadId` and stores what it found. A turn the scan cannot read
-   * holds the thread in `block`; in `warn` a turn that stopped or failed, or one with no diff query
-   * to ask, is passed over with a warning, a stopped or failed one's lines scanned with the next
-   * completed turn's, and any other failure fails the event for the sweep to retry. The project's mode is read now, as the scan runs: the moment the turn ended,
-   * unless this is a retry of a failed scan.
+   * holds the thread in `block`; in `warn` it is passed over with a warning, a stopped or failed
+   * one's lines scanned with the next completed turn's, and any other failure fails the event for
+   * the sweep to retry. The project's mode is read now, as the scan runs: the moment the turn
+   * ended, unless this is a retry of a failed scan.
    */
   const scanCheckpoint = (
     threadId: ThreadId,
@@ -245,16 +257,19 @@ export const markScanStart = Effect.gen(function* () {
  * Builds the security sweep. It first retries the scan's failed events with `retryFailed`, the
  * reactor's own retry, which otherwise runs only at start. An event the reactor gave up on, after
  * `PluginReactor.MAX_ATTEMPTS`, would leave its checkpoint without a scan row, pending in `block`
- * for good with nothing to acknowledge; the sweep settles it instead. In a project in `block` at
- * that point the checkpoint gets a `scan_failed` finding, in any other only its scan row, and the
- * failure row goes, so it is settled once. It records a `security` correction in
- * the learning plugin for each finding without one, which the reactor cannot: a reactor sees only
- * its own plugin's services, and a sweep runs with every active plugin's. The description names the
- * pattern, file and line, never the matched text, and the source key is built from the finding's
- * thread, checkpoint, pattern, file and line (`sourceKeyOf`), so a retry finds the same correction
- * and a rebuilt review database never lands on an old one; a `scan_failed` row records none. It then reconciles each held
- * thread's `security_hold` flag with its open findings, and clears flags whose hold is gone. A dry
- * run counts what it would do and writes nothing.
+ * for good with nothing to acknowledge; the sweep settles it instead. The checkpoint gets its scan
+ * row, plus a `scan_failed` finding when the project is in `block` at that point and the checkpoint
+ * is, as the thread stands now, still a root run's turn that was not rolled back; the failure row
+ * goes, so it is settled once.
+ *
+ * It records a `security` correction in the learning plugin for each finding without one, which
+ * the reactor cannot: a reactor sees only its own plugin's services, and a sweep runs with every
+ * active plugin's. The description names the pattern, file and line, never the matched text, and
+ * the source key is built from the finding's thread, checkpoint, pattern, file and line
+ * (`sourceKeyOf`), so a retry finds the same correction and a rebuilt review database never lands
+ * on an old one; a `scan_failed` row records none. It then reconciles each held thread's
+ * `security_hold` flag with its open findings, and clears flags whose hold is gone. A dry run
+ * counts what it would do and writes nothing.
  */
 export const sweep = <E>(retryFailed: Effect.Effect<void, E, SqlClient.SqlClient>) =>
   Effect.gen(function* () {
@@ -275,6 +290,26 @@ export const sweep = <E>(retryFailed: Effect.Effect<void, E, SqlClient.SqlClient
       });
 
     /**
+     * Whether the checkpoint, as the thread's records stand now rather than as the event had it, is
+     * still a turn the scan would hold: a root run's, not marked stale, and not rolled back.
+     */
+    const stillATurn = (threadId: ThreadId, checkpoint: OrchestrationV2Checkpoint) =>
+      Effect.gen(function* () {
+        if (checkpoint.appRunOrdinal === null || checkpoint.threadId !== threadId) return false;
+        const records = yield* threads.getThreadRecords(threadId, [
+          "checkpointScopes",
+          "checkpoints",
+          "runs",
+        ]);
+        const root = records.checkpointScopes.some(
+          (scope) => scope.id === checkpoint.scopeId && scope.kind === "root_run",
+        );
+        const current = records.checkpoints.find((candidate) => candidate.id === checkpoint.id);
+        const run = records.runs.find((candidate) => candidate.id === checkpoint.runId);
+        return root && current?.status !== "stale" && run?.status !== "rolled_back";
+      });
+
+    /**
      * Settles one event the reactor gave up on, in one transaction. Should it fail, as when the
      * thread cannot be read now, the failure row stays for the next tick.
      */
@@ -283,19 +318,23 @@ export const sweep = <E>(retryFailed: Effect.Effect<void, E, SqlClient.SqlClient
         const stored = yield* readEvent(sequence);
         const event = stored?.event;
         if (event?.type === "checkpoint.captured" && event.payload.status === "ready") {
-          const shell = yield* threads.getThreadShell(event.threadId);
-          if (shell !== null && shell.deletedAt === null) {
-            if ((yield* modeOf(sql, shell.projectId)) === "block") {
-              yield* insertFindings(sql, {
-                threadId: event.threadId,
-                checkpointId: event.payload.id,
-                matches: SCAN_FAILED,
-                blocking: true,
-                createdAt: DateTime.formatIso(event.occurredAt),
-              });
-            }
+          const { threadId, payload: checkpoint } = event;
+          const shell = yield* threads.getThreadShell(threadId);
+          const held =
+            shell !== null &&
+            shell.deletedAt === null &&
+            (yield* modeOf(sql, shell.projectId)) === "block" &&
+            (yield* stillATurn(threadId, checkpoint));
+          if (held) {
+            yield* insertFindings(sql, {
+              threadId,
+              checkpointId: checkpoint.id,
+              matches: SCAN_FAILED,
+              blocking: true,
+              createdAt: DateTime.formatIso(event.occurredAt),
+            });
           }
-          yield* markScanned(sql, event.threadId, event.payload.id);
+          yield* markScanned(sql, threadId, checkpoint.id);
         }
         yield* sql`DELETE FROM host_reactor_failure WHERE sequence = ${sequence}`;
       }).pipe(sql.withTransaction);
