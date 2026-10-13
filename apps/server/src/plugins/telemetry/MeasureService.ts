@@ -9,18 +9,13 @@ import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
-import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/sql/SqlClient";
 
 import * as ServerConfig from "../../config.ts";
 import type * as EventSink from "../../orchestration-v2/EventSink.ts";
 import * as ServerSettings from "../../serverSettings.ts";
 import { resolveModelAliases } from "../../usage/usageAggregation.ts";
-import {
-  createOverrideRateTable,
-  parseRateTable,
-  type RateTable,
-} from "../../usage/usagePricing.ts";
+import { createOverrideRateTable, type RateTable } from "../../usage/usagePricing.ts";
 import * as KnowledgeStore from "../knowledge/KnowledgeStore.ts";
 import * as CorrectionStore from "../learning/CorrectionStore.ts";
 import * as ItemStore from "../learning/items/ItemStore.ts";
@@ -28,13 +23,9 @@ import * as VerdictStore from "../review/VerdictStore.ts";
 import * as TierMapService from "../routing/TierMapService.ts";
 import { computeMeasures, unavailableMeasures } from "./measures/index.ts";
 import type { RunRow, ThreadRow, ToolCallRow, TurnUsageRow } from "./measures/input.ts";
+import { rateSnapshot } from "./rates.ts";
 import { readiness } from "./readiness.ts";
 
-/** The LiteLLM rate snapshot the Usage page saves under the state directory. */
-const RATES_FILE = "usage-model-rates.json";
-const decodeRatesFile = Schema.decodeUnknownEffect(
-  Schema.fromJsonString(Schema.Struct({ document: Schema.Unknown })),
-);
 /** Where verdicts are read from: a thread's first verdict can predate the window. */
 const EPOCH = DateTime.formatIso(DateTime.makeUnsafe(0));
 
@@ -79,12 +70,8 @@ export const make = Effect.fn("MeasureService.make")(function* (
   const { stateDir } = yield* ServerConfig.ServerConfig;
   const settings = yield* ServerSettings.ServerSettingsService;
 
-  // shortcut: UsageService keeps its rate table private, so this reads the snapshot it saves;
-  // ask UsageService for the table if that file moves. Without one nothing prices, as on the
-  // Usage page.
-  const rates = fs.readFileString(path.join(stateDir, RATES_FILE)).pipe(
-    Effect.flatMap(decodeRatesFile),
-    Effect.map((file): RateTable => parseRateTable(file.document)),
+  // Without a snapshot nothing prices, as on the Usage page.
+  const rates = rateSnapshot({ fs, path, stateDir }).read.pipe(
     Effect.orElseSucceed((): RateTable => new Map()),
   );
 

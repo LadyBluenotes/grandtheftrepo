@@ -6,6 +6,7 @@ import type { ServerPlugin } from "../Plugin.ts";
 import * as PluginReactor from "../PluginReactor.ts";
 import * as PluginSupervisor from "../PluginSupervisor.ts";
 import * as PolicyPromoter from "../policy/promoter.ts";
+import { fromService } from "../Readiness.ts";
 import * as ClassifySweep from "./ClassifySweep.ts";
 import * as CorrectionStore from "./CorrectionStore.ts";
 import * as ItemStore from "./items/ItemStore.ts";
@@ -16,6 +17,7 @@ import * as Reopened from "./producers/reopened.ts";
 import * as TurnFailures from "./producers/turnFailures.ts";
 import * as PromoteSweep from "./PromoteSweep.ts";
 import * as Promoter from "./Promoter.ts";
+import * as Checks from "./readiness.ts";
 import * as RegressionSweep from "./regressions/RegressionSweep.ts";
 
 /** Every producer's handlers, run by one reactor from the first event the server ever committed. */
@@ -55,8 +57,9 @@ export const plugin = {
   id: "learning",
   dependsOn: [],
   migrations,
-  layer: Layer.effectDiscard(start).pipe(
+  layer: Layer.merge(Layer.effectDiscard(start), Checks.layer).pipe(
     Layer.provideMerge(Layer.mergeAll(CorrectionStore.layer, ItemStore.layer, Promoter.layer)),
   ),
   mcp: (register) => register(Mcp.LearningToolkit, Mcp.handlers),
+  readiness: fromService(Checks.LearningReadiness),
 } satisfies ServerPlugin<unknown>;

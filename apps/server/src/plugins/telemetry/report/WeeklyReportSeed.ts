@@ -11,7 +11,7 @@ import * as ScheduledTaskService from "../../../scheduledTasks/ScheduledTaskServ
 const TITLE = "Weekly report";
 
 /** One per project; seeding looks for this id and never touches a task that has it. */
-const taskIdOf = (projectId: ProjectId) =>
+export const taskIdOf = (projectId: ProjectId) =>
   ScheduledTaskId.make(`telemetry-weekly-report:${projectId}`);
 
 const promptFor = (projectId: ProjectId) =>

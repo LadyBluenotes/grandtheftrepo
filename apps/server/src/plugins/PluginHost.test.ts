@@ -1,5 +1,6 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
+import { ProjectId, type ReadinessCheck } from "@t3tools/contracts";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -10,6 +11,7 @@ import * as ServerConfig from "../config.ts";
 import type { PluginMigration } from "./Plugin.ts";
 import * as PluginDatabase from "./PluginDatabase.ts";
 import { PluginHost, make, resolve } from "./PluginHost.ts";
+import * as Readiness from "./Readiness.ts";
 import { registry } from "./registry.ts";
 
 const plugins = [
@@ -290,5 +292,86 @@ it.layer(NodeServices.layer)("plugin databases", (it) => {
       assert.deepEqual(first, [[1, "init"]]);
       assert.deepEqual(second, []);
     }).pipe(Effect.provide(layerConfig)),
+  );
+});
+
+it.layer(NodeServices.layer)("plugin readiness", (it) => {
+  it.effect("runs each running plugin's checks and says why each other plugin does not run", () =>
+    Effect.gen(function* () {
+      const { stateDir } = yield* ServerConfig.ServerConfig;
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      yield* fs.writeFileString(path.join(stateDir, "plugins.json"), '{ "base": false }');
+      const asked: Array<ProjectId | null> = [];
+      const fine: ReadinessCheck = {
+        id: "tiers",
+        label: "Tier map",
+        status: "ready",
+        sentence: "Each tier resolves.",
+        target: "plugins",
+      };
+      const plugins: Parameters<typeof make>[0] = [
+        {
+          id: "fine",
+          dependsOn: [],
+          readiness: (projectId) =>
+            Effect.sync(() => {
+              asked.push(projectId);
+              return [fine];
+            }),
+        },
+        { id: "base", dependsOn: [], readiness: () => Effect.die(new Error("never runs")) },
+        { id: "child", dependsOn: ["base"] },
+        { id: "broken", dependsOn: [], readiness: () => Effect.die(new Error("boom")) },
+        { id: "quiet", dependsOn: [] },
+      ];
+      const projectId = ProjectId.make("project-1");
+
+      const report = yield* Effect.scoped(
+        Effect.flatMap(boot(plugins), (host) => host.readiness(projectId)),
+      );
+      assert.deepEqual(asked, [projectId]);
+      assert.deepEqual(
+        report.map(({ plugin, checks }) => [
+          plugin,
+          checks.map((check) => [check.id, check.status, check.sentence]),
+        ]),
+        [
+          ["fine", [["tiers", "ready", "Each tier resolves."]]],
+          [
+            "base",
+            [
+              [
+                "running",
+                "off",
+                "It is switched off. Switch it on and restart the server to use it.",
+              ],
+            ],
+          ],
+          ["child", [["running", "off", "It needs base, which is off."]]],
+          ["broken", [["readiness", "attention", "Its checks failed: boom."]]],
+          ["quiet", []],
+        ],
+      );
+    }).pipe(Effect.provide(layerConfig)),
+  );
+});
+
+it("an off plugin names a failed start first, and a pending restart last", () => {
+  const status = {
+    id: "child",
+    dependsOn: ["base"],
+    enabled: true,
+    active: false,
+    missing: ["base"],
+    startError: null,
+  };
+  assert.strictEqual(
+    Readiness.offCheck({ ...status, startError: 'Dependency "base" failed to start.' }).sentence,
+    'It did not start: Dependency "base" failed to start.',
+  );
+  assert.strictEqual(
+    Readiness.offCheck({ ...status, missing: [] }).sentence,
+    "It is switched on and starts with the next server start.",
   );
 });

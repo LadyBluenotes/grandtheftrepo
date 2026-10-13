@@ -4,7 +4,9 @@ import {
   PluginHostError,
   SUPERVISOR_METHODS,
   type PluginMethodCall,
+  type PluginReadiness,
   type PluginStatus,
+  type ProjectId,
 } from "@t3tools/contracts";
 import { writeFileStringAtomically } from "@t3tools/shared/atomicWrite";
 import { fromJsonStringPretty } from "@t3tools/shared/schemaJson";
@@ -25,6 +27,7 @@ import * as PluginDatabase from "./PluginDatabase.ts";
 import * as PluginRpc from "./PluginRpc.ts";
 import * as PluginSupervisor from "./PluginSupervisor.ts";
 import type { ServerPlugin } from "./Plugin.ts";
+import * as Readiness from "./Readiness.ts";
 import { type PluginMcpRequirements, type PluginRequirements, registry } from "./registry.ts";
 import type { toolkitRegistration } from "../mcp/McpHttpServer.ts";
 import * as CavemanHandlers from "./caveman/handlers.ts";
@@ -34,6 +37,7 @@ import * as LearningHandlers from "./learning/handlers.ts";
 import * as PolicyHandlers from "./policy/handlers.ts";
 import * as ReviewHandlers from "./review/handlers.ts";
 import * as RoutingHandlers from "./routing/handlers.ts";
+import * as ReadinessToolkit from "./readinessToolkit.ts";
 import * as SupervisorToolkit from "./supervisorToolkit.ts";
 import * as TelemetryHandlers from "./telemetry/handlers.ts";
 
@@ -43,7 +47,7 @@ type EnabledState = typeof EnabledState.Type;
 const decodeEnabledState = Schema.decodeUnknownEffect(Schema.fromJsonString(EnabledState));
 const encodeEnabledState = Schema.encodeUnknownEffect(fromJsonStringPretty(EnabledState));
 
-type Registered = Pick<ServerPlugin, "id" | "dependsOn" | "migrations">;
+type Registered = Pick<ServerPlugin, "id" | "dependsOn" | "migrations" | "readiness">;
 
 /** A plugin runs when it is enabled and every dependency runs. An unknown dependency id never runs. */
 export const resolve = (
@@ -85,6 +89,14 @@ export class PluginHost extends Context.Service<
       id: string,
       enabled: boolean,
     ) => Effect.Effect<ReadonlyArray<PluginStatus>, PluginHostError>;
+    /**
+     * Every plugin's readiness checks, in registry order: a running plugin's own, run in the
+     * caller's fiber, which holds every active plugin's services; one `off` check for any other.
+     * A plugin whose checks die reports that instead of failing the rest.
+     */
+    readonly readiness: (
+      projectId: ProjectId | null,
+    ) => Effect.Effect<ReadonlyArray<PluginReadiness>>;
   }
 >()("t3/plugins/PluginHost") {}
 
@@ -192,12 +204,38 @@ export const make = (plugins: ReadonlyArray<Registered>) =>
       return withStartErrors(statuses);
     });
 
-    return PluginHost.of({
-      activeIds,
-      databases,
-      statuses: Effect.map(read, (state) => withStartErrors(resolve(plugins, state))),
-      setEnabled,
+    const statuses = Effect.map(read, (state) => withStartErrors(resolve(plugins, state)));
+
+    const readiness = Effect.fn("PluginHost.readiness")(function* (projectId: ProjectId | null) {
+      return yield* Effect.forEach(
+        yield* statuses,
+        (status): Effect.Effect<PluginReadiness> => {
+          if (!status.active) {
+            return Effect.succeed({ plugin: status.id, checks: [Readiness.offCheck(status)] });
+          }
+          const checks = byId.get(status.id)?.readiness?.(projectId) ?? Effect.succeed([]);
+          return checks.pipe(
+            Effect.catchCause((cause) => {
+              if (Cause.hasInterruptsOnly(cause)) return Effect.failCause(cause);
+              const error = Cause.squash(cause);
+              return Effect.logWarning("plugin readiness checks failed", {
+                plugin: status.id,
+                cause,
+              }).pipe(
+                Effect.as([
+                  Readiness.failedCheck(error instanceof Error ? error.message : String(error)),
+                ]),
+              );
+            }),
+            Effect.map((checks) => ({ plugin: status.id, checks })),
+          );
+        },
+        // A check may wait on a loopback probe or a reactor catching up; none waits on another.
+        { concurrency: "unbounded" },
+      );
     });
+
+    return PluginHost.of({ activeIds, databases, statuses, setEnabled, readiness });
   });
 
 const mergeActive = <R>(
@@ -252,10 +290,11 @@ export const layerOf = (plugins: typeof registry) => {
 /** The host over the registry, for the server's layer chain. */
 export const layerAll = layerOf(registry);
 
-/** The supervisor's tool and every active plugin's MCP tools, for the `/mcp` server layer. */
+/** The supervisor's and readiness tools and every active plugin's MCP tools, for the `/mcp` server layer. */
 export const layerMcp = (register: typeof toolkitRegistration) =>
-  Layer.merge(
+  Layer.mergeAll(
     register(SupervisorToolkit.SupervisorToolkit, SupervisorToolkit.handlers),
+    register(ReadinessToolkit.ReadinessToolkit, ReadinessToolkit.handlers(PluginHost)),
     Layer.unwrap(mergeActive(registry, (plugin) => plugin.mcp?.(register))),
   );
 
@@ -270,6 +309,8 @@ const table: PluginRpc.DispatchTable<PluginHost | PluginSupervisor.PluginSupervi
       Effect.gen(function* () {
         return yield* (yield* PluginHost).setEnabled(id, enabled);
       }),
+    readiness: ({ projectId }) =>
+      Effect.flatMap(PluginHost, (host) => host.readiness(projectId ?? null)),
   }),
   ...PluginRpc.defineHandlers(SUPERVISOR_METHODS)({
     // The host's own file answered at boot, so a read failing afterwards is a defect, not a reply.

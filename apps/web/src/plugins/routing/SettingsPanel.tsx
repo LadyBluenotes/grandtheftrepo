@@ -23,6 +23,7 @@ import {
 import { stackedThreadToast, toastManager } from "~/components/ui/toast";
 import { useProjects } from "~/state/entities";
 import { offeredModels, useRoutingSetTier, useRoutingTiers } from "./state";
+import { useReadinessChanged } from "../readiness/state";
 import { usePluginEnvironmentId, usePluginServerConfig } from "../pluginState";
 
 const SOURCE_BADGE: Record<
@@ -46,11 +47,13 @@ export function SettingsPanel() {
   const [scope, setScope] = useState<RoutingScope>("environment");
   const tiers = useRoutingTiers(scope);
   const { canWrite, set } = useRoutingSetTier();
+  const readinessChanged = useReadinessChanged();
 
   const save = async (tier: RoutingTier, entry: RoutingEntry | null) => {
     const result = await set({ scope, tier, entry });
     if (result._tag === "Success") {
       tiers.refresh();
+      readinessChanged();
       return;
     }
     if (isAtomCommandInterrupted(result)) return;

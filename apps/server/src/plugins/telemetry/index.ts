@@ -6,11 +6,13 @@ import { forkParked } from "../../serverActivation.ts";
 import type { ServerPlugin } from "../Plugin.ts";
 import * as PluginReactor from "../PluginReactor.ts";
 import * as PluginSupervisor from "../PluginSupervisor.ts";
+import { fromService } from "../Readiness.ts";
 import * as BudgetStore from "./budgets/BudgetStore.ts";
 import * as BudgetSweep from "./budgets/BudgetSweep.ts";
 import * as Mcp from "./mcp.ts";
 import { migrations } from "./migrations.ts";
 import * as Reactor from "./reactor.ts";
+import * as Checks from "./readiness.ts";
 import * as ReportMcp from "./report/mcp.ts";
 import * as ReportService from "./report/ReportService.ts";
 import * as WeeklyReportSeed from "./report/WeeklyReportSeed.ts";
@@ -40,6 +42,7 @@ const make = Effect.gen(function* () {
   yield* supervisor.register(yield* BudgetSweep.sweep(telemetry.measures));
   return Context.make(Telemetry.Telemetry, telemetry).pipe(
     Context.add(ReportService.ReportService, yield* ReportService.make(telemetry, reactor.drain)),
+    Context.add(Checks.TelemetryReadiness, yield* Checks.make(reactor.drain)),
   );
 }).pipe(Effect.orDie);
 
@@ -60,4 +63,5 @@ export const plugin = {
       register(Mcp.TelemetryToolkit, Mcp.handlers),
       register(ReportMcp.ReportToolkit, ReportMcp.handlers),
     ),
+  readiness: fromService(Checks.TelemetryReadiness),
 } satisfies ServerPlugin<unknown>;

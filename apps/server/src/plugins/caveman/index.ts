@@ -3,10 +3,12 @@ import * as Layer from "effect/Layer";
 
 import type { ServerPlugin } from "../Plugin.ts";
 import * as PluginSupervisor from "../PluginSupervisor.ts";
+import { fromService } from "../Readiness.ts";
 import * as CavemanService from "./CavemanService.ts";
 import * as LearnSweep from "./learn/sweep.ts";
 import * as Mcp from "./mcp.ts";
 import { migrations } from "./migrations.ts";
+import * as Checks from "./readiness.ts";
 
 // Neither fails in a state the plugin can run in: the database was just migrated, and the sweep's
 // name is this plugin's own.
@@ -23,6 +25,9 @@ export const plugin = {
   id: "caveman",
   dependsOn: [],
   migrations,
-  layer: Layer.effectDiscard(start).pipe(Layer.provideMerge(CavemanService.layer)),
+  layer: Layer.merge(Layer.effectDiscard(start), Checks.layer).pipe(
+    Layer.provideMerge(CavemanService.layer),
+  ),
   mcp: (register) => register(Mcp.CavemanToolkit, Mcp.handlers),
+  readiness: fromService(Checks.CavemanReadiness),
 } satisfies ServerPlugin<unknown>;

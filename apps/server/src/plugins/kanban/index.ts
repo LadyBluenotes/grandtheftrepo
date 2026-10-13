@@ -1,7 +1,9 @@
 import type { ServerPlugin } from "../Plugin.ts";
+import { fromService } from "../Readiness.ts";
 import * as KanbanAutomation from "./KanbanAutomation.ts";
 import * as Mcp from "./mcp.ts";
 import { migrations } from "./migrations.ts";
+import * as Checks from "./readiness.ts";
 
 /**
  * A kanban board per project: issues and decisions as files under the
@@ -18,4 +20,5 @@ export const plugin = {
   migrations,
   layer: KanbanAutomation.layer,
   mcp: (register) => register(Mcp.KanbanToolkit, Mcp.handlers),
+  readiness: fromService(Checks.KanbanReadiness),
 } satisfies ServerPlugin<unknown>;

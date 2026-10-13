@@ -147,6 +147,13 @@ export class KnowledgeStore extends Context.Service<
       input: KnowledgeProjectInput,
     ) => Effect.Effect<ReadonlyArray<KnowledgeVerifyResult>, KnowledgeError>;
     /**
+     * `verify`'s answer for readouts: nothing is marked verified and the install lock is not taken,
+     * so a read while an install replaces files can show one between versions until the next read.
+     */
+    readonly status: (
+      input: KnowledgeProjectInput,
+    ) => Effect.Effect<ReadonlyArray<KnowledgeVerifyResult>, KnowledgeError>;
+    /**
      * Each delivery an install keeps current, a page file or an index block of an agent in use,
      * against the hash that install recorded, so a file still waiting for the sweep to catch up is
      * intact and only a file changed outside T3 Code is not. Nothing is written or marked verified.
@@ -453,32 +460,39 @@ const make = Effect.gen(function* () {
     }),
   );
 
+  /** Each agent in use: the project's pages and its index block against what renders now. */
+  const compare = Effect.fn("KnowledgeStore.compare")(function* (projectId: ProjectId) {
+    const plan = yield* planOf(projectId);
+    const { rendered } = plan;
+    let pages: KnowledgeVerifyResult["status"] = "ok";
+    for (const page of rendered.pages) {
+      const text = yield* Blocks.read(plan.pageFile(page.path));
+      pages = Pages.worse(pages, Pages.pageStatus(text, page.text));
+    }
+    for (const filePath of plan.retired) {
+      if (yield* fs.exists(filePath)) pages = Pages.worse(pages, "drifted");
+    }
+    const results: Array<KnowledgeVerifyResult> = [];
+    for (const { agent, path: filePath } of plan.agents) {
+      const text = yield* Blocks.read(filePath);
+      const found: Blocks.FoundBlock =
+        text === undefined ? { kind: "absent" } : Blocks.findBlock(text, Pages.INDEX_MARKERS);
+      const status = Pages.worse(pages, Pages.blockStatus(rendered.block?.hash, found));
+      results.push({ agent, status, path: filePath });
+    }
+    return results;
+  });
+
   const verify = Effect.fn("KnowledgeStore.verify")(
     function* ({ projectId }: KnowledgeProjectInput) {
-      const plan = yield* planOf(projectId);
-      const { rendered } = plan;
-      let pages: KnowledgeVerifyResult["status"] = "ok";
-      for (const page of rendered.pages) {
-        const text = yield* Blocks.read(plan.pageFile(page.path));
-        pages = Pages.worse(pages, Pages.pageStatus(text, page.text));
-      }
-      for (const filePath of plan.retired) {
-        if (yield* fs.exists(filePath)) pages = Pages.worse(pages, "drifted");
-      }
+      const results = yield* compare(projectId);
       const at = yield* nowIso;
-      const results: Array<KnowledgeVerifyResult> = [];
-      for (const { agent, path: filePath } of plan.agents) {
-        const text = yield* Blocks.read(filePath);
-        const found: Blocks.FoundBlock =
-          text === undefined ? { kind: "absent" } : Blocks.findBlock(text, Pages.INDEX_MARKERS);
-        const status = Pages.worse(pages, Pages.blockStatus(rendered.block?.hash, found));
-        if (status === "ok") {
-          yield* sql`
-            UPDATE knowledge_delivery SET verified_at = ${at}
-            WHERE project_id = ${projectId} AND agent = ${agent}
-          `;
-        }
-        results.push({ agent, status, path: filePath });
+      for (const { agent, status } of results) {
+        if (status !== "ok") continue;
+        yield* sql`
+          UPDATE knowledge_delivery SET verified_at = ${at}
+          WHERE project_id = ${projectId} AND agent = ${agent}
+        `;
       }
       return results;
     },
@@ -487,6 +501,20 @@ const make = Effect.gen(function* () {
     provided,
     Effect.catchTags({
       SqlError: io("Could not record the verification."),
+      SchemaError: io("Could not read the pages."),
+      PlatformError: io("Could not read the project's knowledge files."),
+      ServerSettingsError: io("Could not read the server settings."),
+      ProjectOperationError: io("Could not read the project."),
+    }),
+  );
+
+  const status = Effect.fn("KnowledgeStore.status")(
+    function* ({ projectId }: KnowledgeProjectInput) {
+      return yield* compare(projectId);
+    },
+    provided,
+    Effect.catchTags({
+      SqlError: io("Could not read the pages."),
       SchemaError: io("Could not read the pages."),
       PlatformError: io("Could not read the project's knowledge files."),
       ServerSettingsError: io("Could not read the server settings."),
@@ -817,6 +845,7 @@ const make = Effect.gen(function* () {
     discard,
     install,
     verify,
+    status,
     drift,
     outdated,
     catchUp,

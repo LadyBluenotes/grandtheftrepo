@@ -6,6 +6,7 @@ import {
   AuthSettingsWriteScope,
   EnvironmentAuthorizationError,
 } from "../auth.ts";
+import { ProjectId } from "../baseSchemas.ts";
 import {
   KANBAN_RPC_SCOPES,
   KANBAN_RPC_SUBSYSTEMS,
@@ -66,6 +67,48 @@ export class PluginMethodError extends Schema.TaggedError<PluginMethodError>()(
   },
 ) {}
 
+/**
+ * How one readiness check stands: `ready` needs nothing, `attention` has something a person can
+ * fix, and `off` is a plugin that does not run.
+ */
+export const ReadinessStatus = Schema.Literals(["ready", "attention", "off"]);
+export type ReadinessStatus = typeof ReadinessStatus.Type;
+
+/**
+ * Where a person fixes a check: the plugin's row on the Plugins page (`plugins`), the plugin's own
+ * screen (`plugin`), the project's board, the Usage page, or scheduled tasks.
+ */
+export const ReadinessTarget = Schema.Literals([
+  "plugins",
+  "plugin",
+  "board",
+  "usage",
+  "scheduled_tasks",
+]);
+export type ReadinessTarget = typeof ReadinessTarget.Type;
+
+/** One condition a plugin needs to do its work, with one sentence on how it stands. */
+export const ReadinessCheck = Schema.Struct({
+  /** Stable within its plugin. */
+  id: Schema.String,
+  label: Schema.String,
+  status: ReadinessStatus,
+  sentence: Schema.String,
+  target: Schema.NullOr(ReadinessTarget),
+});
+export type ReadinessCheck = typeof ReadinessCheck.Type;
+
+/** A plugin's checks, in registry order. A plugin that does not run has one `off` check saying why. */
+export const PluginReadiness = Schema.Struct({
+  plugin: Schema.String,
+  checks: Schema.Array(ReadinessCheck),
+});
+export type PluginReadiness = typeof PluginReadiness.Type;
+
+/** Without a project, the checks that need one are left out. */
+export const PluginsReadinessInput = Schema.Struct({ projectId: Schema.optional(ProjectId) });
+export type PluginsReadinessInput = typeof PluginsReadinessInput.Type;
+
 export const HOST_METHODS = definePluginMethods({
   list: {
     method: "plugins.list",
@@ -79,6 +122,12 @@ export const HOST_METHODS = definePluginMethods({
     input: Schema.Struct({ id: Schema.String, enabled: Schema.Boolean }),
     output: Schema.Array(PluginStatus),
     error: PluginHostError,
+  },
+  readiness: {
+    method: "plugins.readiness",
+    gateway: "read",
+    input: PluginsReadinessInput,
+    output: Schema.Array(PluginReadiness),
   },
 });
 
