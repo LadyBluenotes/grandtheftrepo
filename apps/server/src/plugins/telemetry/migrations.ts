@@ -9,6 +9,8 @@ import type { PluginMigration } from "../Plugin.ts";
  * sequence of the event a row was last written from, so a retried older event cannot overwrite it.
  * 3: the provider instance of each run, which places it on a routing tier, and budgets with the
  * breaches and recoveries their sweep records.
+ * 4: the size of each tool call's output and the head of a command's command line, which the tool
+ * output measures read, and the budget on the largest single result.
  */
 export const migrations: ReadonlyArray<PluginMigration> = [
   [
@@ -138,6 +140,27 @@ export const migrations: ReadonlyArray<PluginMigration> = [
       `;
       // As in migration 2: without its cursor the reactor replays from the first event, and
       // every run upsert fills the new column.
+      yield* sql`DROP TABLE IF EXISTS host_reactor_cursor`;
+      yield* sql`DROP TABLE IF EXISTS host_reactor_failure`;
+    }),
+  ],
+  [
+    4,
+    "tool_output",
+    Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      // `output_tokens` is NULL for an item with no output to size, such as a file change. Both
+      // columns are NULL until the replay below rewrites the row from its event.
+      yield* sql`ALTER TABLE telemetry_tool_calls ADD COLUMN command TEXT`;
+      yield* sql`ALTER TABLE telemetry_tool_calls ADD COLUMN output_tokens INTEGER`;
+      // The measure reads no tier, so the sweep asks for it without one and this one row, kept on
+      // `standard` because a budget needs a tier, judges every run.
+      yield* sql`
+        INSERT INTO budgets (measure, tier, threshold, direction, project_id, min_sample, enabled)
+        VALUES ('tool_output_max_per_call', 'standard', 8000, 'lower_is_better', NULL, 20, 1)
+      `;
+      // As in migration 2: without its cursor the reactor replays from the first event, and
+      // every tool call upsert fills the new columns.
       yield* sql`DROP TABLE IF EXISTS host_reactor_cursor`;
       yield* sql`DROP TABLE IF EXISTS host_reactor_failure`;
     }),

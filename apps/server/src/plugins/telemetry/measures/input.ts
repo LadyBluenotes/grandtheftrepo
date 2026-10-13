@@ -52,6 +52,10 @@ export interface ToolCallRow {
   readonly item_type: string;
   readonly tool_name: string | null;
   readonly path: string | null;
+  /** A command's command line, cut short. Null for any other item, and until the replay after migration 4. */
+  readonly command: string | null;
+  /** The estimated tokens of the output; null for an item with none to size, and until the same replay. */
+  readonly output_tokens: number | null;
   readonly status: string;
 }
 
@@ -115,7 +119,15 @@ export const ok = (
   value: number,
   sampleSize: number,
   missingReason: string | null = null,
-): TelemetryMeasure => ({ ...spec, state: "ok", value, sampleSize, missingReason });
+  detail?: TelemetryMeasure["detail"],
+): TelemetryMeasure => ({
+  ...spec,
+  state: "ok",
+  value,
+  sampleSize,
+  missingReason,
+  ...(detail === undefined ? {} : { detail }),
+});
 
 export const unavailable = (spec: Spec, missingReason: string): TelemetryMeasure => ({
   ...spec,

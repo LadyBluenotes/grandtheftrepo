@@ -10,6 +10,7 @@ import {
   settledFields,
   threadFields,
   toolCallFields,
+  toolOutputFields,
   turnUsageFields,
 } from "./fields.ts";
 
@@ -142,19 +143,25 @@ export const handlers: PluginReactor.Handlers<SqlError.SqlError> = {
       const f = toolCallFields(event.payload);
       const runId = f["turnItem.runId"];
       if (!TOOL_CALL_TYPES.has(f["turnItem.type"]) || runId === null) return;
+      const output = toolOutputFields(event.payload);
       const sql = yield* SqlClient.SqlClient;
       yield* sql`
         INSERT INTO telemetry_tool_calls
-          (item_id, run_id, thread_id, ordinal, item_type, tool_name, path, status, event_sequence)
+          (item_id, run_id, thread_id, ordinal, item_type, tool_name, path, command, output_tokens,
+           status, event_sequence)
         VALUES
           (${f["turnItem.id"]}, ${runId}, ${f["turnItem.threadId"]}, ${f["turnItem.ordinal"]},
            ${f["turnItem.type"]}, ${f["turnItem.toolName"]},
-           ${f["turnItem.input"] ?? f["turnItem.fileName"]}, ${f["turnItem.status"]}, ${sequence})
+           ${f["turnItem.input"] ?? f["turnItem.fileName"]}, ${output["turnItem.input"]},
+           ${output["turnItem.output"] ?? output["turnItem.results"]}, ${f["turnItem.status"]},
+           ${sequence})
         ON CONFLICT (item_id) DO UPDATE SET
           run_id = excluded.run_id,
           ordinal = excluded.ordinal,
           tool_name = excluded.tool_name,
           path = excluded.path,
+          command = excluded.command,
+          output_tokens = excluded.output_tokens,
           status = excluded.status,
           event_sequence = excluded.event_sequence
         WHERE excluded.event_sequence >= telemetry_tool_calls.event_sequence

@@ -1,3 +1,6 @@
+import type { OrchestrationV2TurnItem } from "@t3tools/contracts";
+
+import { toolCallFields, toolOutputFields } from "../fields.ts";
 import type { MeasureInput, RunRow, ThreadRow, ToolCallRow, TurnUsageRow } from "./input.ts";
 
 /** Rows for the measure tests. The window is the first week of October 2026. */
@@ -48,6 +51,8 @@ export const call = (overrides: Partial<ToolCallRow> = {}): ToolCallRow => {
     item_type: "dynamic_tool",
     tool_name: "Read",
     path: "src/a.ts",
+    command: null,
+    output_tokens: null,
     status: "completed",
     ...overrides,
   };
@@ -58,6 +63,49 @@ export const read = (path: string, overrides: Partial<ToolCallRow> = {}) =>
 
 export const edit = (path: string, overrides: Partial<ToolCallRow> = {}) =>
   call({ item_type: "file_change", tool_name: null, path, ...overrides });
+
+/** A dynamic tool call whose output the reactor sized at `tokens`. */
+export const returned = (
+  tool: string | null,
+  tokens: number | null,
+  overrides: Partial<ToolCallRow> = {},
+) =>
+  call({
+    item_type: "dynamic_tool",
+    tool_name: tool,
+    path: null,
+    output_tokens: tokens,
+    ...overrides,
+  });
+
+/** A shell command that printed `tokens` estimated tokens. */
+export const ran = (command: string, tokens: number | null, overrides: Partial<ToolCallRow> = {}) =>
+  call({
+    item_type: "command_execution",
+    tool_name: null,
+    path: null,
+    command,
+    output_tokens: tokens,
+    ...overrides,
+  });
+
+/** The row the reactor stores for a turn item, through the accessors it uses. */
+export const rowOf = (item: OrchestrationV2TurnItem): ToolCallRow => {
+  const calls = toolCallFields(item);
+  const output = toolOutputFields(item);
+  return {
+    item_id: calls["turnItem.id"],
+    run_id: calls["turnItem.runId"] ?? "",
+    thread_id: calls["turnItem.threadId"],
+    ordinal: calls["turnItem.ordinal"],
+    item_type: calls["turnItem.type"],
+    tool_name: calls["turnItem.toolName"],
+    path: calls["turnItem.input"] ?? calls["turnItem.fileName"],
+    command: output["turnItem.input"],
+    output_tokens: output["turnItem.output"] ?? output["turnItem.results"],
+    status: calls["turnItem.status"],
+  };
+};
 
 export const usage = (overrides: Partial<TurnUsageRow> = {}): TurnUsageRow => {
   sequence += 1;

@@ -13,6 +13,7 @@ import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 
 import type { ItemDelivery } from "../learning/items/ItemStore.ts";
+import { outputTokens } from "./outputTokens.ts";
 
 /*
  * Every value the reactor stores comes out of an event through one of these, keyed by the path a
@@ -98,6 +99,30 @@ export const toolCallFields = (item: OrchestrationV2TurnItem) => ({
   "turnItem.fileName": item.type === "file_change" ? item.fileName : null,
 });
 
+/**
+ * How much of a command line is kept. A tool key needs only the program, which comes first, even
+ * behind a shell wrapper.
+ */
+const COMMAND_CHARS = 512;
+
+/**
+ * What the tool output measures read of a tool call besides its name. `turnItem.input` is read
+ * here as a command's command line, where `toolCallFields` reads a path out of a dynamic tool's.
+ * Sizes are `outputTokens` estimates, 0 for an item with no output and null for an item that has
+ * none to give, such as a file change.
+ */
+export const toolOutputFields = (item: OrchestrationV2TurnItem) => ({
+  "turnItem.input": item.type === "command_execution" ? item.input.slice(0, COMMAND_CHARS) : null,
+  /** A dynamic tool's or command's output. */
+  "turnItem.output":
+    item.type === "dynamic_tool" || item.type === "command_execution"
+      ? outputTokens(item.output)
+      : null,
+  /** A file or web search's results. */
+  "turnItem.results":
+    item.type === "file_search" || item.type === "web_search" ? outputTokens(item.results) : null,
+});
+
 export const threadFields = (thread: OrchestrationV2AppThread) => ({
   "thread.id": thread.id,
   "thread.projectId": thread.projectId,
@@ -153,6 +178,7 @@ export type FieldPath =
   | keyof NonNullable<ReturnType<typeof turnUsageFields>>
   | keyof ReturnType<typeof runFields>
   | keyof ReturnType<typeof toolCallFields>
+  | keyof ReturnType<typeof toolOutputFields>
   | keyof ReturnType<typeof threadFields>
   | keyof ReturnType<typeof settledFields>
   | keyof ReturnType<typeof pinnedFields>

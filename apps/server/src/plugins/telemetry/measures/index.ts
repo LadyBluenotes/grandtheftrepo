@@ -15,8 +15,9 @@ import { repeatedRediscovery } from "./repeated_rediscovery.ts";
 import { scopeStability } from "./scope_stability.ts";
 import { supervisionBurden } from "./supervision_burden.ts";
 import { timeToAcceptedOutcome } from "./time_to_accepted_outcome.ts";
+import { toolOutputMaxPerCall, toolOutputTotal } from "./toolOutput.ts";
 
-/** Every measure, in the order issue #1 lists them. */
+/** Every measure, in the order issue #1 lists them, then the tool output ones. */
 const measures = [
   firstReviewAcceptance,
   materialCorrectionBurden,
@@ -32,6 +33,8 @@ const measures = [
   scopeStability,
   recoveryEfficiency,
   supervisionBurden,
+  toolOutputTotal,
+  toolOutputMaxPerCall,
 ];
 
 export const computeMeasures = (input: MeasureInput): TelemetryMeasuresResult =>

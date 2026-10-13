@@ -1,19 +1,27 @@
-import type {
-  ProjectId,
-  RoutingTier,
-  RoutingTiers,
-  TelemetryBudget,
-  TelemetryMeasuresResult,
+import {
+  type ProjectId,
+  type RoutingTier,
+  type RoutingTiers,
+  type TelemetryBudget,
+  type TelemetryMeasure,
+  type TelemetryMeasuresResult,
+  ThreadId,
 } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Result from "effect/Result";
 
+import * as ThreadManagementService from "../../../orchestration-v2/ThreadManagementService.ts";
 import * as ProjectService from "../../../project/ProjectService.ts";
 import * as Attention from "../../Attention.ts";
 import * as TierMapService from "../../routing/TierMapService.ts";
 import { unmeasured } from "../measures/index.ts";
+import {
+  MAX_PER_CALL,
+  TIER_INDEPENDENT_MEASURES,
+  toolOutputFlagText,
+} from "../measures/toolOutput.ts";
 import type * as Telemetry from "../Telemetry.ts";
 import * as BudgetStore from "./BudgetStore.ts";
 
@@ -65,6 +73,9 @@ const terms = (windowFrom: string, budget: TelemetryBudget, tierModel: string) =
  * it again without an event, and the flag of a budget that was removed or disabled, or of a
  * project that is gone, is cleared.
  *
+ * A measure that reads no tier is asked for without one, so its budget judges every run whatever
+ * tier the budget names, routing plugin on or off.
+ *
  * The window's rows are all in the past, so a budget is measured in a project once per window,
  * set of terms and model its tier resolves to; one whose measures could not be read, or were not
  * measured yet, as while telemetry replays the event log or the routing plugin is off, is asked
@@ -75,6 +86,31 @@ export const sweep = (measures: Telemetry.Telemetry["Service"]["measures"]) =>
     const store = yield* BudgetStore.BudgetStore;
     const attention = yield* Attention.Attention;
     const projects = yield* ProjectService.ProjectService;
+    const threads = yield* ThreadManagementService.ThreadManagementService;
+    /** A thread's title for a flag, or its id when the thread cannot be read. */
+    const threadTitle = (threadId: string) =>
+      threads.getThreadShell(ThreadId.make(threadId)).pipe(
+        Effect.map((shell) => shell?.title ?? threadId),
+        Effect.orElseSucceed(() => threadId),
+      );
+
+    /**
+     * What a breach's flag says. A budget on the largest tool result names that result's tool and
+     * thread, with a hint for the tool; any other says how far over its threshold the value is.
+     */
+    const breachText = (
+      budget: TelemetryBudget,
+      measure: TelemetryMeasure,
+      value: number,
+      project: string,
+    ) =>
+      Effect.gen(function* () {
+        const largest = measure.detail?.largest?.[0];
+        return budget.measure === MAX_PER_CALL && largest !== undefined
+          ? toolOutputFlagText(largest, yield* threadTitle(largest.threadId))
+          : flagText(budget, value, project);
+      });
+
     /** Each budget and project's flag key to the terms it was last judged on. */
     const judged = new Map<string, string>();
 
@@ -113,13 +149,16 @@ export const sweep = (measures: Telemetry.Telemetry["Service"]["measures"]) =>
               : `${resolved.providerInstanceId}/${resolved.model}`;
           });
 
-        // One request per project and tier, shared by every budget on that tier.
+        // One request per project and tier, shared by every budget on that tier. Without a tier
+        // every run counts, for the measures that read none.
         const results = new Map<string, TelemetryMeasuresResult | undefined>();
-        const measured = (projectId: ProjectId, tier: RoutingTier) =>
+        const measured = (projectId: ProjectId, tier: RoutingTier | undefined) =>
           Effect.gen(function* () {
-            const key = `${projectId}\n${tier}`;
+            const key = `${projectId}\n${tier ?? ""}`;
             if (results.has(key)) return results.get(key);
-            const answer = yield* Effect.result(measures({ projectId, ...window, tier }));
+            const answer = yield* Effect.result(
+              measures({ projectId, ...window, ...(tier === undefined ? {} : { tier }) }),
+            );
             if (Result.isFailure(answer)) {
               yield* Effect.logWarning("telemetry: budget measures could not be read", {
                 projectId,
@@ -148,9 +187,15 @@ export const sweep = (measures: Telemetry.Telemetry["Service"]["measures"]) =>
           for (const projectId of projectIds) {
             const threadId = flagKey(budget.id, projectId);
             covered.add(threadId);
-            const stamp = terms(window.from, budget, yield* tierModel(projectId, budget.tier));
+            // A measure that reads no tier counts every run, so no tier's model decides its terms.
+            const tier = TIER_INDEPENDENT_MEASURES.has(budget.measure) ? undefined : budget.tier;
+            const stamp = terms(
+              window.from,
+              budget,
+              tier === undefined ? "every run" : yield* tierModel(projectId, tier),
+            );
             if (judged.get(threadId) === stamp) continue;
-            const result = yield* measured(projectId, budget.tier);
+            const result = yield* measured(projectId, tier);
             if (result === undefined) continue;
             const measure = result.find((candidate) => candidate.measure === budget.measure);
             const value = measure?.value ?? null;
@@ -178,7 +223,12 @@ export const sweep = (measures: Telemetry.Telemetry["Service"]["measures"]) =>
                   if (!dryRun) {
                     yield* attention.raise({
                       ...flag,
-                      text: flagText(budget, value, titles.get(projectId) ?? projectId),
+                      text: yield* breachText(
+                        budget,
+                        measure,
+                        value,
+                        titles.get(projectId) ?? projectId,
+                      ),
                       resumeAction: RESUME_ACTION,
                     });
                   }

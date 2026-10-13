@@ -101,7 +101,7 @@ them half-evaluated. The host hands `toolkitRegistration` to `ServerPlugin.mcp` 
   `apps/server/src/plugins/kanban/`. Contracts: `packages/contracts/src/plugins/kanban.ts`. Web:
   `apps/web/src/plugins/kanban/`. Mobile: `apps/mobile/src/features/kanban/`. User guide:
   [Kanban board](./user/kanban.md).
-- **telemetry**: the fourteen efficiency measures of #1 over a project's window, from the
+- **telemetry**: the sixteen efficiency measures of #1 and #35 over a project's window, from the
   `telemetry.measures` gateway method and the `telemetry_measures` MCP tool. Its reactor keeps
   runs, tool calls, threads and provider turn token usage from the event log in the plugin's own
   tables, and pure functions in `measures/` compute each measure from those rows; cost is priced
@@ -116,7 +116,13 @@ them half-evaluated. The host hands `toolkitRegistration` to `ServerPlugin.mcp` 
   replays the log to record each run's instance. The `telemetry/budgets` sweep judges each budget,
   one measure for one tier, over the last seven whole UTC days per project, writes a
   `budget_events` row only when its state changes, and raises or clears a `budget_breach`
-  attention flag. `telemetry.report` and the `telemetry_report` MCP tool fold a project's range
+  attention flag. `tool_output_total` and `tool_output_max_per_call` size each tool call's output as
+  characters over four, an inline image as 1,500, from the sizes the reactor stores beside each
+  tool call (migration 4 adds them and replays the log), and carry per-tool and largest-result
+  `detail` through `telemetry.measures` and the `telemetry_tool_output` MCP tool. They read no
+  tier, so the sweep asks for them without one: the default budget on the largest result names
+  `standard` only because a budget needs a tier, and judges every run, routing plugin on or off.
+  `telemetry.report` and the `telemetry_report` MCP tool fold a project's range
   into ten sections, from the thread records, the learning and review plugins and the host's
   attention flags, with the same report as one self-contained HTML page; at start the plugin gives
   each project with a default model a `Weekly report` thread and a scheduled task that posts that

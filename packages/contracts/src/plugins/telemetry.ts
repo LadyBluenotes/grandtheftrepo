@@ -20,6 +20,42 @@ export const TelemetryDirection = Schema.Literals(["lower_is_better", "higher_is
 export type TelemetryDirection = typeof TelemetryDirection.Type;
 
 /**
+ * One tool's share of a window's tool output. Sizes are estimates, not a tokenizer's counts:
+ * characters over four, with an inline image as a fixed 1,500.
+ */
+export const TelemetryToolOutput = Schema.Struct({
+  /** A dynamic tool's name, `command:<program>`, `file_search` or `web_search`. */
+  tool: Schema.String,
+  calls: NonNegativeInt,
+  estimatedTokens: NonNegativeInt,
+  /** This tool's estimated tokens over the window's total, so the shares sum to one. */
+  share: Schema.Finite,
+  /** Nearest-rank percentiles of this tool's calls, in estimated tokens. */
+  p50: NonNegativeInt,
+  p95: NonNegativeInt,
+});
+export type TelemetryToolOutput = typeof TelemetryToolOutput.Type;
+
+/** One tool result among a window's largest, with where to find it. */
+export const TelemetryLargestOutput = Schema.Struct({
+  tool: Schema.String,
+  threadId: Schema.String,
+  runId: Schema.NullOr(Schema.String),
+  itemId: Schema.String,
+  estimatedTokens: NonNegativeInt,
+});
+export type TelemetryLargestOutput = typeof TelemetryLargestOutput.Type;
+
+/** The rows behind a measure's value, for the measures that have them. */
+export const TelemetryMeasureDetail = Schema.Struct({
+  /** Every tool in the window, largest total first. */
+  byTool: Schema.optional(Schema.Array(TelemetryToolOutput)),
+  /** The window's ten largest single results, largest first. */
+  largest: Schema.optional(Schema.Array(TelemetryLargestOutput)),
+});
+export type TelemetryMeasureDetail = typeof TelemetryMeasureDetail.Type;
+
+/**
  * One measure over a window. `unavailable` is an answer, not an error: `value` is then null and
  * `missingReason` says why. An `ok` value never stands in for missing data.
  */
@@ -35,12 +71,33 @@ export const TelemetryMeasure = Schema.Struct({
   missingReason: Schema.NullOr(Schema.String),
   /** The event fields it read, such as `providerTurn.tokenUsage.outputTokens`. */
   provenance: Schema.Array(Schema.String),
+  /** The rows the value comes from, set by the measures that keep them. */
+  detail: Schema.optional(TelemetryMeasureDetail),
 });
 export type TelemetryMeasure = typeof TelemetryMeasure.Type;
 
 /** Every measure, in a fixed order. */
 export const TelemetryMeasuresResult = Schema.Array(TelemetryMeasure);
 export type TelemetryMeasuresResult = typeof TelemetryMeasuresResult.Type;
+
+/** A project's window, as `TelemetryMeasuresInput` without the tier: tool output counts every run. */
+export const TelemetryToolOutputInput = Schema.Struct({
+  projectId: ProjectId,
+  from: IsoDateTime,
+  to: IsoDateTime,
+});
+export type TelemetryToolOutputInput = typeof TelemetryToolOutputInput.Type;
+
+/**
+ * Tool output over a window: each tool's total and the largest results. Both lists are empty
+ * and `missingReason` says why when the window has no tool items or the tables are not ready.
+ */
+export const TelemetryToolOutputResult = Schema.Struct({
+  byTool: Schema.Array(TelemetryToolOutput),
+  largest: Schema.Array(TelemetryLargestOutput),
+  missingReason: Schema.NullOr(Schema.String),
+});
+export type TelemetryToolOutputResult = typeof TelemetryToolOutputResult.Type;
 
 /** A limit on one measure for one routing tier, judged over the last seven whole UTC days. */
 export const TelemetryBudget = Schema.Struct({
