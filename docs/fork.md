@@ -60,7 +60,7 @@ them is resolved by keeping the line.
 | `apps/web/src/components/sidebar/mainAppLocation.ts`         | `/board` and the `/plugins` paths in `isSidebarUtilityPage`                                                                                                            |
 | `apps/web/src/components/sidebar/SidebarChrome.tsx`          | the board's `SidebarUtilityItem`, gated on `kanbanSupportedAtom`, and `<PluginSidebarEntries />` after the Usage entry, plus imports; `SidebarUtilityItem` is exported |
 | `apps/web/src/components/CommandPalette.tsx`                 | the board's `actionItems.push` block, gated the same way, plus imports                                                                                                 |
-| `third-party-licenses.config.json`                           | the `Caveman reply rules` entry at the end of `customNotices`, so the adapted policy text is credited in the app's license list                                        |
+| `third-party-licenses.config.json`                           | the `Caveman reply rules` and `Ponytail ladder` entries at the end of `customNotices`, so the adapted policy text is credited in the app's license list                |
 
 ## Plugin services and the type system
 
@@ -91,16 +91,20 @@ them half-evaluated. The host hands `toolkitRegistration` to `ServerPlugin.mcp` 
 
 - **kanban**: a board per project. Issues and decisions are files under
   `<T3 home>/wiki/<project-slug>/`; the folder is changeable per project from the board.
-  Its own database, `plugins/kanban.sqlite`, holds the emergency stop (`StopGate`, which a sweep
-  that starts a thread must ask first; no launcher calls it yet). The `writers` sweep raises an
-  attention flag when two agents write one project. `kanban.attention.list` feeds the strip above
-  the board from the project's open host flags, its threads' pending questions and permission
-  requests, and, while routing runs, its routing mismatches. Mobile shows the board as a read-only
-  list grouped by column, from the Board row on a project's overview; it and the web board share
-  the board and active-plugin atoms in `packages/client-runtime/src/plugins/kanban.ts`. Server:
-  `apps/server/src/plugins/kanban/`. Contracts: `packages/contracts/src/plugins/kanban.ts`. Web:
-  `apps/web/src/plugins/kanban/`. Mobile: `apps/mobile/src/features/kanban/`. User guide:
-  [Kanban board](./user/kanban.md).
+  Its own database, `plugins/kanban.sqlite`, holds the emergency stop (`StopGate`, which anything
+  that starts a thread must ask first; the spec drafting thread is the one launch that asks so far)
+  and spec attempts. The `writers` sweep raises an attention flag when two agents write one
+  project. `kanban.attention.list` feeds the strip above the board from the project's open host
+  flags, its threads' pending questions and permission requests, and, while routing runs, its
+  routing mismatches. `kanban.ticket.specify` (MCP `kanban_ticket_specify`) checks a Triage or
+  Inbox issue's description against the Goal, Approach and Acceptance format, or starts a plan-mode
+  drafting thread on routing's cheap tier whose final message the plugin's reactor checks when the
+  run ends; a valid spec becomes the issue's criteria and admits it as `spec`, and the description
+  is never edited. Mobile shows the board as a read-only list grouped by column, from the Board row
+  on a project's overview; it and the web board share the board and active-plugin atoms in
+  `packages/client-runtime/src/plugins/kanban.ts`. Server: `apps/server/src/plugins/kanban/`.
+  Contracts: `packages/contracts/src/plugins/kanban.ts`. Web: `apps/web/src/plugins/kanban/`.
+  Mobile: `apps/mobile/src/features/kanban/`. User guide: [Kanban board](./user/kanban.md).
 - **telemetry**: the sixteen efficiency measures of #1 and #35 over a project's window, from the
   `telemetry.measures` gateway method and the `telemetry_measures` MCP tool. Its reactor keeps
   runs, tool calls, threads and provider turn token usage from the event log in the plugin's own

@@ -1,3 +1,12 @@
+/**
+ * The default body below is adapted from the ponytail skill (the "smallest complete change" list in
+ * skills/ponytail/SKILL.md in https://github.com/DietrichGebert/ponytail), Copyright (c) 2026
+ * DietrichGebert, licensed under the MIT License. Changes: the six questions are reworded and
+ * condensed into one block for an instruction file, each gets a short id, and the skill's
+ * activation, levels and other rules are left out. The license text and this notice are the
+ * "Ponytail ladder" entry of `third-party-licenses.config.json`, which the app lists under Open
+ * source licenses.
+ */
 import {
   POLICY_ENVIRONMENT_PROJECT_ID,
   PONYTAIL_RUNG_IDS,
