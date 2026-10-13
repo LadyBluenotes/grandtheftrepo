@@ -7,12 +7,14 @@ import {
   SUPERVISOR_METHODS,
   SupervisorStatus,
 } from "@t3tools/contracts";
+import * as Context from "effect/Context";
 import * as Data from "effect/Data";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 import * as TestClock from "effect/testing/TestClock";
@@ -23,6 +25,7 @@ import * as McpHttpServer from "../mcp/McpHttpServer.ts";
 import type * as McpInvocationContext from "../mcp/McpInvocationContext.ts";
 import * as McpSessionRegistry from "../mcp/McpSessionRegistry.ts";
 import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
+import * as SqlitePersistence from "../persistence/Sqlite.ts";
 import * as ProjectService from "../project/ProjectService.ts";
 import * as ProviderRegistry from "../provider/ProviderRegistry.ts";
 import * as ServerSettings from "../serverSettings.ts";
@@ -40,12 +43,56 @@ const layerConfig = Layer.fresh(
   ServerConfig.layerTest(process.cwd(), { prefix: "t3code-plugin-supervisor-test-" }),
 );
 
-/** The supervisor for `order` over the host database in the state directory it is given. */
+/** The supervisor and its ticker for `order`, over the host database in its state directory. */
 const layerOver = (order: ReadonlyArray<string>) =>
-  PluginSupervisor.layer(order).pipe(Layer.provide(HostDatabase.layer));
+  PluginSupervisor.ticker.pipe(
+    Layer.provideMerge(PluginSupervisor.layer(order)),
+    Layer.provide(HostDatabase.layer),
+  );
 
 /** The supervisor for a registry of plugins `a` then `b`, over a fresh state directory. */
 const layerSupervisor = layerOver(["a", "b"]).pipe(Layer.provideMerge(layerConfig));
+
+class Probe extends Context.Service<Probe, { readonly id: string }>()(
+  "t3/plugins/PluginSupervisor.test/Probe",
+) {}
+
+/**
+ * Two plugins on the real host: `reader`'s sweep hands `seen` what `Effect.serviceOption(Probe)`
+ * finds, and `probe` provides `Probe`. Neither depends on the other.
+ */
+const layerProbeHost = (seen: Deferred.Deferred<Option.Option<Probe["Service"]>>) =>
+  PluginHost.layerOf([
+    {
+      id: "reader",
+      dependsOn: [],
+      layer: Layer.effectDiscard(
+        Effect.flatMap(PluginSupervisor.PluginSupervisor, (supervisor) =>
+          supervisor.register({
+            plugin: "reader",
+            name: "probe",
+            run: () =>
+              Effect.serviceOption(Probe).pipe(
+                Effect.flatMap((probe) => Deferred.succeed(seen, probe)),
+                Effect.as(counts),
+              ),
+          }),
+        ).pipe(Effect.orDie),
+      ),
+    },
+    { id: "probe", dependsOn: [], layer: Layer.succeed(Probe, { id: "probe" }) },
+  ]).pipe(
+    Layer.provide(
+      Layer.mergeAll(
+        SqlitePersistence.layerMemory,
+        // The test plugins need none of these; the registry's requirements still type through.
+        Layer.mock(ThreadManagementService.ThreadManagementService)({}),
+        Layer.mock(ProjectService.ProjectService)({}),
+        Layer.mock(ProviderRegistry.ProviderRegistry)({}),
+        ServerSettings.layerTest(),
+      ),
+    ),
+  );
 
 it.layer(NodeServices.layer)("plugin supervisor", (it) => {
   it.effect("runs sweeps in registry order and records ok, failed and timed_out", () =>
@@ -141,6 +188,34 @@ it.layer(NodeServices.layer)("plugin supervisor", (it) => {
         Effect.provideService(ServerActivation.ServerActivation, Deferred.await(activation)),
       );
     }),
+  );
+
+  it.effect("a sweep on the timer reads a sibling plugin's service, and none when it is off", () =>
+    Effect.gen(function* () {
+      const { stateDir } = yield* ServerConfig.ServerConfig;
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const seenOnTimer = (probeEnabled: boolean) =>
+        Effect.gen(function* () {
+          yield* fs.writeFileString(
+            path.join(stateDir, "plugins.json"),
+            `{ "probe": ${probeEnabled} }`,
+          );
+          const activation = yield* Deferred.make<void>();
+          const seen = yield* Deferred.make<Option.Option<Probe["Service"]>>();
+          return yield* Effect.gen(function* () {
+            yield* Deferred.succeed(activation, undefined);
+            yield* TestClock.adjust("60 seconds");
+            return yield* Deferred.await(seen);
+          }).pipe(
+            Effect.provide(layerProbeHost(seen)),
+            Effect.provideService(ServerActivation.ServerActivation, Deferred.await(activation)),
+          );
+        });
+
+      assert.strictEqual(Option.getOrUndefined(yield* seenOnTimer(true))?.id, "probe");
+      assert.isTrue(Option.isNone(yield* seenOnTimer(false)));
+    }).pipe(Effect.provide(layerConfig)),
   );
 
   it.effect("a dry run hands every sweep dryRun and writes only the summary", () =>

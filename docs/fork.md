@@ -67,6 +67,10 @@ error when it is absent. Declaring it as a `Tool` dependency or yielding the tag
 whole server require it and fails to typecheck. See
 [`plugins/kanban/handlers.ts`](../apps/server/src/plugins/kanban/handlers.ts).
 
+A sweep's `run` executes in the supervisor's tick with every active plugin's services, so it can
+read a sibling plugin's service with `Effect.serviceOption` without either plugin listing the other
+in `dependsOn`. A plugin's layer still cannot see its siblings while it builds.
+
 Plugin methods go through three gateway RPCs, `plugins.read`, `plugins.operate` and
 `plugins.settingsWrite`, one per scope, because the WebSocket RPC group sits at TypeScript's
 instantiation limit: a couple more tags and `ServerWsRpcGroup.toLayer` fails with TS2589. A plugin
