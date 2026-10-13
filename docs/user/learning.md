@@ -5,7 +5,8 @@ review that asked for changes, a ticket reopened after it was done. Each of thes
 When the same failure mode recurs in a project, its corrections open a learning item, and the plugin
 hands the item to whoever should act on it: the project's knowledge files, a prompt, or a policy.
 
-While the plugin runs, **Learning** in the sidebar opens its screen. Turn it on under **Plugins**.
+While the plugin runs, **Learning** in the sidebar's **Plugins** menu opens its screen. Turn it on under
+**Plugins**.
 Pick a project at the top of the screen.
 
 ## Items
