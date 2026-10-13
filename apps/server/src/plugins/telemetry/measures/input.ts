@@ -57,7 +57,7 @@ export interface ToolCallRow {
   readonly command: string | null;
   /** The estimated tokens of the output; null for an item with none to size, and until the same replay. */
   readonly output_tokens: number | null;
-  /** When the item started, else when it last changed; places a call with no run. Null until the replay after migration 5. */
+  /** When the item started, else when it last changed; places a call with no run. Null until the replay after migration 4. */
   readonly item_at: string | null;
   readonly status: string;
 }

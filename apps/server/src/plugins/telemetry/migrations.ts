@@ -9,9 +9,9 @@ import type { PluginMigration } from "../Plugin.ts";
  * sequence of the event a row was last written from, so a retried older event cannot overwrite it.
  * 3: the provider instance of each run, which places it on a routing tier, and budgets with the
  * breaches and recoveries their sweep records.
- * 4: the size of each tool call's output and the head of a command's command line, which the tool
- * output measures read, and the budget on the largest single result.
- * 5: tool calls with no run, which a provider's subagent makes, and the time that places them.
+ * 4: the size of each tool call's output, the head of a command's command line and the time of
+ * its item, which the tool output measures read, tool calls with no run, which a provider's
+ * subagent makes, and the budget on the largest single result.
  */
 export const migrations: ReadonlyArray<PluginMigration> = [
   [
@@ -150,32 +150,15 @@ export const migrations: ReadonlyArray<PluginMigration> = [
     "tool_output",
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
-      // `output_tokens` is NULL for an item with no output to size, such as a file change. Both
-      // columns are NULL until the replay below rewrites the row from its event.
-      yield* sql`ALTER TABLE telemetry_tool_calls ADD COLUMN command TEXT`;
-      yield* sql`ALTER TABLE telemetry_tool_calls ADD COLUMN output_tokens INTEGER`;
-      // The measure reads no tier, so the sweep asks for it without one and this one row, kept on
-      // `standard` because a budget needs a tier, judges every run.
+      // The table gets its final shape in one step. SQLite cannot drop NOT NULL from `run_id`,
+      // which a provider's subagent's calls need, so the table is built again and the rows copied,
+      // keeping the calls whose events a compaction has since removed. New columns: `command`,
+      // the head of a command line; `output_tokens`, NULL for an item with no output to size, such
+      // as a file change; `item_at`, when the item started or else last changed, which places a
+      // call that has no run in a window. All three are NULL until the replay below rewrites the
+      // row from its event.
       yield* sql`
-        INSERT INTO budgets (measure, tier, threshold, direction, project_id, min_sample, enabled)
-        VALUES ('tool_output_max_per_call', 'standard', 8000, 'lower_is_better', NULL, 20, 1)
-      `;
-      // As in migration 2: without its cursor the reactor replays from the first event, and
-      // every tool call upsert fills the new columns.
-      yield* sql`DROP TABLE IF EXISTS host_reactor_cursor`;
-      yield* sql`DROP TABLE IF EXISTS host_reactor_failure`;
-    }),
-  ],
-  [
-    5,
-    "runless_tool_calls",
-    Effect.gen(function* () {
-      const sql = yield* SqlClient.SqlClient;
-      // SQLite cannot drop NOT NULL from a column, so the table is rebuilt with `run_id` nullable
-      // and `item_at`, when the item started or else last changed, which places a call that has no
-      // run in a window. `item_at` is NULL until the replay below rewrites each row.
-      yield* sql`
-        CREATE TABLE telemetry_tool_calls_v5 (
+        CREATE TABLE telemetry_tool_calls_v4 (
           item_id TEXT PRIMARY KEY,
           run_id TEXT,
           thread_id TEXT NOT NULL,
@@ -191,17 +174,24 @@ export const migrations: ReadonlyArray<PluginMigration> = [
         )
       `;
       yield* sql`
-        INSERT INTO telemetry_tool_calls_v5
-          (item_id, run_id, thread_id, ordinal, item_type, tool_name, path, command, output_tokens,
-           status, event_sequence)
-        SELECT item_id, run_id, thread_id, ordinal, item_type, tool_name, path, command,
-          output_tokens, status, event_sequence
+        INSERT INTO telemetry_tool_calls_v4
+          (item_id, run_id, thread_id, ordinal, item_type, tool_name, path, status, event_sequence)
+        SELECT item_id, run_id, thread_id, ordinal, item_type, tool_name, path, status,
+          event_sequence
         FROM telemetry_tool_calls
       `;
       yield* sql`DROP TABLE telemetry_tool_calls`;
-      yield* sql`ALTER TABLE telemetry_tool_calls_v5 RENAME TO telemetry_tool_calls`;
+      yield* sql`ALTER TABLE telemetry_tool_calls_v4 RENAME TO telemetry_tool_calls`;
       yield* sql`CREATE INDEX telemetry_tool_calls_thread ON telemetry_tool_calls (thread_id)`;
-      // As in migration 4: the replay stores the calls the reactor used to skip for want of a run.
+      // The measure reads no tier, so the sweep asks for it without one and this one row, kept on
+      // `standard` because a budget needs a tier, judges every run.
+      yield* sql`
+        INSERT INTO budgets (measure, tier, threshold, direction, project_id, min_sample, enabled)
+        VALUES ('tool_output_max_per_call', 'standard', 8000, 'lower_is_better', NULL, 20, 1)
+      `;
+      // As in migration 2: without its cursor the reactor replays from the first event, and
+      // every tool call upsert fills the new columns, including the calls it used to skip for want
+      // of a run.
       yield* sql`DROP TABLE IF EXISTS host_reactor_cursor`;
       yield* sql`DROP TABLE IF EXISTS host_reactor_failure`;
     }),

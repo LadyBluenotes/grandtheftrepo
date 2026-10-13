@@ -763,7 +763,7 @@ it.effect(
 );
 
 it.effect(
-  "upgrading to migration 4 replays the tool calls into the new columns and adds the budget",
+  "upgrading to migration 4 keeps the tool calls, adds the new columns, and replays the calls skipped for want of a run",
   () =>
     Effect.scoped(
       Effect.gen(function* () {
@@ -772,8 +772,14 @@ it.effect(
           filename: ":memory:",
           migrations: migrations.slice(0, 3),
         });
-        yield* write([Fixtures.itemEvent(Fixtures.commandItem)]);
-        // The reactor before the upgrade had stored the tool call without a size.
+        const runless = {
+          ...Fixtures.mcpItem,
+          id: TurnItemId.make("item:runless"),
+          runId: null,
+        };
+        yield* write([Fixtures.itemEvent(Fixtures.commandItem), Fixtures.itemEvent(runless)]);
+        // The reactor before the upgrade had handled both and kept only the call with a run,
+        // without a size.
         yield* Effect.scoped(
           Effect.flatMap(
             PluginReactor.start({ plugin: "telemetry", from: "now", handlers: {} }),
@@ -786,15 +792,36 @@ it.effect(
           NULL, NULL, 'failed', 1)`;
         const [, , upgrade] = migrations[3]!;
         yield* upgrade.pipe(Effect.provideService(SqlClient.SqlClient, sql));
-        const calls = sql`SELECT command, output_tokens FROM telemetry_tool_calls`;
-        assert.deepEqual(yield* calls, [{ command: null, output_tokens: null }]);
-        // The reactor writes the columns migration 5 adds, so the upgrade runs through it.
-        for (const [, , rebuild] of migrations.slice(4)) {
-          yield* rebuild.pipe(Effect.provideService(SqlClient.SqlClient, sql));
-        }
-        yield* startReactor(sql, Reactor.handlers);
+        const calls = sql`SELECT item_id, run_id, command, output_tokens, item_at
+          FROM telemetry_tool_calls ORDER BY item_id`;
+        // The row survives as it was; what the new columns hold waits for the replay.
         assert.deepEqual(yield* calls, [
-          { command: Fixtures.commandItem.input, output_tokens: 14 },
+          {
+            item_id: "item:command",
+            run_id: Fixtures.runId,
+            command: null,
+            output_tokens: null,
+            item_at: null,
+          },
+        ]);
+        assert.strictEqual(
+          (yield* sql`SELECT name FROM sqlite_master WHERE type = 'index'
+            AND tbl_name = 'telemetry_tool_calls' AND name = 'telemetry_tool_calls_thread'`).length,
+          1,
+        );
+
+        yield* startReactor(sql, Reactor.handlers);
+        const at = DateTime.formatIso(Fixtures.at);
+        assert.deepEqual(yield* calls, [
+          {
+            item_id: "item:command",
+            run_id: Fixtures.runId,
+            command: Fixtures.commandItem.input,
+            output_tokens: 14,
+            item_at: at,
+          },
+          // The call with no run is stored now, with the time that places it.
+          { item_id: "item:runless", run_id: null, command: null, output_tokens: 18, item_at: at },
         ]);
         // The measure reads no tier, so the one budget on `standard` judges every run.
         assert.deepEqual(
@@ -812,73 +839,6 @@ it.effect(
             },
           ],
         );
-      }),
-    ).pipe(Effect.provide(layerSink)),
-);
-
-it.effect(
-  "upgrading to migration 5 keeps the tool calls, lets one have no run, and replays the ones skipped",
-  () =>
-    Effect.scoped(
-      Effect.gen(function* () {
-        const { sql } = yield* PluginDatabase.open({
-          id: "telemetry",
-          filename: ":memory:",
-          migrations: migrations.slice(0, 4),
-        });
-        const runless = {
-          ...Fixtures.mcpItem,
-          id: TurnItemId.make("item:runless"),
-          runId: null,
-        };
-        yield* write([Fixtures.itemEvent(Fixtures.commandItem), Fixtures.itemEvent(runless)]);
-        // The reactor before the upgrade had handled both and kept only the call with a run.
-        yield* Effect.scoped(
-          Effect.flatMap(
-            PluginReactor.start({ plugin: "telemetry", from: "now", handlers: {} }),
-            (reactor) => reactor.drain,
-          ).pipe(Effect.provideService(SqlClient.SqlClient, sql)),
-        );
-        yield* sql`INSERT INTO telemetry_tool_calls
-          (item_id, run_id, thread_id, ordinal, item_type, tool_name, path, command, output_tokens,
-           status, event_sequence)
-          VALUES ('item:command', ${Fixtures.runId}, ${Fixtures.threadId}, 1, 'command_execution',
-            NULL, NULL, 'git status', 14, 'failed', 1)`;
-        const [, , rebuild] = migrations[4]!;
-        yield* rebuild.pipe(Effect.provideService(SqlClient.SqlClient, sql));
-
-        const calls = sql`SELECT item_id, run_id, command, output_tokens, item_at
-          FROM telemetry_tool_calls ORDER BY item_id`;
-        // The row survives the rebuild as it was; its time waits for the replay.
-        assert.deepEqual(yield* calls, [
-          {
-            item_id: "item:command",
-            run_id: Fixtures.runId,
-            command: "git status",
-            output_tokens: 14,
-            item_at: null,
-          },
-        ]);
-        assert.deepEqual(
-          (yield* sql<{
-            readonly name: string;
-          }>`SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'telemetry_tool_calls'
-            AND name = 'telemetry_tool_calls_thread'`).length,
-          1,
-        );
-
-        yield* startReactor(sql, Reactor.handlers);
-        const at = DateTime.formatIso(Fixtures.at);
-        assert.deepEqual(yield* calls, [
-          {
-            item_id: "item:command",
-            run_id: Fixtures.runId,
-            command: Fixtures.commandItem.input,
-            output_tokens: 14,
-            item_at: at,
-          },
-          { item_id: "item:runless", run_id: null, command: null, output_tokens: 18, item_at: at },
-        ]);
       }),
     ).pipe(Effect.provide(layerSink)),
 );
