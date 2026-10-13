@@ -4,6 +4,7 @@ import {
   POLICY_ENVIRONMENT_PROJECT_ID,
   PONYTAIL_RUNG_IDS,
   PolicyError,
+  ProjectId,
   ProviderDriverKind,
   ProviderInstanceId,
 } from "@t3tools/contracts";
@@ -11,12 +12,14 @@ import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as SqlClient from "effect/sql/SqlClient";
 
 import * as ServerConfig from "../../config.ts";
 import * as ServerSettings from "../../serverSettings.ts";
 import * as PluginDatabase from "../PluginDatabase.ts";
+import * as Caveman from "./caveman.ts";
 import { migrations } from "./migrations.ts";
 import * as PolicyService from "./PolicyService.ts";
 import * as Ponytail from "./ponytail.ts";
@@ -45,7 +48,8 @@ const layerDatabase = Layer.effect(
 );
 
 /** A fresh database and a temp home with only Claude's directory, for each test. */
-const layerTest = PolicyService.layer.pipe(
+const layerTest = Ponytail.layer.pipe(
+  Layer.provideMerge(PolicyService.layer),
   Layer.provideMerge(layerDatabase),
   Layer.provideMerge(
     ServerSettings.layerTest({
@@ -163,5 +167,58 @@ it.effect("leaves nothing behind when the accept fails, and the next start seeds
     assert.deepStrictEqual(yield* stored, [
       { project_id: projectId, version: 1, state: "accepted", body: Ponytail.PONYTAIL_TEXT },
     ]);
+  }).pipe(Effect.provide(layerTest)),
+);
+
+it.effect("the ladder is none until a version of the environment's ponytail is accepted", () =>
+  Effect.gen(function* () {
+    const policies = yield* PolicyService.PolicyService;
+    const ladder = yield* Ponytail.Ponytail;
+    assert.deepStrictEqual(yield* ladder.current, Option.none());
+
+    // A draft is not reviewed, and another project's ponytail is not the environment's.
+    yield* policies.create({ projectId, key, title: "Mine", body: "Not reviewed yet." });
+    const other = ProjectId.make("project-1");
+    yield* policies.create({ projectId: other, key, title: "Theirs", body: "Only here." });
+    yield* policies.accept({ projectId: other, key, version: 1 });
+    assert.deepStrictEqual(yield* ladder.current, Option.none());
+
+    yield* policies.accept({ projectId, key, version: 1 });
+    assert.deepStrictEqual(yield* ladder.current, Option.some("Not reviewed yet."));
+  }).pipe(Effect.provide(layerTest)),
+);
+
+it.effect("accepting a version changes the ladder, and accepting an older one restores it", () =>
+  Effect.gen(function* () {
+    const policies = yield* PolicyService.PolicyService;
+    const ladder = yield* Ponytail.Ponytail;
+    yield* Ponytail.seed();
+    assert.deepStrictEqual(yield* ladder.current, Option.some(Ponytail.PONYTAIL_TEXT));
+
+    yield* policies.create({ projectId, key, title: "Ponytail ladder", body: "Ours.\n" });
+    // Saved but not accepted: the ladder is still the accepted one.
+    assert.deepStrictEqual(yield* ladder.current, Option.some(Ponytail.PONYTAIL_TEXT));
+    yield* policies.accept({ projectId, key, version: 2 });
+    assert.deepStrictEqual(yield* ladder.current, Option.some("Ours."));
+
+    yield* policies.accept({ projectId, key, version: 1 });
+    assert.deepStrictEqual(yield* ladder.current, Option.some(Ponytail.PONYTAIL_TEXT));
+  }).pipe(Effect.provide(layerTest)),
+);
+
+it.effect("a blank accepted ladder is none, and the caveman policy is never the ladder", () =>
+  Effect.gen(function* () {
+    const policies = yield* PolicyService.PolicyService;
+    const ladder = yield* Ponytail.Ponytail;
+    yield* Caveman.seed();
+    assert.deepStrictEqual(yield* ladder.current, Option.none());
+
+    yield* Ponytail.seed();
+    assert.deepStrictEqual(yield* ladder.current, Option.some(Ponytail.PONYTAIL_TEXT));
+    assert.notInclude(Option.getOrThrow(yield* ladder.current), Caveman.CAVEMAN_TEXT);
+
+    yield* policies.create({ projectId, key, title: "Ponytail ladder", body: " \n" });
+    yield* policies.accept({ projectId, key, version: 2 });
+    assert.deepStrictEqual(yield* ladder.current, Option.none());
   }).pipe(Effect.provide(layerTest)),
 );

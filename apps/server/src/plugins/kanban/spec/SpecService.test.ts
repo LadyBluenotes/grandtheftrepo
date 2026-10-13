@@ -5,6 +5,8 @@ import {
   KanbanError,
   MessageId,
   PlanId,
+  POLICY_ENVIRONMENT_PROJECT_ID,
+  PolicyError,
   ProjectId,
   ProviderInstanceId,
   RunId,
@@ -29,6 +31,7 @@ import * as TestClock from "effect/testing/TestClock";
 
 import * as ServerConfig from "../../../config.ts";
 import * as ServerActivation from "../../../serverActivation.ts";
+import * as ServerSettings from "../../../serverSettings.ts";
 import * as EventSink from "../../../orchestration-v2/EventSink.ts";
 import * as EventStore from "../../../orchestration-v2/EventStore.ts";
 import * as ProjectionStore from "../../../orchestration-v2/ProjectionStore.ts";
@@ -38,6 +41,10 @@ import * as SqlitePersistence from "../../../persistence/Sqlite.ts";
 import * as ProjectService from "../../../project/ProjectService.ts";
 import * as PluginDatabase from "../../PluginDatabase.ts";
 import * as PluginReactor from "../../PluginReactor.ts";
+import * as Caveman from "../../policy/caveman.ts";
+import { migrations as policyMigrations } from "../../policy/migrations.ts";
+import * as PolicyService from "../../policy/PolicyService.ts";
+import * as Ponytail from "../../policy/ponytail.ts";
 import * as TierSelectionService from "../../routing/TierSelectionService.ts";
 import * as KanbanStore from "../KanbanStore.ts";
 import { migrations } from "../migrations.ts";
@@ -371,6 +378,18 @@ const start = Effect.gen(function* () {
       return yield* fs.readFileString(path.join(directory, "issues", `${id}.md`));
     });
 
+  /**
+   * The first message of the drafting thread `specify` launches for a fresh issue. `ladder` is the
+   * policy plugin's service in the caller's context; null is the plugin off.
+   */
+  const brief = (ladder: Ponytail.Ponytail["Service"] | null) =>
+    Effect.gen(function* () {
+      const { id } = yield* file("Login loops", rough);
+      const launch = specify({ projectId, id });
+      yield* ladder === null ? launch : Effect.provideService(launch, Ponytail.Ponytail, ladder);
+      return launched.at(-1)!.initialMessage!.text;
+    });
+
   const failAdmit = (fails: boolean) => {
     admitFails = fails;
   };
@@ -409,6 +428,7 @@ const start = Effect.gen(function* () {
     launched,
     routed,
     specify,
+    brief,
     react,
     file,
     fileText,
@@ -422,6 +442,40 @@ const start = Effect.gen(function* () {
   };
 });
 
+/**
+ * The policy plugin's real services over its own in-memory database, with the built-in policies
+ * seeded on demand as the plugin seeds them when it starts.
+ */
+const startPolicy = Effect.gen(function* () {
+  const { sql } = yield* PluginDatabase.open({
+    id: "policy",
+    filename: ":memory:",
+    migrations: policyMigrations,
+  });
+  const services = yield* Layer.build(
+    Ponytail.layer.pipe(
+      Layer.provideMerge(PolicyService.layer),
+      Layer.provide(
+        Layer.mergeAll(Layer.succeed(SqlClient.SqlClient, sql), ServerSettings.layerTest()),
+      ),
+    ),
+  );
+  const policies = Context.get(services, PolicyService.PolicyService);
+  const seeded = <E>(
+    seed: Effect.Effect<void, E, SqlClient.SqlClient | PolicyService.PolicyService>,
+  ) =>
+    seed.pipe(
+      Effect.provideService(SqlClient.SqlClient, sql),
+      Effect.provideService(PolicyService.PolicyService, policies),
+    );
+  return {
+    policies,
+    ladder: Context.get(services, Ponytail.Ponytail),
+    seedPonytail: seeded(Ponytail.seed()),
+    seedCaveman: seeded(Caveman.seed()),
+  };
+});
+
 const refusal = <A>(effect: Effect.Effect<A, KanbanError>) =>
   effect.pipe(
     Effect.flatMap(() => Effect.die("expected a refusal")),
@@ -429,6 +483,142 @@ const refusal = <A>(effect: Effect.Effect<A, KanbanError>) =>
   );
 
 describe("SpecService", () => {
+  it.effect(
+    "the brief starts with the accepted ponytail ladder; without the plugin it is as it was",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const { brief } = yield* start;
+          const { ladder, seedPonytail } = yield* startPolicy;
+
+          const asItWas = yield* brief(null);
+          assert.isTrue(
+            asItWas.startsWith('Draft a spec for the kanban issue "Login loops" below.'),
+          );
+          assert.notInclude(asItWas, "Before you add anything");
+          // The plugin on, no ladder accepted yet.
+          assert.strictEqual(yield* brief(ladder), asItWas);
+
+          yield* seedPonytail;
+          const led = yield* brief(ladder);
+          assert.isTrue(led.startsWith("## Before you add anything\n\nAsk these in order"));
+          assert.strictEqual(led, `${Ponytail.PONYTAIL_TEXT}\n\n${asItWas}`);
+          // The plugin off again.
+          assert.strictEqual(yield* brief(null), asItWas);
+        }),
+      ).pipe(Effect.provide(layerTest)),
+  );
+
+  it.effect("accepting a new version of the ladder changes the next brief", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { brief } = yield* start;
+        const { ladder, policies, seedPonytail } = yield* startPolicy;
+        yield* seedPonytail;
+        const before = yield* brief(ladder);
+
+        yield* policies.create({
+          projectId: POLICY_ENVIRONMENT_PROJECT_ID,
+          key: Ponytail.PONYTAIL_KEY,
+          title: "Ponytail ladder",
+          body: "Prefer deleting code.",
+        });
+        // Saved, not accepted.
+        assert.strictEqual(yield* brief(ladder), before);
+
+        yield* policies.accept({
+          projectId: POLICY_ENVIRONMENT_PROJECT_ID,
+          key: Ponytail.PONYTAIL_KEY,
+          version: 2,
+        });
+        const after = yield* brief(ladder);
+        assert.notStrictEqual(after, before);
+        // A body without the heading gets it.
+        assert.isTrue(
+          after.startsWith(
+            "## Before you add anything\n\nPrefer deleting code.\n\nDraft a spec for the kanban issue",
+          ),
+        );
+        assert.notInclude(after, "Ask these in order");
+      }),
+    ).pipe(Effect.provide(layerTest)),
+  );
+
+  it.effect("only a ladder whose whole first line is the heading goes without a second one", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { brief } = yield* start;
+        const { ladder, policies } = yield* startPolicy;
+        const accept = (version: number, body: string) =>
+          policies
+            .create({
+              projectId: POLICY_ENVIRONMENT_PROJECT_ID,
+              key: Ponytail.PONYTAIL_KEY,
+              title: "Ponytail ladder",
+              body,
+            })
+            .pipe(
+              Effect.andThen(
+                policies.accept({
+                  projectId: POLICY_ENVIRONMENT_PROJECT_ID,
+                  key: Ponytail.PONYTAIL_KEY,
+                  version,
+                }),
+              ),
+            );
+
+        // A different heading that begins with the same words is just a body.
+        yield* accept(1, "## Before you add anything else\n\nPrefer deleting code.");
+        assert.isTrue(
+          (yield* brief(ladder)).startsWith(
+            "## Before you add anything\n\n## Before you add anything else\n\nPrefer deleting code.\n\nDraft a spec",
+          ),
+        );
+
+        // Trailing spaces and a Windows line ending do not make the heading another line.
+        yield* accept(2, "## Before you add anything  \r\nPrefer deleting code.");
+        assert.isTrue(
+          (yield* brief(ladder)).startsWith(
+            "## Before you add anything  \r\nPrefer deleting code.\n\nDraft a spec",
+          ),
+        );
+      }),
+    ).pipe(Effect.provide(layerTest)),
+  );
+
+  it.effect("the brief never carries the caveman body", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { brief } = yield* start;
+        const { ladder, seedCaveman, seedPonytail } = yield* startPolicy;
+        yield* seedCaveman;
+        // Accepted, and not the ladder: the brief is as it was.
+        const caveman = yield* brief(ladder);
+        assert.strictEqual(caveman, yield* brief(null));
+
+        yield* seedPonytail;
+        const led = yield* brief(ladder);
+        assert.isTrue(led.startsWith(Ponytail.PONYTAIL_TEXT));
+        assert.notInclude(led, Caveman.CAVEMAN_TEXT);
+        assert.notInclude(led, "Reply terse");
+      }),
+    ).pipe(Effect.provide(layerTest)),
+  );
+
+  it.effect("a ladder that cannot be read leaves the brief as it was", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { brief } = yield* start;
+        const unreadable = Ponytail.Ponytail.of({
+          current: Effect.fail(
+            new PolicyError({ code: "io", message: "Could not read the policies." }),
+          ),
+        });
+        assert.strictEqual(yield* brief(unreadable), yield* brief(null));
+      }),
+    ).pipe(Effect.provide(layerTest)),
+  );
+
   it.effect("a valid draft fills the criteria, clears triage and admits", () =>
     Effect.scoped(
       Effect.gen(function* () {
