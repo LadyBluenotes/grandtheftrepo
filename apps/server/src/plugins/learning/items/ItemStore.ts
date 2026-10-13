@@ -26,6 +26,7 @@ interface Row {
   readonly state: LearningItem["state"];
   readonly owner_kind: LearningOwnerKind | null;
   readonly disposition_by: LearningItem["dispositionBy"];
+  readonly disposition_at: string | null;
   readonly reason: string;
   readonly created_at: string;
   readonly updated_at: string;
@@ -39,6 +40,7 @@ const toItem = (row: Row): LearningItem => ({
   state: row.state,
   ownerKind: row.owner_kind,
   dispositionBy: row.disposition_by,
+  dispositionAt: row.disposition_at,
   reason: row.reason,
   createdAt: row.created_at,
   updatedAt: row.updated_at,
@@ -235,7 +237,7 @@ const make = Effect.gen(function* () {
       const at = DateTime.formatIso(yield* DateTime.now);
       const [updated] = yield* sql<Row>`UPDATE learning_items
         SET owner_kind = ${owner}, state = ${next}, disposition_by = 'person',
-          reason = 'Set by a person.', updated_at = ${at}
+          disposition_at = ${at}, reason = 'Set by a person.', updated_at = ${at}
         WHERE id = ${id}
         RETURNING *`;
       return toItem(updated!);

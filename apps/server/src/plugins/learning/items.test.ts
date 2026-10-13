@@ -515,6 +515,26 @@ it.effect("lists each failure mode's earliest delivery, whatever its item's stat
   ),
 );
 
+it.effect("a person's disposition is stamped when set, and new evidence does not move it", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const learning = yield* setup;
+      const opened = yield* learning.items.strengthen(projectId, "defect", "key:1", "Once.");
+      assert.isNull(opened.dispositionAt);
+      yield* TestClock.adjust("1 hour");
+      const decided = yield* learning.items.setDisposition({ id: opened.id, ownerKind: "policy" });
+      assert.strictEqual(decided.dispositionAt, "1970-01-01T01:00:00.000Z");
+      yield* TestClock.adjust("1 hour");
+      const strengthened = yield* learning.items.strengthen(projectId, "defect", "key:2", "Twice.");
+      assert.deepInclude(strengthened, {
+        occurrences: 2,
+        dispositionAt: "1970-01-01T01:00:00.000Z",
+        updatedAt: "1970-01-01T02:00:00.000Z",
+      });
+    }),
+  ),
+);
+
 it.effect("lists a range's deliveries to the owner kinds asked for, oldest first", () =>
   Effect.scoped(
     Effect.gen(function* () {

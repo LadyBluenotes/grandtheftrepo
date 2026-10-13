@@ -28,7 +28,10 @@ export interface ReportPullRequest {
   readonly title: string;
   readonly state: PullRequestState;
   readonly reviewDecision: PullRequestReviewDecision | null;
-  /** When it merged or closed; null while open, or when the host gave no time at all. */
+  /**
+   * When it merged or closed; null while open, or when the host gave neither time. A null one is
+   * in no range: it counts only where its state alone matters, such as a delivered thread.
+   */
   readonly closedAt: string | null;
   readonly linkedAt: string;
 }
@@ -260,21 +263,27 @@ export const foldReport = (input: ReportInput): TelemetryReport => {
       learning === undefined
         ? unavailable(notRunning("learning"))
         : ok(
+            // By when the person set it: an item's `updatedAt` also moves with new evidence.
             learning.items
-              .filter((item) => item.dispositionBy === "person" && inRange(item.updatedAt))
+              .flatMap(({ dispositionAt, ...item }) =>
+                item.dispositionBy === "person" && dispositionAt !== null && inRange(dispositionAt)
+                  ? [
+                      {
+                        itemId: item.id,
+                        failureMode: item.failureMode,
+                        state: item.state,
+                        ownerKind: item.ownerKind,
+                        decidedAt: dispositionAt,
+                      },
+                    ]
+                  : [],
+              )
               .toSorted(
                 byKeys(
-                  (item) => item.updatedAt,
-                  (item) => item.id,
+                  (decision) => decision.decidedAt,
+                  (decision) => decision.itemId,
                 ),
-              )
-              .map((item) => ({
-                itemId: item.id,
-                failureMode: item.failureMode,
-                state: item.state,
-                ownerKind: item.ownerKind,
-                updatedAt: item.updatedAt,
-              })),
+              ),
           ),
     knowledgeChanges: handedTo("project_knowledge", "project knowledge"),
     prompts: handedTo("prompt", "prompts"),

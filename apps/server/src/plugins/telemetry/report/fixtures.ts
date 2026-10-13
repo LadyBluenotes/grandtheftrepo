@@ -87,6 +87,7 @@ export const item = (id: number, overrides: Partial<LearningItem> = {}): Learnin
   state: "open",
   ownerKind: null,
   dispositionBy: "rule",
+  dispositionAt: null,
   reason: "Routed by rule.",
   createdAt: BEFORE,
   updatedAt: INSIDE,
@@ -176,15 +177,17 @@ export const fullInput = (): ReportInput => ({
         failureMode: "incomplete",
         state: "closed",
         dispositionBy: "person",
+        dispositionAt: LATER,
         reason: "Set by a person.",
         updatedAt: LATER,
       }),
-      // A person's choice from before the range.
+      // A person's choice from before the range, which new evidence moved into it.
       item(3, {
         failureMode: "scope_drift",
         state: "closed",
         dispositionBy: "person",
-        updatedAt: BEFORE,
+        dispositionAt: BEFORE,
+        updatedAt: INSIDE,
       }),
       item(4, { failureMode: "convention", state: "candidate", ownerKind: "project_knowledge" }),
     ],

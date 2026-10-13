@@ -62,10 +62,9 @@ const toReportThread = (shell: OrchestrationV2ThreadShell): ReportThread => ({
         title: snapshot.title,
         state: snapshot.state,
         reviewDecision: snapshot.reviewDecision ?? null,
+        // Only the host's merge or close time: `updatedAt` is any later activity, not the end.
         closedAt:
-          snapshot.state === "open"
-            ? null
-            : instant(snapshot.mergedAt ?? snapshot.closedAt ?? snapshot.updatedAt),
+          snapshot.state === "open" ? null : instant(snapshot.mergedAt ?? snapshot.closedAt),
         linkedAt: instant(link.linkedAt) ?? link.linkedAt,
       },
     ];

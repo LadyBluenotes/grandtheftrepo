@@ -115,7 +115,7 @@ export const renderHtml = (report: TelemetryReport) =>
       escape(item.failureMode),
       escape(item.state),
       escape(item.ownerKind ?? ""),
-      at(item.updatedAt),
+      at(item.decidedAt),
     ]),
     section("Knowledge changes", report.knowledgeChanges, ["Failure mode", "Delivered"], (item) => [
       escape(item.failureMode),

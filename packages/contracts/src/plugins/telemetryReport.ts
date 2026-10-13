@@ -77,14 +77,14 @@ export const TelemetryReport = Schema.Struct({
       createdAt: IsoDateTime,
     }),
   ),
-  /** Learning items a person set the disposition of in the range. */
+  /** Learning items a person set the disposition of in the range, by when they set it. */
   decisions: section(
     Schema.Struct({
       itemId: Schema.Int,
       failureMode: Schema.String,
       state: LearningItemState,
       ownerKind: Schema.NullOr(LearningOwnerKind),
-      updatedAt: IsoDateTime,
+      decidedAt: IsoDateTime,
     }),
   ),
   /** Learning items handed to project knowledge in the range. */

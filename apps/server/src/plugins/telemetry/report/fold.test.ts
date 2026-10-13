@@ -79,6 +79,12 @@ it("delivered: a merged pull request on a thread settled in the range is one ite
         settledAt: INSIDE,
         pullRequests: [pullRequest(1, { state: "merged", closedAt: INSIDE })],
       }),
+      // The host gave no merge time: the state alone makes it delivered.
+      thread("thread:untimed", {
+        title: "Untimed merge",
+        settledAt: LATER,
+        pullRequests: [pullRequest(4, { state: "merged" })],
+      }),
       // Settled in the range, but nothing merged.
       thread("thread:abandoned", {
         settledAt: INSIDE,
@@ -98,6 +104,14 @@ it("delivered: a merged pull request on a thread settled in the range is one ite
       settledAt: INSIDE,
       pullRequests: [
         { repository: "acme/app", number: 1, url: "https://github.com/acme/app/pull/1" },
+      ],
+    },
+    {
+      threadId: ThreadId.make("thread:untimed"),
+      title: "Untimed merge",
+      settledAt: LATER,
+      pullRequests: [
+        { repository: "acme/app", number: 4, url: "https://github.com/acme/app/pull/4" },
       ],
     },
   ]);
@@ -125,15 +139,36 @@ it("findings: the range's verdicts by outcome and failure mode, and unavailable 
   });
 });
 
-it("decisions: only dispositions a person set in the range", () => {
-  assert.deepEqual(foldReport(fullInput()).decisions.items, [
-    {
-      itemId: 2,
-      failureMode: "incomplete",
-      state: "closed",
-      ownerKind: null,
-      updatedAt: LATER,
+it("decisions: dispositions a person set in the range, whenever evidence last moved the item", () => {
+  const input = fullInput();
+  const report = foldReport({
+    ...input,
+    learning: input.learning && {
+      ...input.learning,
+      items: [
+        ...input.learning.items,
+        // Decided in the range; evidence after the range moved `updatedAt` out of it.
+        item(5, {
+          failureMode: "missing_verification",
+          ownerKind: "policy",
+          state: "candidate",
+          dispositionBy: "person",
+          dispositionAt: INSIDE,
+          updatedAt: TO,
+        }),
+      ],
     },
+  });
+  // Item 3 was decided before the range, though its `updatedAt` is inside it.
+  assert.deepEqual(report.decisions.items, [
+    {
+      itemId: 5,
+      failureMode: "missing_verification",
+      state: "candidate",
+      ownerKind: "policy",
+      decidedAt: INSIDE,
+    },
+    { itemId: 2, failureMode: "incomplete", state: "closed", ownerKind: null, decidedAt: LATER },
   ]);
 });
 
@@ -205,6 +240,8 @@ it("pull requests: open now or closed in the range, once each, by state", () => 
       thread("thread:c", {
         pullRequests: [
           pullRequest(7, { state: "closed", closedAt: BEFORE }),
+          // Merged, but the host gave neither a merge nor a close time: in no range.
+          pullRequest(9, { state: "merged" }),
           // Linked only after the range.
           pullRequest(8, { linkedAt: TO }),
         ],
