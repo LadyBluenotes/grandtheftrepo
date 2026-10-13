@@ -86,6 +86,8 @@ it.effect("the plugins_readiness tool and the plugins.readiness method agree", (
           Effect.flatMap(Schema.decodeUnknownEffect(Schema.Array(PluginReadiness))),
           Effect.provideService(PluginHost.PluginHost, host),
           Effect.provideService(Probe, probe),
+          // The host's dispatch table types every host method's services; readiness needs none of these.
+          Effect.provide(Layer.mock(PluginSupervisor.PluginSupervisor)({})),
         );
 
       const layerServer = PluginHost.layerMcp(McpHttpServer.toolkitRegistration).pipe(

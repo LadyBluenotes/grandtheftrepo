@@ -8,7 +8,6 @@ import {
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
-import * as Option from "effect/Option";
 import * as SqlClient from "effect/sql/SqlClient";
 
 import * as ProjectService from "../../project/ProjectService.ts";
@@ -99,7 +98,7 @@ it.effect(
             Layer.provide(ServerSettings.layerTest()),
             Layer.provide(
               Layer.mock(ProjectService.ProjectService)({
-                getById: () => Effect.succeed(Option.none()),
+                getById: () => Effect.succeedNone,
               }),
             ),
             Layer.provide(Layer.succeed(SqlClient.SqlClient, sql)),
