@@ -202,11 +202,11 @@ them half-evaluated. The host hands `toolkitRegistration` to `ServerPlugin.mcp` 
   `accepted`) move a page in one conditional update, so a request that lost a race is refused, and
   install at once; an install failure is their error, though the change stands.
   `knowledge.discard` keeps a draft as retired without writing. `knowledge.install` and `.verify`
-  are gateway methods too. Each install records the hash of the page files under the reserved
-  agent `pages`, and of the index block per agent in use. The `knowledge/delivery` sweep installs a
-  project when either differs from what its accepted pages render to, even with no agent in use,
-  only while no thread in the project has a run, and never over a hand edit, which `verify`
-  reports as `drifted`. Server:
+  are gateway methods too. Each install records, per page file (`page:<key>`) and per agent's
+  index block, the hash of what it wrote. The `knowledge/delivery` sweep writes only a component
+  whose record differs from what the accepted pages render to and whose file still holds what was
+  recorded, even with no agent in use, and only while no thread in the project has a run; a file
+  edited by hand stays `drifted` in `verify` until a person installs. Server:
   `apps/server/src/plugins/knowledge/`. Contracts: `packages/contracts/src/plugins/knowledge.ts`.
   Web: `apps/web/src/plugins/knowledge/`, at `/plugins/knowledge`. User guide:
   [Project knowledge](./user/knowledge.md).

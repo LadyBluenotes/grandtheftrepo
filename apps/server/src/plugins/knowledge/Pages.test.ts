@@ -2,15 +2,7 @@ import { assert, it } from "@effect/vitest";
 import { knowledgePagePath } from "@t3tools/contracts";
 
 import { findBlock, sha256 } from "../InstructionBlocks.ts";
-import {
-  INDEX_MARKERS,
-  blockStatus,
-  needsInstall,
-  pagesNeedInstall,
-  pageStatus,
-  render,
-  worse,
-} from "./Pages.ts";
+import { INDEX_MARKERS, blockStatus, catchUp, pageStatus, render, worse } from "./Pages.ts";
 
 const pages = [
   { key: "tests", title: "Running the tests", body: "Use `vp test run <files>`.\n\n" },
@@ -19,12 +11,11 @@ const pages = [
 
 it("renders each page with its title as the heading and the index in key order", () => {
   const rendered = render(pages);
+  const db = "# Where the database lives\n\nUnder the state directory.\n";
+  const tests = "# Running the tests\n\nUse `vp test run <files>`.\n";
   assert.deepStrictEqual(rendered.pages, [
-    {
-      path: ".knowledge/db.md",
-      text: "# Where the database lives\n\nUnder the state directory.\n",
-    },
-    { path: ".knowledge/tests.md", text: "# Running the tests\n\nUse `vp test run <files>`.\n" },
+    { key: "db", path: ".knowledge/db.md", text: db, hash: sha256(db) },
+    { key: "tests", path: ".knowledge/tests.md", text: tests, hash: sha256(tests) },
   ]);
   assert.strictEqual(
     rendered.block?.text,
@@ -43,33 +34,41 @@ it("renders each page with its title as the heading and the index in key order",
   assert.strictEqual(knowledgePagePath("db"), ".knowledge/db.md");
 });
 
-it("renders nothing to deliver when no page is accepted, and a hash that follows every byte", () => {
+it("renders nothing to deliver when no page is accepted, whatever order the pages come in", () => {
   const empty = render([]);
   assert.deepStrictEqual(empty.pages, []);
   assert.isUndefined(empty.block);
-  assert.strictEqual(empty.hash, sha256(""));
-
-  const rendered = render(pages);
-  assert.strictEqual(render(pages.toReversed()).hash, rendered.hash);
-  assert.notStrictEqual(
-    render([{ ...pages[0]!, body: "Changed." }, pages[1]!]).hash,
-    rendered.hash,
-  );
-  assert.notStrictEqual(render([pages[0]!]).hash, rendered.hash);
+  assert.deepStrictEqual(render(pages.toReversed()), render(pages));
 });
 
-it("needs an install for an agent with no delivery, another render, or another file", () => {
-  const rendered = render(pages);
+it("the sweep writes a stale component only while it still holds what was delivered", () => {
   const path = "/work/project/CLAUDE.md";
-  const delivery = { hash: rendered.hash, path };
-  assert.isFalse(needsInstall({ rendered, path, delivery }));
-  assert.isTrue(needsInstall({ rendered, path, delivery: undefined }));
-  assert.isTrue(needsInstall({ rendered, path, delivery: { ...delivery, hash: "old" } }));
-  assert.isTrue(needsInstall({ rendered, path: "/moved/CLAUDE.md", delivery }));
-  // With nothing accepted, an agent never delivered to has nothing to take down.
-  const empty = render([]);
-  assert.isFalse(needsInstall({ rendered: empty, path, delivery: undefined }));
-  assert.isTrue(needsInstall({ rendered: empty, path, delivery }));
+  const delivered = { hash: "old", path };
+  const decide = (
+    expected: string | undefined,
+    current: string | undefined,
+    delivery: { readonly hash: string; readonly path: string } | undefined,
+    at = path,
+  ) => catchUp({ expected, current, path: at, delivery });
+
+  // Delivered as it renders now: nothing to do, even over a hand edit.
+  assert.strictEqual(decide("new", "new", { hash: "new", path }), "none");
+  assert.strictEqual(decide("new", "edited", { hash: "new", path }), "none");
+  assert.strictEqual(decide(undefined, undefined, undefined), "none");
+  // Never delivered: written, or only recorded when the file already holds it.
+  assert.strictEqual(decide("new", undefined, undefined), "write");
+  assert.strictEqual(decide("new", "a teammate's", undefined), "write");
+  assert.strictEqual(decide("new", "new", undefined), "record");
+  // Delivered before: rewritten while the file holds that delivery, else left for a person.
+  assert.strictEqual(decide("new", "old", delivered), "write");
+  assert.strictEqual(decide("new", "edited", delivered), "leave");
+  assert.strictEqual(decide("new", undefined, delivered), "leave");
+  // No longer rendered, as for a retired page: removed, recorded once gone, or left when edited.
+  assert.strictEqual(decide(undefined, "old", delivered), "write");
+  assert.strictEqual(decide(undefined, undefined, delivered), "record");
+  assert.strictEqual(decide(undefined, "edited", delivered), "leave");
+  // A project that moved: its files moved with it.
+  assert.strictEqual(decide("old", "old", delivered, "/moved/CLAUDE.md"), "record");
 });
 
 it("reads a block and a page as ok, drifted or missing, the gone one outranking the changed one", () => {
@@ -90,23 +89,4 @@ it("reads a block and a page as ok, drifted or missing, the gone one outranking 
   assert.strictEqual(worse("missing", "drifted"), "missing");
   assert.strictEqual(worse("drifted", "missing"), "missing");
   assert.strictEqual(worse("ok", "ok"), "ok");
-});
-
-it("the page files need an install with no agent in use, until their delivery is recorded", () => {
-  const rendered = render(pages);
-  const path = "/project/.knowledge";
-  const recorded = { hash: rendered.pagesHash, path };
-  assert.isTrue(pagesNeedInstall({ rendered, path, delivery: undefined }));
-  assert.isFalse(pagesNeedInstall({ rendered: render([]), path, delivery: undefined }));
-  assert.isFalse(pagesNeedInstall({ rendered, path, delivery: recorded }));
-  // A page retired since, a page edited since, or a project that moved.
-  assert.isTrue(pagesNeedInstall({ rendered: render([pages[0]!]), path, delivery: recorded }));
-  assert.isTrue(
-    pagesNeedInstall({
-      rendered: render([{ ...pages[0]!, title: "Renamed" }, pages[1]!]),
-      path,
-      delivery: recorded,
-    }),
-  );
-  assert.isTrue(pagesNeedInstall({ rendered, path: "/moved/.knowledge", delivery: recorded }));
 });

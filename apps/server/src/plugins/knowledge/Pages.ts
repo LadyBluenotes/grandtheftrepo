@@ -16,20 +16,18 @@ export const PROJECT_INSTRUCTION_FILES = {
 /** The index block, the same in every instruction file. */
 export const INDEX_MARKERS = blockMarkers("knowledge", "index");
 
-/** The text that cannot appear in a title, which the index block carries. */
-export const MARKER_WORD = "fork-knowledge:";
-
 const INDEX_LEAD = "Before changing code, read the knowledge page below that matches the task.";
 
 export interface Rendered {
-  /** Every accepted page's file, in key order. */
-  readonly pages: ReadonlyArray<{ readonly path: string; readonly text: string }>;
+  /** Every accepted page's file, in key order, with the sha256 of its text. */
+  readonly pages: ReadonlyArray<{
+    readonly key: string;
+    readonly path: string;
+    readonly text: string;
+    readonly hash: string;
+  }>;
   /** The index block; undefined when no page is accepted, and then no file carries one. */
   readonly block: { readonly text: string; readonly hash: string } | undefined;
-  /** sha256 of everything an install writes, recorded per agent so the sweep sees a change. */
-  readonly hash: string;
-  /** sha256 of the page files alone, recorded once per project whatever agents are in use. */
-  readonly pagesHash: string;
 }
 
 /** What the accepted pages render to: each page with its title as the heading, and the index. */
@@ -37,17 +35,15 @@ export const render = (
   accepted: ReadonlyArray<{ readonly key: string; readonly title: string; readonly body: string }>,
 ): Rendered => {
   const sorted = accepted.toSorted((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0));
-  const pages = sorted.map((page) => ({
-    path: knowledgePagePath(page.key),
-    text: `# ${page.title}\n\n${page.body.trim()}\n`,
-  }));
-  const files = pages.map((page) => `${page.path}\n${page.text}`);
   const content =
     sorted.length === 0
       ? undefined
       : `${INDEX_LEAD}\n\n${sorted.map((page) => `- ${knowledgePagePath(page.key)}: ${page.title}`).join("\n")}\n`;
   return {
-    pages,
+    pages: sorted.map((page) => {
+      const text = `# ${page.title}\n\n${page.body.trim()}\n`;
+      return { key: page.key, path: knowledgePagePath(page.key), text, hash: sha256(text) };
+    }),
     block:
       content === undefined
         ? undefined
@@ -55,38 +51,38 @@ export const render = (
             text: `${INDEX_MARKERS.start}\n${content}${INDEX_MARKERS.end}`,
             hash: sha256(content),
           },
-    hash: sha256([content ?? "", ...files].join("\0")),
-    pagesHash: sha256(files.join("\0")),
   };
 };
 
 /**
- * Whether one agent in use needs an install: its recorded delivery is of another render or
- * another file, or it has none while there is an index to deliver.
+ * What the sweep does with one thing an install records, a page file or an agent's index block:
+ * nothing, record what is already there, write it, or leave it for a person.
  */
-export const needsInstall = (input: {
-  readonly rendered: Rendered;
-  /** The agent's instruction file in the project today. */
-  readonly path: string;
-  readonly delivery: { readonly hash: string; readonly path: string } | undefined;
-}) =>
-  input.delivery === undefined
-    ? input.rendered.block !== undefined
-    : input.delivery.hash !== input.rendered.hash || input.delivery.path !== input.path;
+export type CatchUp = "none" | "record" | "write" | "leave";
 
 /**
- * Whether the page files need an install, with or without an agent in use: their recorded
- * delivery is of other pages or another directory, or there is none while a page is accepted.
+ * The sweep's decision for one component. `expected` is the hash it renders to now (undefined when
+ * it should not exist), `current` the hash it holds now (undefined when absent), and `delivery` what
+ * the last install recorded. A stale component is written only while it still holds what was
+ * recorded; one holding anything else was edited by hand, and stays drifted until a person
+ * reinstalls.
  */
-export const pagesNeedInstall = (input: {
-  readonly rendered: Rendered;
-  /** The project's knowledge directory today. */
+export const catchUp = (input: {
+  readonly expected: string | undefined;
+  readonly current: string | undefined;
   readonly path: string;
   readonly delivery: { readonly hash: string; readonly path: string } | undefined;
-}) =>
-  input.delivery === undefined
-    ? input.rendered.pages.length > 0
-    : input.delivery.hash !== input.rendered.pagesHash || input.delivery.path !== input.path;
+}): CatchUp => {
+  const { expected, current, delivery } = input;
+  const stale =
+    delivery === undefined
+      ? expected !== undefined
+      : delivery.hash !== expected || delivery.path !== input.path;
+  if (!stale) return "none";
+  if (current === expected) return "record";
+  if (delivery !== undefined && current !== delivery.hash) return "leave";
+  return "write";
+};
 
 type Status = KnowledgeVerifyResult["status"];
 

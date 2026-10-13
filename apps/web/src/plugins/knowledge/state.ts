@@ -5,6 +5,7 @@ import {
 } from "@t3tools/client-runtime/plugins/rpc";
 import {
   KNOWLEDGE_BODY_MAX_LENGTH,
+  KNOWLEDGE_MARKER_WORD,
   KNOWLEDGE_METHODS,
   KnowledgeBody,
   KnowledgeError,
@@ -165,6 +166,9 @@ const isBody = Schema.is(KnowledgeBody);
 /** Why an edited draft cannot be accepted as it stands, or null when it can. */
 export function draftProblem(title: string, body: string): string | null {
   if (title.trim().length === 0) return "The title is empty.";
+  if (title.includes(KNOWLEDGE_MARKER_WORD)) {
+    return `The title cannot contain "${KNOWLEDGE_MARKER_WORD}".`;
+  }
   if (!isTitle(title.trim())) return "The title is one line of at most 200 characters.";
   if (body.trim().length === 0) return "The body is empty.";
   if (!isBody(body.trim())) {

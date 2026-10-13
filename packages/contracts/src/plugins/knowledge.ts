@@ -15,10 +15,21 @@ export const KnowledgeKey = TrimmedNonEmptyString.check(
 );
 export type KnowledgeKey = typeof KnowledgeKey.Type;
 
-/** One line: it is the page's heading and its line in the index block. */
+/** Text a title cannot hold: the index block it is listed in is marked with it. */
+export const KNOWLEDGE_MARKER_WORD = "fork-knowledge:";
+
+/**
+ * One line: it is the page's heading and its line in the index block, so it cannot hold the
+ * block's marker text. A body never enters the block and may.
+ */
 export const KnowledgeTitle = TrimmedNonEmptyString.check(
   Schema.isMaxLength(200),
   Schema.isPattern(/^[^\r\n]*$/),
+  Schema.makeFilter((title) =>
+    title.includes(KNOWLEDGE_MARKER_WORD)
+      ? `A title cannot contain "${KNOWLEDGE_MARKER_WORD}", which marks the index block.`
+      : true,
+  ),
 );
 
 export const KNOWLEDGE_BODY_MAX_LENGTH = 4_000;

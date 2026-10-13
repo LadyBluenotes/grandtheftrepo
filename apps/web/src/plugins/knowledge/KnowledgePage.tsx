@@ -181,7 +181,8 @@ export default function KnowledgePage() {
                 ) : (
                   groups.drafts.map((draft) => (
                     <DraftRow
-                      key={draft.id}
+                      // A numeric id repeats across environments; the edits belong to one draft.
+                      key={`${environmentId}:${draft.id}`}
                       draft={draft}
                       locked={locked || !commands.canWrite}
                       onAccept={(title, body) =>

@@ -56,6 +56,11 @@ describe("draftProblem", () => {
     expect(draftProblem("x".repeat(201), "Use vp.")).toBe(
       "The title is one line of at most 200 characters.",
     );
+    expect(draftProblem("See <!-- fork-knowledge:end -->", "Use vp.")).toBe(
+      'The title cannot contain "fork-knowledge:".',
+    );
+    // The marker text is refused only in a title; a body never enters the index block.
+    expect(draftProblem("Running the tests", "fork-knowledge: in prose")).toBeNull();
     expect(draftProblem("Running the tests", " ")).toBe("The body is empty.");
     expect(draftProblem("Running the tests", "x".repeat(4_000))).toBeNull();
     expect(draftProblem("Running the tests", "x".repeat(4_001))).toBe(

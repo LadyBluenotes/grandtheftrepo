@@ -82,5 +82,13 @@ it.effect("each method answers through its own gateway and is refused through an
       key: "Not A Slug",
     });
     assert.strictEqual(badKey._tag, "PluginHostError");
+    // The contract refuses a title carrying the index block's marker before the store sees it.
+    const marked = yield* refusal("operate", KNOWLEDGE_METHODS.propose.method, {
+      ...page,
+      key: "marked",
+      title: "See <!-- fork-knowledge:end key=index -->",
+    });
+    assert.strictEqual(marked._tag, "PluginHostError");
+    assert.include(marked.message, 'A title cannot contain "fork-knowledge:"');
   }).pipe(Effect.provide(onHost(Layer.empty))),
 );

@@ -7,13 +7,13 @@ import * as ThreadManagementService from "../../orchestration-v2/ThreadManagemen
 import * as KnowledgeStore from "./KnowledgeStore.ts";
 
 /**
- * The supervisor sweep that keeps each project's pages and index blocks current. A project whose
- * recorded delivery differs from what its accepted pages render to, for an agent in use, is
- * installed through `KnowledgeStore`, but only at a session boundary: while any thread in the
- * project has a run, it waits, leaves nothing behind, and the next tick looks again. A hand edit
- * leaves the recorded delivery as it was, so the sweep never overwrites one; `verify` reports it
- * and an install repairs it. `examined` counts projects, `acted` installs, `flags` installs that
- * failed. A dry run counts the installs it would make and writes nothing.
+ * The supervisor sweep that keeps each project's pages and index blocks current. It catches up
+ * through `KnowledgeStore.catchUp`, writing only the page files and blocks whose recorded delivery
+ * is stale, and only at a session boundary: while any thread in the project has a run, it waits,
+ * leaves nothing behind, and the next tick looks again. A file that no longer holds what was
+ * delivered was edited by hand and is never written by the sweep; `verify` reports it and a
+ * person's install repairs it. `examined` counts projects, `acted` catch-ups, `flags` catch-ups
+ * that failed. A dry run counts the catch-ups it would make and writes nothing.
  */
 export const make = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
@@ -36,7 +36,7 @@ export const make = Effect.gen(function* () {
   });
 
   /**
-   * The check `install` repeats under its lock, right before it writes: a person's install can
+   * The check `catchUp` repeats under its lock, right before it writes: a person's install can
    * hold the lock long enough for a run to start after the sweep first looked. Seeing one marks
    * the project busy, so the sweep reads the refusal as a wait and not as a failed install.
    */
@@ -87,17 +87,19 @@ export const make = Effect.gen(function* () {
           // A project the server no longer knows has nothing to install into.
           KnowledgeError: (error) =>
             error.code === "not_found"
-              ? Effect.succeed(false)
+              ? Effect.succeed(false as const)
               : Effect.as(
                   Effect.logWarning("knowledge delivery: could not compare", {
                     projectId,
                     message: error.message,
                   }),
-                  false,
+                  "failed" as const,
                 ),
         }),
       );
-      if (!outdated) continue;
+      // Files the sweep cannot read are flagged like files it cannot write.
+      if (outdated === "failed") flags += 1;
+      if (outdated !== true) continue;
       const active = yield* hasActiveRun(projectId).pipe(
         Effect.catch((cause) =>
           Effect.as(
@@ -111,23 +113,21 @@ export const make = Effect.gen(function* () {
         acted += 1;
         continue;
       }
-      const installed = yield* store
-        .install({ projectId }, refuseWhileRunning(projectId, busy))
-        .pipe(
-          Effect.as("installed" as const),
-          Effect.catchTags({
-            KnowledgeError: (error) =>
-              busy.has(projectId)
-                ? Effect.succeed("waiting" as const)
-                : Effect.as(
-                    Effect.logWarning("knowledge delivery: install failed", {
-                      projectId,
-                      message: error.message,
-                    }),
-                    "failed" as const,
-                  ),
-          }),
-        );
+      const installed = yield* store.catchUp(projectId, refuseWhileRunning(projectId, busy)).pipe(
+        Effect.map((wrote) => (wrote ? ("installed" as const) : ("unchanged" as const))),
+        Effect.catchTags({
+          KnowledgeError: (error) =>
+            busy.has(projectId)
+              ? Effect.succeed("waiting" as const)
+              : Effect.as(
+                  Effect.logWarning("knowledge delivery: install failed", {
+                    projectId,
+                    message: error.message,
+                  }),
+                  "failed" as const,
+                ),
+        }),
+      );
       if (installed === "installed") acted += 1;
       if (installed === "failed") flags += 1;
     }

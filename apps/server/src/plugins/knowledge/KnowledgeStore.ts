@@ -5,7 +5,7 @@ import {
   KnowledgeSource,
   KnowledgeState,
   KnowledgeTitle,
-  KNOWLEDGE_DIRECTORY,
+  KNOWLEDGE_MARKER_WORD,
   knowledgePagePath,
   POLICY_AGENTS,
   ProjectId,
@@ -54,15 +54,33 @@ const EntryRow = Schema.Struct({
 const encodeSource = Schema.encodeEffect(Schema.fromJsonString(KnowledgeSource));
 
 /**
- * The `agent` of the project's one row for its page files, which are shared by every agent and
- * written even when none is in use; its `path` is the knowledge directory.
+ * Each thing an install writes has a delivery row holding the hash of what it wrote: an agent in
+ * use for its index block, and `page:<key>` for each page file, whatever agents are in use. The
+ * sweep compares a file with its row to tell what it wrote from what a person edited.
  */
-const PAGES_DELIVERY = "pages";
-
 interface DeliveryRow {
-  readonly agent: PolicyAgent | typeof PAGES_DELIVERY;
+  readonly agent: string;
   readonly path: string;
   readonly hash: string;
+}
+
+const PAGE_DELIVERY = "page:";
+const pageDelivery = (key: string) => `${PAGE_DELIVERY}${key}`;
+
+/** sha256 of a file's text, or undefined when there is no file. */
+const fileHash = (text: string | undefined) =>
+  text === undefined ? undefined : Blocks.sha256(text);
+
+/** One thing an install records, and what the sweep does about it. */
+interface Component {
+  /** Its delivery row's `agent`. */
+  readonly id: string;
+  readonly path: string;
+  /** The hash it renders to now; undefined when it should not exist. */
+  readonly expected: string | undefined;
+  /** The file's text once it is written; undefined when the file goes. */
+  readonly next: string | undefined;
+  readonly action: Pages.CatchUp;
 }
 
 export class KnowledgeStore extends Context.Service<
@@ -93,24 +111,32 @@ export class KnowledgeStore extends Context.Service<
     /** Discards a draft, which was never written, so nothing is installed; it is kept as retired. */
     readonly discard: (input: KnowledgeIdInput) => Effect.Effect<KnowledgeEntry, KnowledgeError>;
     /**
-     * Writes every accepted page, removes retired ones, and rewrites the index block in the
-     * project instruction file of each agent in use; a file whose bytes would not change is not
-     * written. `beforeWrite` runs under the install lock right before the first write, and failing
-     * it cancels the install with nothing written. The sweep uses it to look for a run again.
+     * A person's install: writes every accepted page, removes retired ones, and rewrites the index
+     * block in the project instruction file of each agent in use, hand edits included; a file whose
+     * bytes would not change is not written.
      */
     readonly install: (
       input: KnowledgeProjectInput,
-      beforeWrite?: Effect.Effect<void, KnowledgeError>,
     ) => Effect.Effect<ReadonlyArray<KnowledgeInstallResult>, KnowledgeError>;
     /** Re-reads the project's pages and each agent's index block against what renders now. */
     readonly verify: (
       input: KnowledgeProjectInput,
     ) => Effect.Effect<ReadonlyArray<KnowledgeVerifyResult>, KnowledgeError>;
     /**
-     * Whether the page files, or an agent in use, hold a delivery other than what the accepted
-     * pages render to now. The pages are compared even when no agent is in use.
+     * Whether the sweep has something to catch up on: a page file or an agent's index block whose
+     * delivery is not what the accepted pages render to now, and that still holds what was
+     * delivered. One a person edited is left out; it stays drifted until a person reinstalls.
      */
     readonly outdated: (projectId: ProjectId) => Effect.Effect<boolean, KnowledgeError>;
+    /**
+     * The sweep's install: writes only what `outdated` names and records it, leaving every other
+     * file as it is. `beforeWrite` runs under the install lock right before the first write, and
+     * failing it cancels with nothing written. False when nothing was due.
+     */
+    readonly catchUp: (
+      projectId: ProjectId,
+      beforeWrite?: Effect.Effect<void, KnowledgeError>,
+    ) => Effect.Effect<boolean, KnowledgeError>;
   }
 >()("t3/plugins/knowledge/KnowledgeStore") {}
 
@@ -134,11 +160,11 @@ const io =
       Effect.andThen(Effect.fail(new KnowledgeError({ code: "io", message }))),
     );
 
-/** A title or body the schemas refuse, or a title that would break the index block. */
+/** A title or body the contract's schemas refuse, the index block's marker text among them. */
 const checkText = (title: string | undefined, body: string | undefined) => {
-  if (title !== undefined && (!isTitle(title) || title.includes(Pages.MARKER_WORD))) {
+  if (title !== undefined && !isTitle(title)) {
     return Effect.fail(
-      invalid(`A title is one line of at most 200 characters without "${Pages.MARKER_WORD}".`),
+      invalid(`A title is one line of at most 200 characters without "${KNOWLEDGE_MARKER_WORD}".`),
     );
   }
   if (body !== undefined && !isBody(body)) {
@@ -265,7 +291,6 @@ const make = Effect.gen(function* () {
     return {
       rendered: Pages.render(accepted),
       pageFile: (relative: string) => path.join(root, relative),
-      pagesPath: path.join(root, KNOWLEDGE_DIRECTORY),
       agents: agents.map((agent) => ({
         agent,
         path: path.join(root, Pages.PROJECT_INSTRUCTION_FILES[agent]),
@@ -289,11 +314,39 @@ const make = Effect.gen(function* () {
       (rows) => new Map(rows.map((row) => [row.agent, row])),
     );
 
+  /**
+   * Saves each component's delivery: the hash it was written with, or no row once it should not
+   * exist. Components the call does not name keep their rows.
+   */
+  const record = Effect.fn("KnowledgeStore.record")(function* (
+    projectId: ProjectId,
+    components: ReadonlyArray<Pick<Component, "id" | "path" | "expected">>,
+  ) {
+    const at = yield* nowIso;
+    const delivered = yield* deliveriesOf(projectId);
+    for (const { id, path: filePath, expected } of components) {
+      const row = delivered.get(id);
+      if (expected === undefined) {
+        if (row !== undefined) {
+          yield* sql`DELETE FROM knowledge_delivery WHERE project_id = ${projectId} AND agent = ${id}`;
+        }
+        continue;
+      }
+      if (row?.hash === expected && row.path === filePath) continue;
+      yield* sql`INSERT OR REPLACE INTO knowledge_delivery ${sql.insert({
+        project_id: projectId,
+        agent: id,
+        path: filePath,
+        hash: expected,
+        installed_at: at,
+        verified_at: null,
+      })}`;
+    }
+  });
+
+  /** A person's install: every component is written as it renders now, hand edits included. */
   const install = Effect.fn("KnowledgeStore.install")(
-    function* (
-      { projectId }: KnowledgeProjectInput,
-      beforeWrite?: Effect.Effect<void, KnowledgeError>,
-    ) {
+    function* ({ projectId }: KnowledgeProjectInput) {
       const plan = yield* planOf(projectId);
       const { rendered } = plan;
       // Every file is read before any is written, so a damaged block refuses the whole install.
@@ -329,32 +382,26 @@ const make = Effect.gen(function* () {
         if (next === "") removals.push(filePath);
         else writes.push({ path: filePath, text: next });
       }
-      if (beforeWrite !== undefined) yield* beforeWrite;
       for (const write of writes) yield* Blocks.write(write.path, write.text);
       for (const filePath of removals) yield* fs.remove(filePath);
 
-      const at = yield* nowIso;
-      const delivered = yield* deliveriesOf(projectId);
-      const records: ReadonlyArray<DeliveryRow> = [
-        { agent: PAGES_DELIVERY, path: plan.pagesPath, hash: rendered.pagesHash },
-        ...plan.agents.map(({ agent, path: filePath }) => ({
-          agent,
-          path: filePath,
-          hash: rendered.hash,
+      const live = new Set(rendered.pages.map((page) => pageDelivery(page.key)));
+      const gone = [...(yield* deliveriesOf(projectId)).values()].filter(
+        (row) => row.agent.startsWith(PAGE_DELIVERY) && !live.has(row.agent),
+      );
+      yield* record(projectId, [
+        ...rendered.pages.map((page) => ({
+          id: pageDelivery(page.key),
+          path: plan.pageFile(page.path),
+          expected: page.hash,
         })),
-      ];
-      for (const record of records) {
-        const row = delivered.get(record.agent);
-        if (row?.hash === record.hash && row.path === record.path) continue;
-        yield* sql`INSERT OR REPLACE INTO knowledge_delivery ${sql.insert({
-          project_id: projectId,
-          agent: record.agent,
-          path: record.path,
-          hash: record.hash,
-          installed_at: at,
-          verified_at: null,
-        })}`;
-      }
+        ...gone.map((row) => ({ id: row.agent, path: row.path, expected: undefined })),
+        ...plan.agents.map(({ agent, path: filePath }) => ({
+          id: agent,
+          path: filePath,
+          expected: rendered.block?.hash,
+        })),
+      ]);
       return plan.agents.map(({ agent, path: filePath }): KnowledgeInstallResult => ({
         agent,
         status: changed.has(agent) ? "installed" : "unchanged",
@@ -413,30 +460,107 @@ const make = Effect.gen(function* () {
     }),
   );
 
+  /** Every component of the project, with the sweep's decision for each. */
+  const componentsOf = Effect.fn("KnowledgeStore.componentsOf")(function* (projectId: ProjectId) {
+    const plan = yield* planOf(projectId);
+    const { rendered } = plan;
+    const delivered = yield* deliveriesOf(projectId);
+    const decide = (
+      id: string,
+      filePath: string,
+      expected: string | undefined,
+      current: string | undefined,
+    ) => Pages.catchUp({ expected, current, path: filePath, delivery: delivered.get(id) });
+    const components: Array<Component> = [];
+    for (const page of rendered.pages) {
+      const id = pageDelivery(page.key);
+      const filePath = plan.pageFile(page.path);
+      const current = fileHash(yield* Blocks.read(filePath));
+      components.push({
+        id,
+        path: filePath,
+        expected: page.hash,
+        next: page.text,
+        action: decide(id, filePath, page.hash, current),
+      });
+    }
+    // A page recorded but no longer accepted: its file goes, unless a person edited it since.
+    const live = new Set(components.map((component) => component.id));
+    for (const row of delivered.values()) {
+      if (!row.agent.startsWith(PAGE_DELIVERY) || live.has(row.agent)) continue;
+      const current = fileHash(yield* Blocks.read(row.path));
+      components.push({
+        id: row.agent,
+        path: row.path,
+        expected: undefined,
+        next: undefined,
+        action: decide(row.agent, row.path, undefined, current),
+      });
+    }
+    for (const { agent, path: filePath } of plan.agents) {
+      const text = yield* Blocks.read(filePath);
+      const found = Blocks.findBlock(text ?? "", Pages.INDEX_MARKERS);
+      const expected = rendered.block?.hash;
+      const next =
+        found.kind === "damaged"
+          ? text
+          : rendered.block !== undefined
+            ? Blocks.placeBlock(text ?? "", found, rendered.block.text)
+            : found.kind === "found"
+              ? Blocks.removeBlock(text ?? "", found)
+              : text;
+      components.push({
+        id: agent,
+        path: filePath,
+        expected,
+        // A file that held the block alone goes with it, as it came with it.
+        next: next === "" ? undefined : next,
+        // A damaged block is a person's to fix, as a hand edit is.
+        action:
+          found.kind === "damaged"
+            ? "leave"
+            : decide(agent, filePath, expected, found.kind === "found" ? found.hash : undefined),
+      });
+    }
+    return components;
+  });
+
+  const due = (component: Component) =>
+    component.action === "write" || component.action === "record";
+
   const outdated = Effect.fn("KnowledgeStore.outdated")(
     function* (projectId: ProjectId) {
-      const plan = yield* planOf(projectId);
-      const delivered = yield* deliveriesOf(projectId);
-      return (
-        Pages.pagesNeedInstall({
-          rendered: plan.rendered,
-          path: plan.pagesPath,
-          delivery: delivered.get(PAGES_DELIVERY),
-        }) ||
-        plan.agents.some(({ agent, path: filePath }) =>
-          Pages.needsInstall({
-            rendered: plan.rendered,
-            path: filePath,
-            delivery: delivered.get(agent),
-          }),
-        )
-      );
+      return (yield* componentsOf(projectId)).some(due);
     },
     provided,
     Effect.catchTags({
       SqlError: io("Could not read the deliveries."),
       SchemaError: io("Could not read the pages."),
-      PlatformError: io("Could not look for the agents' directories."),
+      PlatformError: io("Could not read the project's knowledge files."),
+      ServerSettingsError: io("Could not read the server settings."),
+      ProjectOperationError: io("Could not read the project."),
+    }),
+  );
+
+  const catchUp = Effect.fn("KnowledgeStore.catchUp")(
+    function* (projectId: ProjectId, beforeWrite?: Effect.Effect<void, KnowledgeError>) {
+      const components = (yield* componentsOf(projectId)).filter(due);
+      if (components.length === 0) return false;
+      if (beforeWrite !== undefined) yield* beforeWrite;
+      for (const component of components) {
+        if (component.action !== "write") continue;
+        if (component.next !== undefined) yield* Blocks.write(component.path, component.next);
+        else if (yield* fs.exists(component.path)) yield* fs.remove(component.path);
+      }
+      yield* record(projectId, components);
+      return true;
+    },
+    installLock.withPermits(1),
+    provided,
+    Effect.catchTags({
+      SqlError: io("Could not record the install."),
+      SchemaError: io("Could not read the pages."),
+      PlatformError: io("Could not write the project's knowledge files."),
       ServerSettingsError: io("Could not read the server settings."),
       ProjectOperationError: io("Could not read the project."),
     }),
@@ -556,7 +680,17 @@ const make = Effect.gen(function* () {
     }),
   );
 
-  return KnowledgeStore.of({ list, propose, accept, retire, discard, install, verify, outdated });
+  return KnowledgeStore.of({
+    list,
+    propose,
+    accept,
+    retire,
+    discard,
+    install,
+    verify,
+    outdated,
+    catchUp,
+  });
 });
 
 export const layer = Layer.effect(KnowledgeStore, make);

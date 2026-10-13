@@ -100,24 +100,22 @@ it.effect("with no agent in use, a page write that failed after accepting is ret
 );
 
 it.effect(
-  "leaves a hand edit for a person, and flags an install that fails until the file is fixed",
+  "leaves a hand edit or a damaged block for a person, and catches up once the file is restored",
   () =>
     Effect.gen(function* () {
       const store = yield* KnowledgeStore.KnowledgeStore;
       const sweep = yield* Sweep;
       const w = yield* world;
+      const tick = () => sweep.run({ dryRun: false });
       yield* accepted("tests", "Running the tests");
 
       const installed = yield* w.fs.readFileString(w.claudeFile);
       yield* w.fs.writeFileString(w.claudeFile, installed.replace("Running", "Skipping"));
-      assert.deepStrictEqual(yield* sweep.run({ dryRun: false }), {
-        examined: 1,
-        acted: 0,
-        flags: 0,
-      });
+      assert.deepStrictEqual(yield* tick(), { examined: 1, acted: 0, flags: 0 });
       assert.strictEqual((yield* store.verify({ projectId }))[0]?.status, "drifted");
 
-      // A second start marker damages the block, so the next acceptance cannot install.
+      // A second start marker damages the block, so the next acceptance cannot install. The
+      // sweep writes the new page and leaves the damaged file to a person.
       const damaged = `${installed}<!-- fork-knowledge:start key=index -->\n`;
       yield* w.fs.writeFileString(w.claudeFile, damaged);
       const draft = yield* store.propose(
@@ -125,22 +123,65 @@ it.effect(
         { kind: "person" },
       );
       assert.strictEqual((yield* Effect.flip(store.accept({ id: draft.id }))).code, "invalid");
-      assert.deepStrictEqual(yield* sweep.run({ dryRun: false }), {
-        examined: 1,
-        acted: 0,
-        flags: 1,
-      });
+      assert.isFalse(yield* w.fs.exists(w.page("db")));
+      assert.deepStrictEqual(yield* tick(), { examined: 1, acted: 1, flags: 0 });
+      assert.isTrue(yield* w.fs.exists(w.page("db")));
       assert.strictEqual(yield* w.fs.readFileString(w.claudeFile), damaged);
+      assert.deepStrictEqual(yield* tick(), { examined: 1, acted: 0, flags: 0 });
 
+      // Restored to what was last delivered, the block is the sweep's to bring up to date.
       yield* w.fs.writeFileString(w.claudeFile, installed);
-      assert.deepStrictEqual(yield* sweep.run({ dryRun: false }), {
-        examined: 1,
-        acted: 1,
-        flags: 0,
-      });
+      assert.deepStrictEqual(yield* tick(), { examined: 1, acted: 1, flags: 0 });
       assert.include(
         yield* w.fs.readFileString(w.claudeFile),
         "- .knowledge/db.md: The database\n",
       );
+      assert.deepStrictEqual(
+        (yield* store.verify({ projectId })).map((result) => result.status),
+        ["ok"],
+      );
+    }).pipe(Effect.provide(layerTest)),
+);
+
+it.effect(
+  "a new agent gets its block while a hand-edited page and block stay as a person left them",
+  () =>
+    Effect.gen(function* () {
+      const store = yield* KnowledgeStore.KnowledgeStore;
+      const sweep = yield* Sweep;
+      const w = yield* world;
+      const tick = () => sweep.run({ dryRun: false });
+      yield* accepted("tests", "Running the tests");
+
+      const page = "# Running the tests\n\nBody, and a note of mine.\n";
+      yield* w.fs.writeFileString(w.page("tests"), page);
+      const block = (yield* w.fs.readFileString(w.claudeFile)).replace("Running", "Skipping");
+      yield* w.fs.writeFileString(w.claudeFile, block);
+
+      yield* w.useCodex;
+      const caught = yield* w.writing(tick());
+      assert.deepStrictEqual(caught.value, { examined: 1, acted: 1, flags: 0 });
+      // Every file call is the atomic write of Codex's file; the page and Claude's file are untouched.
+      assert.isNotEmpty(caught.writes);
+      for (const call of caught.writes) assert.include(call, ` ${w.codexFile}`);
+      assert.include(
+        yield* w.fs.readFileString(w.codexFile),
+        "- .knowledge/tests.md: Running the tests\n",
+      );
+      assert.strictEqual(yield* w.fs.readFileString(w.page("tests")), page);
+      assert.strictEqual(yield* w.fs.readFileString(w.claudeFile), block);
+      assert.deepStrictEqual(yield* tick(), { examined: 1, acted: 0, flags: 0 });
+
+      // A person's install is the one that repairs both.
+      yield* store.install({ projectId });
+      assert.strictEqual(
+        yield* w.fs.readFileString(w.page("tests")),
+        "# Running the tests\n\nBody.\n",
+      );
+      assert.deepStrictEqual(
+        (yield* store.verify({ projectId })).map((result) => result.status),
+        ["ok", "ok"],
+      );
+      assert.deepStrictEqual(yield* tick(), { examined: 1, acted: 0, flags: 0 });
     }).pipe(Effect.provide(layerTest)),
 );
