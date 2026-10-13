@@ -4,6 +4,7 @@ import {
   type PonytailRungId,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
+import * as SqlClient from "effect/sql/SqlClient";
 
 import * as PolicyService from "./PolicyService.ts";
 
@@ -38,25 +39,34 @@ export const PONYTAIL_TEXT = [
 /**
  * Creates version 1 of the `ponytail` policy from `PONYTAIL_TEXT` and accepts it, unless a
  * `*` / `ponytail` policy already exists in any state: an edited or replaced ladder is the user's
- * and is never overwritten. The delivery sweep then writes it into the agents' instruction files
- * like any accepted policy. A failure is logged and the next start tries again.
+ * and is never overwritten. The check, the create and the accept share one transaction (the
+ * service's own transactions nest in it), so a failed accept leaves no draft behind for the next
+ * start to mistake for the user's. The delivery sweep then writes the policy into the agents'
+ * instruction files like any accepted policy. A failure is logged and the next start tries again.
  */
 export const seed = Effect.fn("Ponytail.seed")(
   function* () {
+    const sql = yield* SqlClient.SqlClient;
     const policies = yield* PolicyService.PolicyService;
-    const existing = yield* policies.list(POLICY_ENVIRONMENT_PROJECT_ID);
-    if (existing.some((policy) => policy.key === PONYTAIL_KEY)) return;
     const projectId = POLICY_ENVIRONMENT_PROJECT_ID;
-    const { version } = yield* policies.create({
-      projectId,
-      key: PONYTAIL_KEY,
-      title: "Ponytail ladder",
-      body: PONYTAIL_TEXT,
-    });
-    yield* policies.accept({ projectId, key: PONYTAIL_KEY, version });
+    yield* sql.withTransaction(
+      Effect.gen(function* () {
+        const existing = yield* policies.list(projectId);
+        if (existing.some((policy) => policy.key === PONYTAIL_KEY)) return;
+        const { version } = yield* policies.create({
+          projectId,
+          key: PONYTAIL_KEY,
+          title: "Ponytail ladder",
+          body: PONYTAIL_TEXT,
+        });
+        yield* policies.accept({ projectId, key: PONYTAIL_KEY, version });
+      }),
+    );
   },
   Effect.catchTags({
     PolicyError: (error) =>
       Effect.logWarning("policy: could not seed the ponytail policy", { message: error.message }),
+    SqlError: (error) =>
+      Effect.logWarning("policy: could not seed the ponytail policy", { cause: error }),
   }),
 );

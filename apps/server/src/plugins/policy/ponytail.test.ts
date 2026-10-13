@@ -3,6 +3,7 @@ import { assert, it } from "@effect/vitest";
 import {
   POLICY_ENVIRONMENT_PROJECT_ID,
   PONYTAIL_RUNG_IDS,
+  PolicyError,
   ProviderDriverKind,
   ProviderInstanceId,
 } from "@t3tools/contracts";
@@ -125,6 +126,24 @@ it.effect("does not accept a ponytail policy that exists only as a draft", () =>
     yield* Ponytail.seed();
     assert.deepStrictEqual(yield* stored, [
       { project_id: projectId, version: 1, state: "draft", body: "Not reviewed yet." },
+    ]);
+  }).pipe(Effect.provide(layerTest)),
+);
+
+it.effect("leaves nothing behind when the accept fails, and the next start seeds it whole", () =>
+  Effect.gen(function* () {
+    const policies = yield* PolicyService.PolicyService;
+    const acceptFails = PolicyService.PolicyService.of({
+      ...policies,
+      accept: () => Effect.fail(new PolicyError({ code: "io", message: "Could not accept." })),
+    });
+    yield* Ponytail.seed().pipe(Effect.provideService(PolicyService.PolicyService, acceptFails));
+    // The draft the create wrote was rolled back with the failed accept.
+    assert.deepStrictEqual(yield* stored, []);
+
+    yield* Ponytail.seed();
+    assert.deepStrictEqual(yield* stored, [
+      { project_id: projectId, version: 1, state: "accepted", body: Ponytail.PONYTAIL_TEXT },
     ]);
   }).pipe(Effect.provide(layerTest)),
 );
