@@ -91,11 +91,10 @@ export const TelemetryBudgetsResult = Schema.Array(TelemetryBudgetWithState);
 export type TelemetryBudgetsResult = typeof TelemetryBudgetsResult.Type;
 
 /**
- * Adds a budget, or with `id` replaces that one. Measure, tier, threshold, direction and minimum
- * sample are checked by the server, which refuses a bad one with `Budget is invalid: <field>`.
+ * A budget's fields as a client sends them. Measure, tier, threshold, direction and minimum sample
+ * are checked by the server, which refuses a bad one with `Budget is invalid: <field>`.
  */
-export const TelemetryBudgetsSetInput = Schema.Struct({
-  id: Schema.optional(Schema.Int),
+const TelemetryBudgetFields = {
   measure: Schema.String,
   tier: Schema.String,
   threshold: Schema.Number,
@@ -103,7 +102,32 @@ export const TelemetryBudgetsSetInput = Schema.Struct({
   projectId: Schema.NullOr(ProjectId),
   minSample: Schema.Number,
   enabled: Schema.Boolean,
+};
+
+/**
+ * A change to one budget: only the fields given change, so two clients editing different fields
+ * of one budget do not undo each other.
+ */
+const TelemetryBudgetPatch = Schema.Struct({
+  id: Schema.Int,
+  measure: Schema.optional(TelemetryBudgetFields.measure),
+  tier: Schema.optional(TelemetryBudgetFields.tier),
+  threshold: Schema.optional(TelemetryBudgetFields.threshold),
+  direction: Schema.optional(TelemetryBudgetFields.direction),
+  projectId: Schema.optional(TelemetryBudgetFields.projectId),
+  minSample: Schema.optional(TelemetryBudgetFields.minSample),
+  enabled: Schema.optional(TelemetryBudgetFields.enabled),
 });
+export type TelemetryBudgetPatch = typeof TelemetryBudgetPatch.Type;
+
+/**
+ * With `id`, a patch of that budget; without, a new budget with every field. The patch is tried
+ * first: a new budget has no `id` to match it.
+ */
+export const TelemetryBudgetsSetInput = Schema.Union([
+  TelemetryBudgetPatch,
+  Schema.Struct(TelemetryBudgetFields),
+]);
 export type TelemetryBudgetsSetInput = typeof TelemetryBudgetsSetInput.Type;
 
 /** A project's budget events that occurred in `[from, to)`. */

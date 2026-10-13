@@ -11,7 +11,8 @@ import * as BudgetStore from "./BudgetStore.ts";
 const projectA = ProjectId.make("project:a");
 const projectB = ProjectId.make("project:b");
 
-const valid: TelemetryBudgetsSetInput = {
+/** A new budget, with every field. */
+const valid = {
   measure: "context_efficiency",
   tier: "standard",
   threshold: 1200,
@@ -92,8 +93,62 @@ it.effect("refuses an unknown measure or tier, or a threshold or sample it canno
         yield* refusal({ ...valid, minSample: 2.5 }),
         "Budget is invalid: minSample",
       );
-      assert.strictEqual(yield* refusal({ ...valid, id: 99 }), "Budget 99 does not exist.");
       assert.strictEqual((yield* store.list({})).length, 3);
+    }),
+  ),
+);
+
+it.effect("a patch changes only the fields it names, checked as the merged budget", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const { store, refusal } = yield* fixture;
+      const added = yield* store.set({ ...valid, enabled: false, minSample: 7 });
+
+      const patched = yield* store.set({ id: added.id, threshold: 999 });
+      assert.deepEqual(
+        [patched.threshold, patched.enabled, patched.minSample, patched.tier],
+        [999, false, 7, "standard"],
+      );
+
+      assert.strictEqual(yield* refusal({ id: 99, threshold: 1 }), "Budget 99 does not exist.");
+      assert.strictEqual(
+        yield* refusal({ id: added.id, tier: "premium" }),
+        "Budget is invalid: tier",
+      );
+      assert.strictEqual(
+        yield* refusal({ id: added.id, threshold: Number.POSITIVE_INFINITY }),
+        "Budget is invalid: threshold",
+      );
+      // A refused patch leaves the stored budget as it was.
+      const stored = (yield* store.list({})).find((budget) => budget.id === added.id);
+      assert.deepEqual([stored?.tier, stored?.threshold], ["standard", 999]);
+    }),
+  ),
+);
+
+it.effect("two patches to different fields both stand, in either order", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const { store } = yield* fixture;
+      const first = yield* store.set(valid);
+      const second = yield* store.set(valid);
+
+      // Two clients each change one field of a budget, as the settings table does.
+      yield* store.set({ id: first.id, threshold: 2000 });
+      yield* store.set({ id: first.id, enabled: false });
+      yield* store.set({ id: second.id, enabled: false });
+      yield* store.set({ id: second.id, threshold: 2000 });
+
+      const stored = (yield* store.list({})).filter(
+        (budget) => budget.id === first.id || budget.id === second.id,
+      );
+      assert.deepEqual(
+        stored.map((budget) => [budget.threshold, budget.enabled, budget.minSample]),
+        [
+          [2000, false, 10],
+          [2000, false, 10],
+        ],
+      );
     }),
   ),
 );

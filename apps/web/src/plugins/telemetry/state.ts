@@ -6,7 +6,7 @@ import {
 import {
   SUPERVISOR_METHODS,
   type SupervisorStatus,
-  type TelemetryBudget,
+  type TelemetryBudgetPatch,
   TELEMETRY_METHODS,
   TelemetryError,
 } from "@t3tools/contracts";
@@ -81,22 +81,9 @@ export function useTelemetryBudgetCommands() {
   const canWrite = useAtomValue(budgetsSet.permissionAtom(environmentId));
   return {
     canWrite,
-    save: ({
-      id,
-      measure,
-      tier,
-      threshold,
-      direction,
-      projectId,
-      minSample,
-      enabled,
-    }: TelemetryBudget) =>
-      environmentId === null
-        ? noEnvironment()
-        : runSet({
-            environmentId,
-            input: { id, measure, tier, threshold, direction, projectId, minSample, enabled },
-          }),
+    /** Changes only the fields `patch` names, so another client's edit to the rest stands. */
+    save: (patch: TelemetryBudgetPatch) =>
+      environmentId === null ? noEnvironment() : runSet({ environmentId, input: patch }),
     remove: (id: number) =>
       environmentId === null ? noEnvironment() : runRemove({ environmentId, input: { id } }),
   };

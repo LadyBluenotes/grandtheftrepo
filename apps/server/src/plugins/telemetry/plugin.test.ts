@@ -467,32 +467,45 @@ it.effect("budgets: the RPC and the tool agree, a save is checked, and a removal
         const called = yield* tool("tools/call", { name: "telemetry_budgets", arguments: {} });
         assert.deepEqual(decodeBudgetsJson(called.content?.[0]?.text ?? ""), listed);
 
-        const standard = { ...listed[1]!, threshold: 1800 };
+        // A patch names only the field it changes.
         const saved = yield* viaGateway("settingsWrite", TELEMETRY_METHODS.budgetsSet.method, {
-          id: standard.id,
-          measure: standard.measure,
-          tier: standard.tier,
-          threshold: standard.threshold,
-          direction: standard.direction,
-          projectId: standard.projectId,
-          minSample: standard.minSample,
-          enabled: standard.enabled,
+          id: listed[1]!.id,
+          threshold: 1800,
         }).pipe(Effect.flatMap(decodeBudget));
-        assert.strictEqual(saved.threshold, 1800);
+        assert.deepEqual(
+          [saved.tier, saved.threshold, saved.minSample, saved.enabled],
+          ["standard", 1800, 20, true],
+        );
+        // A new budget has every field and no id.
+        const added = yield* viaGateway("settingsWrite", TELEMETRY_METHODS.budgetsSet.method, {
+          measure: "context_efficiency",
+          tier: "cheap",
+          threshold: 600,
+          direction: "lower_is_better",
+          projectId: measuresInput.projectId,
+          minSample: 10,
+          enabled: true,
+        }).pipe(Effect.flatMap(decodeBudget));
+        assert.deepEqual([added.id, added.projectId], [4, measuresInput.projectId]);
 
-        const bad = { ...saved, tier: "premium" };
         const invalid = yield* refusal(
-          viaGateway("settingsWrite", TELEMETRY_METHODS.budgetsSet.method, bad),
+          viaGateway("settingsWrite", TELEMETRY_METHODS.budgetsSet.method, {
+            id: saved.id,
+            tier: "premium",
+          }),
         );
         assert.strictEqual(invalid.message, "Budget is invalid: tier");
         const infinite = yield* refusal(
           viaGateway("settingsWrite", TELEMETRY_METHODS.budgetsSet.method, {
-            ...saved,
+            id: saved.id,
             threshold: Number.POSITIVE_INFINITY,
           }),
         );
         assert.strictEqual(infinite.message, "Budget is invalid: threshold");
 
+        yield* viaGateway("settingsWrite", TELEMETRY_METHODS.budgetsRemove.method, {
+          id: added.id,
+        });
         yield* viaGateway("settingsWrite", TELEMETRY_METHODS.budgetsRemove.method, {
           id: saved.id,
         });

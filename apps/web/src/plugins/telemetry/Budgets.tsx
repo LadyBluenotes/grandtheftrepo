@@ -2,7 +2,7 @@ import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
 } from "@t3tools/client-runtime/state/runtime";
-import type { RoutingTier, TelemetryBudget } from "@t3tools/contracts";
+import type { RoutingTier, TelemetryBudget, TelemetryBudgetPatch } from "@t3tools/contracts";
 import { useState } from "react";
 
 import { SettingsRow } from "~/components/settings/settingsLayout";
@@ -37,9 +37,9 @@ const DIRECTION_LABEL: Record<TelemetryBudget["direction"], string> = {
 /**
  * The environment's budgets, with their state, under the telemetry plugin's row. Threshold,
  * minimum sample and enabled save as they are committed; the sweep judges the change on its next
- * tick, so the state follows then. A save sends the whole row, so a row takes no other edit while
- * its save is in flight, and no row does while the list rereads after one: an edit made from the
- * row as it was before the save would undo it.
+ * tick, so the state follows then. A save sends only the field it changes. A row takes no other
+ * edit while its save is in flight, and no row does while the list rereads after one, so the
+ * controls never show a value the server has already replaced.
  */
 export function Budgets() {
   const environmentId = usePrimaryEnvironmentId();
@@ -73,8 +73,8 @@ export function Budgets() {
       }),
     );
   };
-  const change = (budget: TelemetryBudget, next: Partial<TelemetryBudget>) =>
-    void report(budget.id, "Could not save the budget", () => save({ ...budget, ...next }));
+  const change = (id: number, patch: Omit<TelemetryBudgetPatch, "id">) =>
+    void report(id, "Could not save the budget", () => save({ id, ...patch }));
 
   return (
     <SettingsRow
@@ -118,7 +118,7 @@ export function Budgets() {
                         disabled={locked(budget.id)}
                         onValueCommitted={(threshold) => {
                           if (threshold !== null && threshold !== budget.threshold) {
-                            change(budget, { threshold });
+                            change(budget.id, { threshold });
                           }
                         }}
                       >
@@ -141,7 +141,7 @@ export function Budgets() {
                           const next =
                             minSample === null ? null : Math.max(0, Math.round(minSample));
                           if (next !== null && next !== budget.minSample) {
-                            change(budget, { minSample: next });
+                            change(budget.id, { minSample: next });
                           }
                         }}
                       >
@@ -157,7 +157,7 @@ export function Budgets() {
                       aria-label={`Enable the ${budget.tier} ${budget.measure} budget`}
                       checked={budget.enabled}
                       disabled={locked(budget.id)}
-                      onCheckedChange={(enabled) => change(budget, { enabled })}
+                      onCheckedChange={(enabled) => change(budget.id, { enabled })}
                     />
                   </TableCell>
                   <TableCell>

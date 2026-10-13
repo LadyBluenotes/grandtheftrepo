@@ -6,6 +6,7 @@ import {
   type TelemetryBudgetEventsInput,
   type TelemetryBudgetsInput,
   type TelemetryBudgetsResult,
+  type TelemetryBudgetPatch,
   type TelemetryBudgetsSetInput,
   TelemetryDirection,
   TelemetryError,
@@ -72,16 +73,21 @@ const toEvent = (row: EventRow): TelemetryBudgetEvent => ({
 const isTier = Schema.is(RoutingTier);
 const isDirection = Schema.is(TelemetryDirection);
 
-/** The budget `input` describes, or the first field it cannot have. */
-const validate = (input: TelemetryBudgetsSetInput) => {
-  const { measure, tier, threshold, direction, minSample } = input;
+/** Every field of a budget, as a new one arrives or a patch merges into a stored one. */
+type Draft = Exclude<TelemetryBudgetsSetInput, { readonly id: number }>;
+
+/** The budget `draft` describes, or the first field it cannot have. */
+const validate = (draft: Draft) => {
+  const { measure, tier, threshold, direction, minSample } = draft;
   if (!MEASURE_NAMES.has(measure)) return "measure";
   if (!isTier(tier)) return "tier";
   if (!Number.isFinite(threshold)) return "threshold";
   if (!isDirection(direction)) return "direction";
   if (!Number.isInteger(minSample) || minSample < 0) return "minSample";
-  return { ...input, tier, direction };
+  return { ...draft, tier, direction };
 };
+
+const invalid = (field: string) => new TelemetryError({ message: `Budget is invalid: ${field}` });
 
 /** One breach or recovery for the sweep to append; the budget supplies its id and threshold. */
 type NewEvent = Omit<TelemetryBudgetEvent, "id" | "budgetId" | "threshold" | "occurredAt">;
@@ -100,7 +106,10 @@ export class BudgetStore extends Context.Service<
     readonly list: (
       input: TelemetryBudgetsInput,
     ) => Effect.Effect<TelemetryBudgetsResult, TelemetryError>;
-    /** Adds a budget, or with `id` replaces that one; refuses a field it cannot have. */
+    /**
+     * Adds a budget, or with `id` changes only the fields given on that one, checking the result
+     * in the same write; refuses a field it cannot have.
+     */
     readonly set: (
       input: TelemetryBudgetsSetInput,
     ) => Effect.Effect<TelemetryBudget, TelemetryError>;
@@ -160,32 +169,50 @@ const make = Effect.gen(function* () {
       });
     }).pipe(Effect.catchTags({ SqlError: io }));
 
-  const set: BudgetStore["Service"]["set"] = (input) =>
+  const insert = (draft: Draft) =>
     Effect.gen(function* () {
-      const budget = validate(input);
-      if (typeof budget === "string") {
-        return yield* new TelemetryError({ message: `Budget is invalid: ${budget}` });
-      }
-      const enabled = budget.enabled ? 1 : 0;
-      const rows =
-        budget.id === undefined
-          ? yield* sql<BudgetRow>`INSERT INTO budgets
-              (measure, tier, threshold, direction, project_id, min_sample, enabled)
-            VALUES (${budget.measure}, ${budget.tier}, ${budget.threshold}, ${budget.direction},
-              ${budget.projectId}, ${budget.minSample}, ${enabled})
-            RETURNING *`
-          : yield* sql<BudgetRow>`UPDATE budgets SET
-              measure = ${budget.measure}, tier = ${budget.tier}, threshold = ${budget.threshold},
-              direction = ${budget.direction}, project_id = ${budget.projectId},
-              min_sample = ${budget.minSample}, enabled = ${enabled}
-            WHERE id = ${budget.id}
-            RETURNING *`;
-      const row = rows[0];
-      if (row === undefined) {
-        return yield* new TelemetryError({ message: `Budget ${budget.id} does not exist.` });
-      }
-      return toBudget(row);
-    }).pipe(Effect.catchTags({ SqlError: io }));
+      const budget = validate(draft);
+      if (typeof budget === "string") return yield* invalid(budget);
+      const [row] = yield* sql<BudgetRow>`INSERT INTO budgets
+          (measure, tier, threshold, direction, project_id, min_sample, enabled)
+        VALUES (${budget.measure}, ${budget.tier}, ${budget.threshold}, ${budget.direction},
+          ${budget.projectId}, ${budget.minSample}, ${budget.enabled ? 1 : 0})
+        RETURNING *`;
+      return toBudget(row!);
+    });
+
+  // Read and written in one transaction, so a patch of another field that commits meanwhile
+  // stands.
+  const patch = (input: TelemetryBudgetPatch) =>
+    sql.withTransaction(
+      Effect.gen(function* () {
+        const [row] = yield* sql<BudgetRow>`SELECT * FROM budgets WHERE id = ${input.id}`;
+        if (row === undefined) {
+          return yield* new TelemetryError({ message: `Budget ${input.id} does not exist.` });
+        }
+        const stored = toBudget(row);
+        const budget = validate({
+          measure: input.measure ?? stored.measure,
+          tier: input.tier ?? stored.tier,
+          threshold: input.threshold ?? stored.threshold,
+          direction: input.direction ?? stored.direction,
+          projectId: input.projectId === undefined ? stored.projectId : input.projectId,
+          minSample: input.minSample ?? stored.minSample,
+          enabled: input.enabled ?? stored.enabled,
+        });
+        if (typeof budget === "string") return yield* invalid(budget);
+        const [updated] = yield* sql<BudgetRow>`UPDATE budgets SET
+            measure = ${budget.measure}, tier = ${budget.tier}, threshold = ${budget.threshold},
+            direction = ${budget.direction}, project_id = ${budget.projectId},
+            min_sample = ${budget.minSample}, enabled = ${budget.enabled ? 1 : 0}
+          WHERE id = ${input.id}
+          RETURNING *`;
+        return toBudget(updated!);
+      }),
+    );
+
+  const set: BudgetStore["Service"]["set"] = (input) =>
+    ("id" in input ? patch(input) : insert(input)).pipe(Effect.catchTags({ SqlError: io }));
 
   const remove: BudgetStore["Service"]["remove"] = (id) =>
     sql
