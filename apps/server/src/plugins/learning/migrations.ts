@@ -96,9 +96,18 @@ const regressionRuns: PluginMigration[2] = Effect.gen(function* () {
   )`;
 });
 
+// When a person set an item's disposition. `updated_at` also moves with every new piece of
+// evidence, so it cannot say when a decision was made. Choices made before this column existed
+// keep NULL: their time is not known.
+const dispositionAt: PluginMigration[2] = Effect.gen(function* () {
+  const sql = yield* SqlClient.SqlClient;
+  yield* sql`ALTER TABLE learning_items ADD COLUMN disposition_at TEXT`;
+});
+
 export const migrations = [
   [1, "Corrections", corrections],
   [2, "LearningItems", learningItems],
   [3, "PromoteIndexes", promoteIndexes],
   [4, "RegressionRuns", regressionRuns],
+  [5, "DispositionAt", dispositionAt],
 ] as const satisfies ReadonlyArray<PluginMigration>;

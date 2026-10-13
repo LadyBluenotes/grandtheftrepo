@@ -56,6 +56,12 @@ from a card's panel, and edit or delete it later.
 A new thread started from a card is told which decisions concern its ticket and which categories
 exist, so the agent can look them up instead of relitigating them.
 
+## On mobile
+
+In the mobile app, **Board** on a project's overview in Settings lists its tickets grouped by
+column, read-only: tap a ticket to open its thread, and pull down to refresh. The row appears only
+when the server runs the board, and a ticket with no thread yet cannot be opened.
+
 ## Emergency stop
 
 An agent can set the emergency stop to hold back everything the supervisor would start from the
