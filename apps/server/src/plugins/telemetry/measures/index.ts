@@ -45,6 +45,8 @@ const NO_ROWS: MeasureInput = {
   toolCalls: [],
   turnUsage: [],
   corrections: undefined,
+  promotedItems: undefined,
+  verdicts: undefined,
   pricing: { rates: new Map(), overrides: new Map(), aliases: new Map() },
 };
 

@@ -1,4 +1,4 @@
-import type { LearningCorrection, TelemetryMeasure } from "@t3tools/contracts";
+import type { LearningCorrection, ReviewVerdict, TelemetryMeasure } from "@t3tools/contracts";
 import { classifyToolActivity } from "@t3tools/shared/toolActivity";
 import * as DateTime from "effect/DateTime";
 
@@ -77,6 +77,18 @@ export interface MeasureInput {
   readonly turnUsage: ReadonlyArray<TurnUsageRow>;
   /** Undefined while the learning plugin is not running. */
   readonly corrections: ReadonlyArray<LearningCorrection> | undefined;
+  /**
+   * The project's learning items now promoted, each with the ISO instant the earliest delivered
+   * promotion of it was delivered. Undefined while the learning plugin is not running.
+   */
+  readonly promotedItems:
+    | ReadonlyArray<{ readonly failureMode: string; readonly promotedAt: string }>
+    | undefined;
+  /**
+   * Every verdict the project has had before `to`, not only the window's: a thread's first
+   * verdict can predate the window. Undefined while the review plugin is not running.
+   */
+  readonly verdicts: ReadonlyArray<ReviewVerdict> | undefined;
   readonly pricing: Pricing;
 }
 

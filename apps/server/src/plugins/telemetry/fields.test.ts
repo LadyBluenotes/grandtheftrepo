@@ -3,11 +3,13 @@ import * as Fixtures from "./eventFixtures.ts";
 import {
   correctionFields,
   pinnedFields,
+  promotedItemFields,
   runFields,
   settledFields,
   threadFields,
   toolCallFields,
   turnUsageFields,
+  verdictFields,
 } from "./fields.ts";
 import { input } from "./measures/fixtures.ts";
 import { computeMeasures } from "./measures/index.ts";
@@ -26,6 +28,8 @@ const accessed: ReadonlyArray<Readonly<Record<string, unknown>>> = [
   settledFields(settled),
   pinnedFields(pinned),
   correctionFields(Fixtures.correction),
+  verdictFields(Fixtures.verdict),
+  promotedItemFields(Fixtures.promotedItem),
 ];
 
 /** The fixture each provenance root names, so a path can be walked on the real event shape. */
@@ -38,6 +42,9 @@ const roots: ReadonlyArray<readonly [string, ReadonlyArray<unknown>]> = [
   ["thread.pinned", [pinned]],
   ["thread", [Fixtures.thread]],
   ["learning.correction", [Fixtures.correction]],
+  ["learning.item", [Fixtures.promotedItem.item]],
+  ["learning.promotion", Fixtures.promotedItem.promotions],
+  ["review.verdict", [Fixtures.verdict]],
 ];
 
 /** Follows `keys` from `value`, into the first element of an array on the way. */
