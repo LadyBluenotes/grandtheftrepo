@@ -142,6 +142,45 @@ it.effect("tells the reviewer the six rungs in order and how a failed one is rep
 );
 
 it.effect(
+  "tells the reviewer a reply that ignores the terse style is a style:caveman convention",
+  () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { server } = yield* withTools;
+        const description = server.tools.find(({ tool }) => tool.name === "review_verdict")?.tool
+          .description;
+        expect(description).toContain("convention verdict whose summary starts with style:caveman");
+      }),
+    ),
+);
+
+it.effect("stores a style:caveman convention verdict as written, with its correction", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const { call, list, corrections, verdictCount } = yield* withTools;
+      const summary = "style:caveman: opener and recap";
+      const result = yield* call(threadScope(reviewer), "review_verdict", {
+        ...sendBack,
+        failureMode: "convention",
+        summary,
+      });
+      expect(result.isError).toBe(false);
+      expect(yield* list({ threadId: reviewed })).toEqual([
+        expect.objectContaining({
+          reviewerThreadId: reviewer,
+          outcome: "changes_requested",
+          failureMode: "convention",
+          summary,
+        }),
+      ]);
+      const { correctionId } = result.structuredContent as { correctionId: number };
+      expect(yield* corrections.get(correctionId)).toMatchObject({ declaredMode: "convention" });
+      expect(yield* verdictCount).toBe(1);
+    }),
+  ),
+);
+
+it.effect(
   "records one verdict and one correction for a thread caller, and again adds nothing",
   () =>
     Effect.scoped(
