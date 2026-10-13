@@ -156,15 +156,15 @@ const invalid = (message: string) => new KanbanError({ code: "invalid", message 
 
 /**
  * What the drafting thread is asked: the issue as filed and the format to answer in, led by the
- * accepted ponytail ladder when there is one. The built-in ladder already opens with its heading,
- * so only a body that does not gets one.
+ * accepted ponytail ladder when there is one. The built-in ladder already opens with its heading
+ * as its whole first line, so only a body that does not gets one.
  */
 const draftingPrompt = (issue: KanbanIssue, ladder: Option.Option<string>) =>
   [
     ...Option.match(ladder, {
       onNone: () => [],
       onSome: (body) => [
-        body.startsWith(Ponytail.PONYTAIL_HEADING)
+        body.split("\n", 1)[0]?.trim() === Ponytail.PONYTAIL_HEADING
           ? body
           : `${Ponytail.PONYTAIL_HEADING}\n\n${body}`,
         "",

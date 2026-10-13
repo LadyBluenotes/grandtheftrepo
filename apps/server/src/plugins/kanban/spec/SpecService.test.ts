@@ -544,6 +544,48 @@ describe("SpecService", () => {
     ).pipe(Effect.provide(layerTest)),
   );
 
+  it.effect("only a ladder whose whole first line is the heading goes without a second one", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { brief } = yield* start;
+        const { ladder, policies } = yield* startPolicy;
+        const accept = (version: number, body: string) =>
+          policies
+            .create({
+              projectId: POLICY_ENVIRONMENT_PROJECT_ID,
+              key: Ponytail.PONYTAIL_KEY,
+              title: "Ponytail ladder",
+              body,
+            })
+            .pipe(
+              Effect.andThen(
+                policies.accept({
+                  projectId: POLICY_ENVIRONMENT_PROJECT_ID,
+                  key: Ponytail.PONYTAIL_KEY,
+                  version,
+                }),
+              ),
+            );
+
+        // A different heading that begins with the same words is just a body.
+        yield* accept(1, "## Before you add anything else\n\nPrefer deleting code.");
+        assert.isTrue(
+          (yield* brief(ladder)).startsWith(
+            "## Before you add anything\n\n## Before you add anything else\n\nPrefer deleting code.\n\nDraft a spec",
+          ),
+        );
+
+        // Trailing spaces and a Windows line ending do not make the heading another line.
+        yield* accept(2, "## Before you add anything  \r\nPrefer deleting code.");
+        assert.isTrue(
+          (yield* brief(ladder)).startsWith(
+            "## Before you add anything  \r\nPrefer deleting code.\n\nDraft a spec",
+          ),
+        );
+      }),
+    ).pipe(Effect.provide(layerTest)),
+  );
+
   it.effect("the brief never carries the caveman body", () =>
     Effect.scoped(
       Effect.gen(function* () {
