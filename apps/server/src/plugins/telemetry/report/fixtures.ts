@@ -150,8 +150,22 @@ export const fullInput = (): ReportInput => ({
   threadRowsUnavailable: null,
   measures: [measure("first_review_acceptance", 0.75), measure("repeated_reads", null)],
   flags: [
-    { threadId: "thread:open", text: "2 threads are writing to this project at once." },
-    { threadId: "thread:other-project", text: "Over budget." },
+    {
+      threadId: "thread:open",
+      projectId: null,
+      text: "2 threads are writing to this project at once.",
+    },
+    { threadId: "thread:other-project", projectId: null, text: "Two writers elsewhere." },
+    {
+      threadId: "budget:2:project:report",
+      projectId: "project:report",
+      text: "cost_per_accepted_outcome for the strong tier is 4.2 over its budget of 3 in Acme app.",
+    },
+    {
+      threadId: "budget:2:project:elsewhere",
+      projectId: "project:elsewhere",
+      text: "Over budget elsewhere.",
+    },
   ],
   verdicts: [
     verdict("verdict:2", {

@@ -124,9 +124,14 @@ export const TelemetryReport = Schema.Struct({
       }),
     ]),
   ),
-  /** Open attention flags on the project's threads. */
+  /** Open attention flags on the project's threads, and on the project itself (budget breaches). */
   attention: section(
-    Schema.Struct({ threadId: ThreadId, title: ThreadTitle, text: Schema.String }),
+    Schema.Struct({
+      /** Null for a flag on the project rather than a thread. */
+      threadId: Schema.NullOr(ThreadId),
+      title: ThreadTitle,
+      text: Schema.String,
+    }),
   ),
   /** The efficiency measures over the range, as `telemetry.measures` answers them. */
   efficiency: section(TelemetryMeasure),

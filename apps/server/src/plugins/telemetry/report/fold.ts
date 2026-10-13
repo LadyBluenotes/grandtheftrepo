@@ -60,8 +60,15 @@ export interface ReportInput {
    */
   readonly threadRowsUnavailable: string | null;
   readonly measures: TelemetryMeasuresResult;
-  /** Every open attention flag; the fold keeps those on the project's threads. */
-  readonly flags: ReadonlyArray<{ readonly threadId: string; readonly text: string }>;
+  /**
+   * Every open attention flag, with the project it is raised on when it is on a project rather
+   * than a thread, as a budget breach is. The fold keeps this project's and its threads'.
+   */
+  readonly flags: ReadonlyArray<{
+    readonly threadId: string;
+    readonly projectId: string | null;
+    readonly text: string;
+  }>;
   /** Verdicts given in the range. Undefined while the review plugin is not running. */
   readonly verdicts: ReadonlyArray<ReviewVerdict> | undefined;
   /** Undefined while the learning plugin is not running. */
@@ -374,7 +381,12 @@ export const foldReport = (input: ReportInput): TelemetryReport => {
             (flag) => flag.text,
           ),
         )
-        .flatMap((flag) => {
+        .flatMap((flag): Section<"attention">["items"] => {
+          if (flag.projectId !== null) {
+            return flag.projectId === input.projectId
+              ? [{ threadId: null, title: null, text: flag.text }]
+              : [];
+          }
           const thread = byId.get(flag.threadId);
           return thread === undefined
             ? []

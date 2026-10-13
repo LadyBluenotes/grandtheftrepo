@@ -10,7 +10,8 @@ server's time zone, an agent posts a page there covering the last seven whole da
 - **Failures**: corrections recorded, by kind.
 - **Pull requests**: linked pull requests that are open, or merged or closed that week.
 - **Unresolved**: open learning items, and open pull requests with changes requested.
-- **Needs attention**: open attention flags on the project's threads.
+- **Needs attention**: open attention flags on the project and its threads, such as budget
+  breaches.
 - **Efficiency**: the project's efficiency measures for the week.
 
 Each section lists up to 20 entries with the full count. A section whose plugin is turned off says

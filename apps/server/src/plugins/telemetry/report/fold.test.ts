@@ -64,7 +64,7 @@ it("a full week fills all ten sections", () => {
       ["failures", "ok", 2],
       ["pullRequests", "ok", 2],
       ["unresolved", "ok", 2],
-      ["attention", "ok", 1],
+      ["attention", "ok", 2],
       ["efficiency", "ok", 2],
     ],
   );
@@ -333,8 +333,13 @@ it("unresolved: open learning items, most seen first, then pull requests with ch
   );
 });
 
-it("attention: open flags on this project's threads only", () => {
+it("attention: open flags on this project's threads and on the project, such as a budget breach", () => {
   assert.deepEqual(foldReport(fullInput()).attention.items, [
+    {
+      threadId: null,
+      title: null,
+      text: "cost_per_accepted_outcome for the strong tier is 4.2 over its budget of 3 in Acme app.",
+    },
     {
       threadId: ThreadId.make("thread:open"),
       title: "Fix the flaky test",

@@ -151,7 +151,7 @@ export const renderHtml = (report: TelemetryReport) =>
         : [`Changes requested: ${link(item.url, pullRequestLabel(item))}`, escape(item.title)],
     ),
     section("Needs attention", report.attention, ["Thread", "Flag"], (item) => [
-      thread(item.title, item.threadId),
+      item.threadId === null ? "Project" : thread(item.title, item.threadId),
       escape(item.text),
     ]),
     section("Efficiency", report.efficiency, ["Measure", "Value", "Sample", "Note"], (item) => [

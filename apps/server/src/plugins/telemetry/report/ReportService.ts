@@ -25,6 +25,7 @@ import * as CorrectionStore from "../../learning/CorrectionStore.ts";
 import * as ItemStore from "../../learning/items/ItemStore.ts";
 import * as Promoter from "../../learning/Promoter.ts";
 import * as VerdictStore from "../../review/VerdictStore.ts";
+import { budgetFlagProject } from "../budgets/BudgetSweep.ts";
 import { unavailableMeasures } from "../measures/index.ts";
 import { readiness } from "../readiness.ts";
 import type * as Telemetry from "../Telemetry.ts";
@@ -177,7 +178,11 @@ export const make = Effect.fn("ReportService.make")(function* (
         threads: shells.map(toReportThread),
         threadRowsUnavailable: unready,
         measures,
-        flags: yield* attention.listOpen({}),
+        // A budget flag is keyed by budget and project, not by a thread.
+        flags: (yield* attention.listOpen({})).map((flag) => ({
+          ...flag,
+          projectId: budgetFlagProject(flag.threadId) ?? null,
+        })),
         verdicts: Option.isSome(verdictStore)
           ? yield* verdictStore.value.listWindow({ projectId, from, to })
           : undefined,
