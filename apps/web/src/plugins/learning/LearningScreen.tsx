@@ -103,19 +103,19 @@ export function LearningScreen() {
             <WorkspacePageContainer width="expanded">
               {view === "items" ? (
                 <ItemsTable
-                  key={selected.id}
+                  key={`${environmentId}:${selected.id}`}
                   environmentId={environmentId}
                   projectId={selected.id}
                 />
               ) : view === "corrections" ? (
                 <CorrectionsTable
-                  key={selected.id}
+                  key={`${environmentId}:${selected.id}`}
                   environmentId={environmentId}
                   projectId={selected.id}
                 />
               ) : (
                 <ReviewsTable
-                  key={selected.id}
+                  key={`${environmentId}:${selected.id}`}
                   environmentId={environmentId}
                   projectId={selected.id}
                 />
