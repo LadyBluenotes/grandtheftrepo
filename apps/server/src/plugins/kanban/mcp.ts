@@ -289,16 +289,21 @@ export const handlers = McpToolAccess.toLayer(
           }).`;
         }).pipe(Effect.catchTags({ KanbanError: (error) => Effect.fail(failure(error)) })),
       ),
-      kanban_ticket_specify: McpToolAccess.writes(({ projectId: given, id, useExisting }) =>
-        Effect.gen(function* () {
-          const projectId = yield* resolveProjectId(yield* readCaller(), given);
-          const attempt = yield* (yield* spec).specify({
-            projectId,
-            id,
-            ...(useExisting === undefined ? {} : { useExisting }),
-          });
-          return attemptText(attempt);
-        }).pipe(Effect.catchTags({ KanbanError: (error) => Effect.fail(failure(error)) })),
+      // The drafting thread only reads, so it asks for the strictest modes, which no caller is
+      // below. `useExisting` starts no thread; it passes the same check, which costs it nothing.
+      kanban_ticket_specify: McpToolAccess.startsThreads(
+        () => ({ runtimeMode: "approval-required", interactionMode: "plan" }),
+        ({ projectId: given, id, useExisting }, modes) =>
+          Effect.gen(function* () {
+            const projectId = yield* resolveProjectId(yield* readCaller(), given);
+            const attempt = yield* (yield* spec).specify({
+              projectId,
+              id,
+              modes,
+              ...(useExisting === undefined ? {} : { useExisting }),
+            });
+            return attemptText(attempt);
+          }).pipe(Effect.catchTags({ KanbanError: (error) => Effect.fail(failure(error)) })),
       ),
       kanban_spec_get: McpToolAccess.reads(({ projectId: given, id }) =>
         Effect.gen(function* () {

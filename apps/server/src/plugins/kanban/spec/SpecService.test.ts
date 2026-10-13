@@ -10,7 +10,6 @@ import {
   RunId,
   ThreadId,
   TurnItemId,
-  type KanbanSpecifyInput,
   type ModelSelection,
   type OrchestrationV2DomainEvent,
   type OrchestrationV2Run,
@@ -314,7 +313,10 @@ const start = Effect.gen(function* () {
     });
 
   /** `specify` from a request fiber holding the launcher and, unless null, the tier service. */
-  const specify = (input: KanbanSpecifyInput, routing: RoutingEntry | null | "off" = cheap) =>
+  const specify = (
+    input: Parameters<SpecService.SpecService["Service"]["specify"]>[0],
+    routing: RoutingEntry | null | "off" = cheap,
+  ) =>
     spec
       .specify(input)
       .pipe(
@@ -566,6 +568,30 @@ describe("SpecService", () => {
           assert.lengthOf((yield* store.getIssue({ projectId, id })).criteria, 0);
         }),
       ).pipe(Effect.provide(layerTest)),
+  );
+
+  it.effect("the drafting thread runs with the modes the caller passed, else the strictest", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { launched, specify, file } = yield* start;
+        const first = yield* file("Login loops", rough);
+        const second = yield* file("Logout loops", rough);
+
+        // The gateway passes none.
+        yield* specify({ projectId, id: first.id });
+        assert.strictEqual(launched[0]?.runtimeMode, "approval-required");
+        assert.strictEqual(launched[0]?.interactionMode, "plan");
+
+        // The MCP tool passes what it resolved against its caller's modes.
+        yield* specify({
+          projectId,
+          id: second.id,
+          modes: { runtimeMode: "auto-accept-edits", interactionMode: "default" },
+        });
+        assert.strictEqual(launched[1]?.runtimeMode, "auto-accept-edits");
+        assert.strictEqual(launched[1]?.interactionMode, "default");
+      }),
+    ).pipe(Effect.provide(layerTest)),
   );
 
   it.effect("six Approach items: malformed with the reason, the ticket untouched", () =>

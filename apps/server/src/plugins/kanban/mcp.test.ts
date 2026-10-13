@@ -90,6 +90,24 @@ it.effect("registers kanban tools through the plugin host and files an issue ove
         filename: ":memory:",
         migrations,
       });
+      // The real service, recording what the tool passes it.
+      const specified: Array<Parameters<SpecService.SpecService["Service"]["specify"]>[0]> = [];
+      const recordingSpec = Layer.effect(
+        SpecService.SpecService,
+        Effect.map(SpecService.SpecService, (real) =>
+          SpecService.SpecService.of({
+            ...real,
+            specify: (input) => {
+              specified.push(input);
+              return real.specify(input);
+            },
+          }),
+        ),
+      ).pipe(
+        Layer.provide(
+          SpecService.layer.pipe(Layer.provide(Layer.succeed(SqlClient.SqlClient, sql))),
+        ),
+      );
       const layerServer = PluginHost.layerMcp(McpHttpServer.toolkitRegistration).pipe(
         Layer.provide(
           Layer.mock(PluginHost.PluginHost)({
@@ -99,9 +117,7 @@ it.effect("registers kanban tools through the plugin host and files an issue ove
         ),
         Layer.provide(Layer.mock(PluginSupervisor.PluginSupervisor)({})),
         Layer.provide(ServerSettings.layerTest()),
-        Layer.provide(
-          SpecService.layer.pipe(Layer.provide(Layer.succeed(SqlClient.SqlClient, sql))),
-        ),
+        Layer.provide(recordingSpec),
         Layer.provide(KanbanStore.layer),
         Layer.provide(StopGate.layer.pipe(Layer.provide(Layer.succeed(SqlClient.SqlClient, sql)))),
         Layer.provide(Layer.mock(ThreadManagementService.ThreadManagementService)({})),
@@ -225,6 +241,15 @@ it.effect("registers kanban tools through the plugin host and files an issue ove
           arguments: { projectId, id: "spec-me", useExisting: true },
         }).pipe(Effect.map(resultText));
       expect(yield* specify(6)).toContain("from the description: valid. The spec passed.");
+      // The tool resolves the drafting thread's modes against its caller's and hands them on.
+      expect(specified).toEqual([
+        {
+          projectId,
+          id: "spec-me",
+          useExisting: true,
+          modes: { runtimeMode: "approval-required", interactionMode: "plan" },
+        },
+      ]);
       const specGet = (id: number) =>
         rpc(id, "tools/call", {
           name: "kanban_spec_get",

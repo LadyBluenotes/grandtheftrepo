@@ -48,7 +48,12 @@ import * as Files from "./KanbanFiles.ts";
  */
 export const hashSource = (issue: Pick<KanbanIssue, "createdAt" | "title" | "description">) =>
   NodeCrypto.createHash("sha256")
-    .update(`${issue.createdAt}\n${issue.title}\n${issue.description}`)
+    // Length-prefixed, so no text can move across a field boundary and hash the same.
+    .update(
+      [issue.createdAt, issue.title, issue.description]
+        .map((field) => `${field.length}:${field}`)
+        .join(""),
+    )
     .digest("hex");
 
 /** Done issues wait this long before the sweep archives them. */

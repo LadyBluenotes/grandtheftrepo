@@ -12,6 +12,8 @@ import {
   type OrchestrationV2Run,
   type OrchestrationV2TurnItem,
   type ProjectId,
+  type ProviderInteractionMode,
+  type RuntimeMode,
 } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
@@ -45,6 +47,20 @@ const ENDED = new Set<OrchestrationV2Run["status"]>([
 ]);
 
 /**
+ * The modes the drafting thread runs with. Only a caller that has them checked against its own,
+ * such as the MCP tool, passes them; the gateway does not, and gets the strictest pair.
+ */
+interface DraftingModes {
+  readonly runtimeMode: RuntimeMode;
+  readonly interactionMode: ProviderInteractionMode;
+}
+
+const STRICTEST_MODES: DraftingModes = {
+  runtimeMode: "approval-required",
+  interactionMode: "plan",
+};
+
+/**
  * Turns a Triage or Inbox issue into a checkable spec, one attempt per call. `specify` validates
  * the description as written, or starts a drafting thread in plan mode on routing's cheap tier;
  * `finish`, called by the reactor when that thread's run ends, validates what it wrote. A valid
@@ -73,7 +89,9 @@ export class SpecService extends Context.Service<
      * Call from a request fiber: the drafting thread is launched with the thread launcher and the
      * routing plugin's tier service the caller's context holds.
      */
-    readonly specify: (input: KanbanSpecifyInput) => Effect.Effect<KanbanSpecAttempt, KanbanError>;
+    readonly specify: (
+      input: KanbanSpecifyInput & { readonly modes?: DraftingModes },
+    ) => Effect.Effect<KanbanSpecAttempt, KanbanError>;
     /** The latest attempt with the status its issue is in now; null while there is no attempt. */
     readonly latest: (
       input: KanbanGetIssueInput,
@@ -228,6 +246,7 @@ const make = Effect.gen(function* () {
   const draft = Effect.fn("SpecService.draft")(function* (
     issue: KanbanIssue,
     projectId: ProjectId,
+    modes: DraftingModes,
   ) {
     yield* gate.assertLaunchAllowed;
     // From the calling fiber, which always has one: naming it in the plugin's layer would add it
@@ -277,8 +296,8 @@ const make = Effect.gen(function* () {
                   projectId,
                   title: `Spec: ${issue.title}`,
                   modelSelection,
-                  runtimeMode: "approval-required",
-                  interactionMode: "plan",
+                  runtimeMode: modes.runtimeMode,
+                  interactionMode: modes.interactionMode,
                   workspaceStrategy: { type: "root" },
                   initialMessage: { text: draftingPrompt(issue), attachments: [] },
                   createdBy: "system",
@@ -327,13 +346,14 @@ const make = Effect.gen(function* () {
     projectId,
     id,
     useExisting,
+    modes = STRICTEST_MODES,
   }) {
     const issue = yield* store.getIssue({ projectId, id });
     if (issue.status !== "triage" && issue.status !== "inbox")
       return yield* invalid("This ticket is already admitted.");
     return useExisting === true
       ? yield* existing(issue, projectId)
-      : yield* draft(issue, projectId);
+      : yield* draft(issue, projectId, modes);
   });
 
   const latest: SpecService["Service"]["latest"] = Effect.fn("SpecService.latest")(function* ({
