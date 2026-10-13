@@ -23,13 +23,14 @@ const start = Effect.gen(function* () {
  * Reviewed working rules per project, rendered as one marked block per policy into the
  * instruction file each agent reads from the user's home, with a check that the block is intact.
  * A supervisor sweep installs accepted policies the agents lack, between runs. The built-in
- * `ponytail` and `caveman` policies are each seeded on start when they do not exist.
+ * `ponytail` and `caveman` policies are each seeded on start when they do not exist, and a brief
+ * the server writes reads the accepted ladder through `Ponytail`.
  */
 export const plugin = {
   id: "policy",
   dependsOn: [],
   migrations,
-  layer: Layer.merge(Layer.effectDiscard(start), Checks.layer).pipe(
+  layer: Layer.mergeAll(Layer.effectDiscard(start), Checks.layer, Ponytail.layer).pipe(
     Layer.provideMerge(PolicyService.layer),
   ),
   mcp: (register) => register(Mcp.PolicyToolkit, Mcp.handlers),

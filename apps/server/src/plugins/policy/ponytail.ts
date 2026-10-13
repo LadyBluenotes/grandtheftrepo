@@ -10,15 +10,22 @@
 import {
   POLICY_ENVIRONMENT_PROJECT_ID,
   PONYTAIL_RUNG_IDS,
+  type PolicyError,
   type PonytailRungId,
 } from "@t3tools/contracts";
+import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as SqlClient from "effect/sql/SqlClient";
 
 import * as PolicyService from "./PolicyService.ts";
 
 /** The built-in environment-wide policy (`*` / `ponytail`) that states the ladder to every agent. */
 export const PONYTAIL_KEY = "ponytail";
+
+/** The heading the ladder sits under, in the instruction files and at the top of a composed brief. */
+export const PONYTAIL_HEADING = "## Before you add anything";
 
 const RUNGS: Record<PonytailRungId, { readonly question: string; readonly action: string }> = {
   needed: { question: "Does it need to exist?", action: "If not, do not add it." },
@@ -34,7 +41,7 @@ const RUNGS: Record<PonytailRungId, { readonly question: string; readonly action
 
 /** The ladder in the order of `PONYTAIL_RUNG_IDS`, one line per rung with its id in code. */
 export const PONYTAIL_TEXT = [
-  "## Before you add anything",
+  PONYTAIL_HEADING,
   "",
   "Ask these in order, and use the first rung that applies.",
   "",
@@ -77,5 +84,37 @@ export const seed = Effect.fn("Ponytail.seed")(
       Effect.logWarning("policy: could not seed the ponytail policy", { message: error.message }),
     SqlError: (error) =>
       Effect.logWarning("policy: could not seed the ponytail policy", { cause: error }),
+  }),
+);
+
+/**
+ * The accepted ladder for a server-written brief. The policy plugin's layer provides it, so a
+ * composer reads it with `Effect.serviceOption` and gets nothing while `policy` is off.
+ */
+export class Ponytail extends Context.Service<
+  Ponytail,
+  {
+    /**
+     * The body of the accepted `*` / `ponytail` version, trimmed, or none while no version is
+     * accepted or the accepted body is blank. It reads the database on every run, so a version
+     * accepted since the last brief is in the next one.
+     */
+    readonly current: Effect.Effect<Option.Option<string>, PolicyError>;
+  }
+>()("t3/plugins/policy/ponytail") {}
+
+export const layer = Layer.effect(
+  Ponytail,
+  Effect.gen(function* () {
+    const policies = yield* PolicyService.PolicyService;
+    return Ponytail.of({
+      current: Effect.map(policies.list(POLICY_ENVIRONMENT_PROJECT_ID), (listed) => {
+        // `list` shows a policy's accepted version, else its latest draft, so state tells which.
+        const body = listed
+          .find((policy) => policy.key === PONYTAIL_KEY && policy.state === "accepted")
+          ?.body.trim();
+        return body === undefined || body === "" ? Option.none() : Option.some(body);
+      }),
+    });
   }),
 );

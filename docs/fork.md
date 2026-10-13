@@ -233,7 +233,10 @@ them half-evaluated. The host hands `toolkitRegistration` to `ServerPlugin.mcp` 
   `ponytail`, the six-question ladder, and `*` /
   `caveman`, the terse reply rules, each unless a policy of that key exists in any state; the
   review plugin refuses a `convention` summary that starts with `rung:` and names none of the six
-  rung ids. `PolicyService.createForPromotion` is `create` for a learning promotion: the draft and
+  rung ids. The kanban spec drafting thread's first message starts with the accepted `*` /
+  `ponytail` body under `## Before you add anything`, read through `Ponytail.current` with
+  `Effect.serviceOption`; it is unchanged while no version is accepted or `policy` is off, and never
+  carries the `caveman` body, which the instruction file already does. `PolicyService.createForPromotion` is `create` for a learning promotion: the draft and
   a `policy_promotion` row naming it commit together, so a second delivery of the promotion adds
   no version. Server: `apps/server/src/plugins/policy/`. Contracts:
   `packages/contracts/src/plugins/policy.ts`. Web: `apps/web/src/plugins/policy/`, the Policies

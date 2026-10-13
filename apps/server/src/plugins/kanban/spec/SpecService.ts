@@ -27,6 +27,7 @@ import type * as SqlError from "effect/sql/SqlError";
 
 import * as ThreadLaunchService from "../../../orchestration-v2/ThreadLaunchService.ts";
 import * as ThreadManagementService from "../../../orchestration-v2/ThreadManagementService.ts";
+import * as Ponytail from "../../policy/ponytail.ts";
 import * as TierSelectionService from "../../routing/TierSelectionService.ts";
 import * as KanbanStore from "../KanbanStore.ts";
 import * as StopGate from "../StopGate.ts";
@@ -96,8 +97,9 @@ export class SpecService extends Context.Service<
   SpecService,
   {
     /**
-     * Call from a request fiber: the drafting thread is launched with the thread launcher and the
-     * routing plugin's tier service the caller's context holds.
+     * Call from a request fiber: the drafting thread is launched with the thread launcher, the
+     * routing plugin's tier service and the policy plugin's ponytail ladder the caller's context
+     * holds.
      */
     readonly specify: (
       input: KanbanSpecifyInput & { readonly modes?: DraftingModes },
@@ -152,9 +154,22 @@ const toAttempt = (row: AttemptRow): KanbanSpecAttempt => ({
 
 const invalid = (message: string) => new KanbanError({ code: "invalid", message });
 
-/** What the drafting thread is asked: the issue as filed and the format to answer in. */
-const draftingPrompt = (issue: KanbanIssue) =>
+/**
+ * What the drafting thread is asked: the issue as filed and the format to answer in, led by the
+ * accepted ponytail ladder when there is one. The built-in ladder already opens with its heading,
+ * so only a body that does not gets one.
+ */
+const draftingPrompt = (issue: KanbanIssue, ladder: Option.Option<string>) =>
   [
+    ...Option.match(ladder, {
+      onNone: () => [],
+      onSome: (body) => [
+        body.startsWith(Ponytail.PONYTAIL_HEADING)
+          ? body
+          : `${Ponytail.PONYTAIL_HEADING}\n\n${body}`,
+        "",
+      ],
+    }),
     `Draft a spec for the kanban issue "${issue.title}" below. Read the code if it helps; change nothing.`,
     "",
     "Your proposed plan, or your final message, must be the spec alone, in exactly this format: these headings once each, in this order, and no others.",
@@ -165,6 +180,28 @@ const draftingPrompt = (issue: KanbanIssue) =>
     "",
     issue.description.length > 0 ? issue.description : "(no description)",
   ].join("\n");
+
+/**
+ * The ladder to put ahead of a brief, read from the calling fiber like the launcher: the policy
+ * plugin's service is absent while it is off, and the brief is as it was. One that cannot be read
+ * is logged and left out, since the drafting thread does not depend on it.
+ */
+const acceptedLadder = Effect.serviceOption(Ponytail.Ponytail).pipe(
+  Effect.flatMap(
+    Option.match({
+      onNone: () => Effect.succeed(Option.none<string>()),
+      onSome: (ponytail) =>
+        ponytail.current.pipe(
+          Effect.catchTags({
+            PolicyError: (error) =>
+              Effect.logWarning("kanban: could not read the ponytail ladder for a brief", {
+                message: error.message,
+              }).pipe(Effect.as(Option.none<string>())),
+          }),
+        ),
+    }),
+  ),
+);
 
 /** Plan mode answers with a proposed plan; without one, the last thing the agent said counts. */
 const finalMessage = (items: ReadonlyArray<OrchestrationV2TurnItem>) => {
@@ -327,6 +364,7 @@ const make = Effect.gen(function* () {
         }),
       ),
     );
+    const ladder = yield* acceptedLadder;
     const commandId = CommandId.make(
       `kanban-spec:${yield* crypto.randomUUIDv4.pipe(Effect.orDie)}`,
     );
@@ -364,7 +402,7 @@ const make = Effect.gen(function* () {
                   runtimeMode: modes.runtimeMode,
                   interactionMode: modes.interactionMode,
                   workspaceStrategy: { type: "root" },
-                  initialMessage: { text: draftingPrompt(issue), attachments: [] },
+                  initialMessage: { text: draftingPrompt(issue, ladder), attachments: [] },
                   createdBy: "system",
                   creationSource: "server",
                 })
