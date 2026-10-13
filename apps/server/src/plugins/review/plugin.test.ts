@@ -144,17 +144,17 @@ it.effect("enabled: a request over the gateway goes stale on the supervisor's ti
       assert.deepInclude(registered, { plugin: "review", name: "invalidation" });
       assert.deepInclude(registered, { plugin: "review", name: "security" });
 
-      // A project's security mode is `warn` until it is set over the settings gateway. `block` holds
-      // a thread only once a turn adds a finding, so the request below still opens.
+      // A project's security mode is `warn` until it is set over the settings gateway. `off` leaves
+      // the request below free of the scan.
       const getMode = call("read", REVIEW_METHODS.securityGetMode.method, { projectId }).pipe(
         Effect.flatMap(decodeMode),
       );
       assert.deepEqual(yield* getMode, { projectId, mode: "warn" });
       yield* call("settingsWrite", REVIEW_METHODS.securitySetMode.method, {
         projectId,
-        mode: "block",
+        mode: "off",
       });
-      assert.deepEqual(yield* getMode, { projectId, mode: "block" });
+      assert.deepEqual(yield* getMode, { projectId, mode: "off" });
 
       const asked = yield* call("operate", REVIEW_METHODS.request.method, {
         threadId: reviewed,

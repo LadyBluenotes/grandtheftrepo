@@ -2,6 +2,7 @@ import {
   CheckpointId,
   OrchestrationV2Checkpoint,
   OrchestrationV2CheckpointScope,
+  type OrchestrationV2Run,
   ProjectId,
   ThreadId,
   type ReviewVerdictInput,
@@ -101,6 +102,7 @@ const initialCheckpoints: Readonly<Record<string, ReadonlyArray<OrchestrationV2C
  */
 export const readModel = Effect.gen(function* () {
   const checkpoints = yield* Ref.make(initialCheckpoints);
+  const runs = yield* Ref.make<Readonly<Record<string, ReadonlyArray<OrchestrationV2Run>>>>({});
   const setLater = (status: "ready" | "stale") =>
     Ref.update(checkpoints, (all) => ({
       ...all,
@@ -113,14 +115,18 @@ export const readModel = Effect.gen(function* () {
     layer: Layer.mock(ThreadManagementService.ThreadManagementService)({
       getThreadShell: (id) => Effect.succeed(id === nobody ? null : liveThreadShell(id)),
       getThreadRecords: (id) =>
-        Effect.map(Ref.get(checkpoints), (all) => ({
+        Effect.map(Effect.all([Ref.get(checkpoints), Ref.get(runs)]), ([all, allRuns]) => ({
           ...idleThreadProjection(liveThreadShell(id)),
           checkpointScopes: [rootScope(id)],
           checkpoints: all[id] ?? [],
+          runs: allRuns[id] ?? [],
         })),
     }),
     captureLater: setLater("ready"),
     rollBackLater: setLater("stale"),
+    /** Replaces the runs `threadId`'s records hold, which start empty. */
+    setRuns: (threadId: ThreadId, list: ReadonlyArray<OrchestrationV2Run>) =>
+      Ref.update(runs, (all) => ({ ...all, [threadId]: list })),
   };
 });
 
@@ -214,6 +220,7 @@ export const harness = Effect.gen(function* () {
     list: store.list,
     captureLater: threads.captureLater,
     rollBackLater: threads.rollBackLater,
+    setRuns: threads.setRuns,
     /** Rows the review and host connections have inserted, updated or deleted since they opened. */
     changes: Effect.map(
       Effect.forEach(

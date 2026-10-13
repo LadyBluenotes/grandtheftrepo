@@ -56,9 +56,19 @@ export class ReviewVerdictError extends Schema.TaggedError<ReviewVerdictError>()
   {
     /**
      * `gated` is `ReviewGate.check` refusing completion, or a security hold refusing a review
-     * request; its message says why.
+     * request; its message says why. `scan_pending` refuses a review request in a `block` project
+     * until the security scan of the thread's latest checkpoint has finished; asking again later
+     * succeeds or meets the hold.
      */
-    code: Schema.Literals(["inactive", "invalid", "not_found", "conflict", "gated", "io"]),
+    code: Schema.Literals([
+      "inactive",
+      "invalid",
+      "not_found",
+      "conflict",
+      "gated",
+      "scan_pending",
+      "io",
+    ]),
     message: Schema.String,
   },
 ) {}

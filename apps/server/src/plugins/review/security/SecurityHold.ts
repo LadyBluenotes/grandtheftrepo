@@ -1,5 +1,6 @@
 import {
   type CheckpointId,
+  type OrchestrationV2Checkpoint,
   type ProjectId,
   ReviewVerdictError,
   type SecurityFinding,
@@ -71,6 +72,31 @@ export const holdOf = (sql: SqlClient.SqlClient, threadId: ThreadId) =>
       WHERE thread_id = ${threadId} AND acknowledged_at IS NULL`,
     ([row]) => (row?.held === 1 ? row.open : 0),
   );
+
+/**
+ * Whether a review of `checkpoint` must wait for the security scan: only in a `block` project, and
+ * only while the scan has not handled the checkpoint. A checkpoint captured before the scan began
+ * never will be, so it does not wait.
+ */
+export const scanPending = (
+  sql: SqlClient.SqlClient,
+  projectId: ProjectId,
+  checkpoint: Pick<OrchestrationV2Checkpoint, "id" | "capturedAt">,
+) =>
+  Effect.gen(function* () {
+    if ((yield* modeOf(sql, projectId)) !== "block") return false;
+    const [row] = yield* sql<{ readonly scanned: number; readonly since: string | null }>`
+      SELECT EXISTS (SELECT 1 FROM security_scan WHERE checkpoint_id = ${checkpoint.id}) AS scanned,
+        (SELECT since FROM security_scan_since WHERE id = 1) AS since`;
+    return (
+      row?.scanned === 0 &&
+      row.since !== null &&
+      DateTime.formatIso(checkpoint.capturedAt) >= row.since
+    );
+  });
+
+export const SCAN_PENDING_MESSAGE =
+  "The security scan of this thread's latest checkpoint has not finished. Ask again shortly.";
 
 /**
  * A project's security mode, a thread's findings, and the acknowledgement that clears a hold. The

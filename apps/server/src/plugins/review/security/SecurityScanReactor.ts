@@ -1,4 +1,4 @@
-import type { ThreadId } from "@t3tools/contracts";
+import type { OrchestrationV2Checkpoint, ThreadId } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
@@ -30,9 +30,10 @@ const BATCH_SIZE = 100;
 const SCAN_FAILED: ReadonlyArray<Match> = [{ patternId: "scan_failed", file: "", line: 0 }];
 
 /**
- * The diff of the turn ending at `ordinal`, from the turn before it. A stopped turn has no
- * checkpoint to diff from, so the diff starts at the last one before it that has; empty when this
- * turn has none to diff to, as when it was stopped itself or rolled back since.
+ * The diff of the turn ending at `ordinal`, from the turn before it. `getTurnDiff` covers completed
+ * runs only, so a stopped turn has no checkpoint to diff from, and the diff starts at the last one
+ * before it that has, taking in the stopped turn's lines too. Empty when this turn, completed when
+ * it was captured, has no checkpoint to diff to any more: it was rolled back since.
  */
 const turnDiff = Effect.fn("SecurityScanReactor.turnDiff")(function* (
   diffs: CheckpointDiffQuery.CheckpointDiffQuery["Service"],
@@ -61,21 +62,31 @@ const turnDiff = Effect.fn("SecurityScanReactor.turnDiff")(function* (
  * Scans each root-run checkpoint's turn: the lines its diff adds, against the fixed patterns, unless
  * the project's mode is `off`. A match is stored once per checkpoint, pattern, file and line, so a
  * replayed event adds nothing. In `block` the thread's hold is open and its flag raised here; the
- * sweep raises it again should that write fail.
+ * sweep raises it again should that write fail. Every ready checkpoint handled gets a
+ * `security_scan` row in the same transaction, which `block` waits for before a review.
  */
 export const handlers = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
   const threads = yield* ThreadManagementService.ThreadManagementService;
   const attention = yield* Attention.Attention;
 
-  /** The matches on the lines the turn added, or none when the checkpoint is not a root run's. */
-  const scanTurn = (threadId: ThreadId, scopeId: string, ordinal: number) =>
+  /**
+   * The matches on the lines the turn added, none when the checkpoint is not a root run's, or
+   * undefined when the turn cannot be read: its run was stopped, and `getTurnDiff` covers
+   * completed runs only.
+   */
+  const scanTurn = (threadId: ThreadId, checkpoint: OrchestrationV2Checkpoint, ordinal: number) =>
     Effect.gen(function* () {
-      const { checkpointScopes } = yield* threads.getThreadRecords(threadId, ["checkpointScopes"]);
+      const { checkpointScopes, runs } = yield* threads.getThreadRecords(threadId, [
+        "checkpointScopes",
+        "runs",
+      ]);
       const root = checkpointScopes.some(
-        (scope) => scope.id === scopeId && scope.kind === "root_run",
+        (scope) => scope.id === checkpoint.scopeId && scope.kind === "root_run",
       );
       if (!root) return [];
+      const run = runs.find((candidate) => candidate.id === checkpoint.runId);
+      if (run?.status === "interrupted" || run?.status === "cancelled") return undefined;
       // Read from the reactor fiber's context, which the server's chain gives it, rather than
       // required of the layer: that would put it in every plugin's requirements for this alone.
       const diffs = yield* Effect.serviceOption(CheckpointDiffQuery.CheckpointDiffQuery);
@@ -86,56 +97,80 @@ export const handlers = Effect.gen(function* () {
       return scan(yield* turnDiff(diffs.value, threadId, ordinal));
     });
 
+  /**
+   * Scans one ready checkpoint of `threadId` and stores what it found. A turn the scan cannot read
+   * holds the thread in `block`; in `warn` a stopped turn is passed over with a warning, its lines
+   * scanned with the next turn's, and any other failure fails the event for the sweep to retry.
+   */
+  const scanCheckpoint = (
+    threadId: ThreadId,
+    checkpoint: OrchestrationV2Checkpoint,
+    occurredAt: DateTime.Utc,
+  ) =>
+    Effect.gen(function* () {
+      const ordinal = checkpoint.appRunOrdinal;
+      if (ordinal === null) return;
+      const shell = yield* threads.getThreadShell(threadId);
+      if (shell === null || shell.deletedAt !== null) return;
+      const mode = yield* modeOf(sql, shell.projectId);
+      if (mode === "off") return;
+      const scanned = yield* scanTurn(threadId, checkpoint, ordinal).pipe(
+        Effect.catch((cause) =>
+          mode === "block"
+            ? Effect.logWarning("review: security scan failed; holding the thread", {
+                threadId,
+                cause,
+              }).pipe(Effect.as(undefined))
+            : Effect.fail(cause),
+        ),
+      );
+      if (scanned === undefined && mode === "warn") {
+        return yield* Effect.logWarning("review: security scan cannot read a stopped turn", {
+          threadId,
+          checkpointId: checkpoint.id,
+        });
+      }
+      const matches = scanned ?? SCAN_FAILED;
+      if (matches.length === 0) return;
+
+      const createdAt = DateTime.formatIso(occurredAt);
+      yield* sql`INSERT INTO security_finding ${sql.insert(
+        matches.map((match) => ({
+          thread_id: threadId,
+          checkpoint_id: checkpoint.id,
+          pattern_id: match.patternId,
+          file: match.file,
+          line: match.line,
+          blocking: mode === "block" ? 1 : 0,
+          created_at: createdAt,
+        })),
+      )} ON CONFLICT (checkpoint_id, pattern_id, file, line) DO NOTHING`;
+      if (mode !== "block") return;
+      const open = yield* holdOf(sql, threadId);
+      if (open === 0) return;
+      yield* attention
+        .raise({ ...flagKey(threadId), text: holdText(open), resumeAction: RESUME_ACTION })
+        .pipe(
+          Effect.catch((cause) =>
+            Effect.logWarning("review: could not raise a security hold flag", { cause }),
+          ),
+        );
+    });
+
   const result: PluginReactor.Handlers<
     SqlError.SqlError | Orchestrator.OrchestratorV2Error | CheckpointServiceError
   > = {
     "checkpoint.captured": ({ event }) =>
       Effect.gen(function* () {
         const { threadId, payload: checkpoint } = event;
-        const ordinal = checkpoint.appRunOrdinal;
-        if (checkpoint.status !== "ready" || ordinal === null || checkpoint.threadId !== threadId) {
-          return;
-        }
-        const shell = yield* threads.getThreadShell(threadId);
-        if (shell === null || shell.deletedAt !== null) return;
-        const mode = yield* modeOf(sql, shell.projectId);
-        if (mode === "off") return;
-        // In `warn` a failed scan fails the event, which the sweep retries. In `block` it holds the
-        // thread instead, so a turn nobody could check never passes as clean.
-        const matches = yield* scanTurn(threadId, checkpoint.scopeId, ordinal).pipe(
-          Effect.catch((cause) =>
-            mode === "block"
-              ? Effect.logWarning("review: security scan failed; holding the thread", {
-                  threadId,
-                  cause,
-                }).pipe(Effect.as(SCAN_FAILED))
-              : Effect.fail(cause),
-          ),
-        );
-        if (matches.length === 0) return;
-
-        const createdAt = DateTime.formatIso(event.occurredAt);
-        yield* sql`INSERT INTO security_finding ${sql.insert(
-          matches.map((match) => ({
-            thread_id: threadId,
-            checkpoint_id: checkpoint.id,
-            pattern_id: match.patternId,
-            file: match.file,
-            line: match.line,
-            blocking: mode === "block" ? 1 : 0,
-            created_at: createdAt,
-          })),
-        )} ON CONFLICT (checkpoint_id, pattern_id, file, line) DO NOTHING`;
-        if (mode !== "block") return;
-        const open = yield* holdOf(sql, threadId);
-        if (open === 0) return;
-        yield* attention
-          .raise({ ...flagKey(threadId), text: holdText(open), resumeAction: RESUME_ACTION })
-          .pipe(
-            Effect.catch((cause) =>
-              Effect.logWarning("review: could not raise a security hold flag", { cause }),
-            ),
-          );
+        if (checkpoint.status !== "ready" || checkpoint.threadId !== threadId) return;
+        yield* scanCheckpoint(threadId, checkpoint, event.occurredAt);
+        // Written with the findings, whatever the scan found or skipped, so `block` can tell a
+        // scan still to come from one that found nothing.
+        const scannedAt = DateTime.formatIso(yield* DateTime.now);
+        yield* sql`INSERT INTO security_scan (checkpoint_id, thread_id, scanned_at)
+          VALUES (${checkpoint.id}, ${threadId}, ${scannedAt})
+          ON CONFLICT (checkpoint_id) DO NOTHING`;
       }),
   };
   return result;

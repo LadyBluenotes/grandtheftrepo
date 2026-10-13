@@ -60,7 +60,7 @@ const ReviewVerdictsTool = Tool.make("review_verdicts", {
 const ReviewRequestTool = Tool.make("review_request", {
   ...shared,
   description:
-    "Ask for a review of threadId's latest checkpoint; it can be your own thread. Answers with the request: its checkpointId, and status open until a review_verdict names that checkpoint, then answered. Asking again at the same checkpoint returns the same request. Once the thread's latest checkpoint is another one, the supervisor marks the request stale for good and opens a new one at the latest, so a review always describes the current work. Refused while the thread has no checkpoint, and while it has a security hold: read it with review_security_findings and acknowledge it with review_security_ack.",
+    "Ask for a review of threadId's latest checkpoint; it can be your own thread. Answers with the request: its checkpointId, and status open until a review_verdict names that checkpoint, then answered. Asking again at the same checkpoint returns the same request. Once the thread's latest checkpoint is another one, the supervisor marks the request stale for good and opens a new one at the latest, so a review always describes the current work. Refused while the thread has no checkpoint, and while it has a security hold: read it with review_security_findings and acknowledge it with review_security_ack. In a project whose security mode is block it is also refused until the security scan of the latest checkpoint has finished; ask again shortly.",
   parameters: ReviewRequestInput,
   success: ReviewRequest,
 })
@@ -97,7 +97,7 @@ const ReviewSecurityAckTool = Tool.make("review_security_ack", {
 
 const ReviewSecurityFindingsTool = Tool.make("review_security_findings", {
   ...shared,
-  description: `The security scan's findings on one thread, oldest first: the pattern, file and line each matched on a line a turn added, the checkpoint of that turn, the correction it recorded, and when and why it was acknowledged. Patterns: ${SECURITY_PATTERNS}. The matched text is never stored; open the file at the line to see it. In a block project a turn the scan could not read is listed as scan_failed, with no file and line 0: check that checkpoint by hand before acknowledging it.`,
+  description: `The security scan's findings on one thread, oldest first: the pattern, file and line each matched on a line a turn added, the checkpoint of that turn, the correction it recorded, and when and why it was acknowledged. Patterns: ${SECURITY_PATTERNS}. The matched text is never stored; open the file at the line to see it. In a block project a turn the scan could not read, such as a stopped one, is listed as scan_failed, with no file and line 0: check that checkpoint by hand before acknowledging it.`,
   parameters: SecurityFindingsInput,
   success: Schema.Array(SecurityFinding),
 })

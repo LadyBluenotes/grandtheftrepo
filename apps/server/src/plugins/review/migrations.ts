@@ -1,3 +1,4 @@
+import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as SqlClient from "effect/sql/SqlClient";
 import type { PluginMigration } from "../Plugin.ts";
@@ -56,7 +57,10 @@ const requests: PluginMigration[2] = Effect.gen(function* () {
   yield* sql`CREATE INDEX review_request_superseded ON review_request (superseded_by)`;
 });
 
-// A project with no `security_mode` row is `warn`. One finding per checkpoint, pattern, file and
+// A project with no `security_mode` row is `warn`. `security_scan` has a row for each ready
+// checkpoint the scan has handled, written with its findings, so `block` can tell a scan still to
+// come from one that found nothing. `security_scan_since` is when the scan began: a checkpoint
+// captured before then was never going to be scanned, so it has no row and is not pending. One finding per checkpoint, pattern, file and
 // line, so a replayed scan inserts nothing. `blocking` is whether the project was in `block` when
 // the finding was recorded: the thread is held while one such finding is unacknowledged.
 // `correction_id` points into the learning plugin's database and is written by the security sweep;
@@ -86,6 +90,18 @@ const security: PluginMigration[2] = Effect.gen(function* () {
   yield* sql`CREATE INDEX security_finding_thread ON security_finding (thread_id, acknowledged_at)`;
   yield* sql`CREATE INDEX security_finding_uncorrected ON security_finding (id)
     WHERE correction_id IS NULL AND pattern_id <> 'scan_failed'`;
+  yield* sql`CREATE TABLE security_scan (
+    checkpoint_id TEXT PRIMARY KEY,
+    thread_id TEXT NOT NULL,
+    scanned_at TEXT NOT NULL
+  )`;
+  yield* sql`CREATE TABLE security_scan_since (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    since TEXT NOT NULL
+  )`;
+  // The reactor starts from the newest event in the same start that runs this migration.
+  yield* sql`INSERT INTO security_scan_since (id, since)
+    VALUES (1, ${DateTime.formatIso(yield* DateTime.now)})`;
 });
 
 export const migrations = [

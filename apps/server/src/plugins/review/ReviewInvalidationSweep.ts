@@ -8,7 +8,7 @@ import * as ThreadManagementService from "../../orchestration-v2/ThreadManagemen
 import * as Attention from "../Attention.ts";
 import * as PluginSupervisor from "../PluginSupervisor.ts";
 import { hasVerdict, insert, latestCheckpoint, standing } from "./ReviewRequests.ts";
-import { holdOf } from "./security/SecurityHold.ts";
+import { holdOf, scanPending } from "./security/SecurityHold.ts";
 
 const PLUGIN_ID = "review";
 const FLAG_KIND = "stale_review";
@@ -22,9 +22,10 @@ const flagText = (checkpointId: string) => `Review of checkpoint ${checkpointId}
  * Builds the invalidation sweep. A thread's open and answered requests describe its latest
  * checkpoint; once the thread has moved to another, each of them is marked stale, for good, and
  * superseded by the request standing at the latest checkpoint, opened here when there is none. A
- * thread under a security hold is left as it is until the hold is acknowledged, since
- * `ReviewRequests.request` would refuse the request this opens; `ReviewGate` already treats its
- * request as out of date meanwhile.
+ * thread under a security hold is left as it is until the hold is acknowledged, and in a `block`
+ * project until the security scan has handled its latest checkpoint, since `ReviewRequests.request`
+ * would refuse the request this opens; `ReviewGate` already treats its request as out of date
+ * meanwhile.
  * The thread's verdicts on the superseded checkpoints are marked invalidated with them, all in one
  * transaction. A thread whose superseding request waits for a verdict keeps one `stale_review`
  * flag naming the newest stale checkpoint; the flag clears once that request is answered. Each
@@ -79,6 +80,16 @@ export const sweep = Effect.gen(function* () {
       );
       if (latest === null || latest === undefined) continue;
       if ((yield* holdOf(sql, threadId)) > 0) continue;
+      const shell = yield* threads
+        .getThreadShell(threadId)
+        .pipe(
+          Effect.catch((cause) =>
+            Effect.logWarning("review: could not read a thread", { threadId, cause }).pipe(
+              Effect.as(null),
+            ),
+          ),
+        );
+      if (shell === null || (yield* scanPending(sql, shell.projectId, latest))) continue;
       const outcome = yield* sql.withTransaction(
         Effect.gen(function* () {
           const rows = yield* standing(sql, threadId);

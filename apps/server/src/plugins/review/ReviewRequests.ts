@@ -14,7 +14,7 @@ import type * as SqlError from "effect/sql/SqlError";
 
 import type * as Orchestrator from "../../orchestration-v2/Orchestrator.ts";
 import * as ThreadManagementService from "../../orchestration-v2/ThreadManagementService.ts";
-import { holdOf, holdText } from "./security/SecurityHold.ts";
+import { holdOf, holdText, SCAN_PENDING_MESSAGE, scanPending } from "./security/SecurityHold.ts";
 
 export interface RequestRow {
   readonly id: number;
@@ -118,7 +118,8 @@ export class ReviewRequests extends Context.Service<
     /**
      * Asks for a review of the thread's latest checkpoint. Asking again at the same checkpoint
      * answers with the request already standing there. A request at a checkpoint a verdict
-     * already names is answered from the start. Refused while the thread has a security hold.
+     * already names is answered from the start. Refused while the thread has a security hold,
+     * and in a `block` project until the security scan has handled the latest checkpoint.
      */
     readonly request: (input: {
       readonly threadId: ThreadId;
@@ -167,6 +168,13 @@ const make = Effect.gen(function* () {
         return yield* new ReviewVerdictError({
           code: "gated",
           message: `${holdText(held)} Call review_security_ack with a reason.`,
+        });
+      }
+      const shell = yield* threads.getThreadShell(threadId).pipe(Effect.catch(io));
+      if (shell !== null && (yield* scanPending(sql, shell.projectId, latest))) {
+        return yield* new ReviewVerdictError({
+          code: "scan_pending",
+          message: SCAN_PENDING_MESSAGE,
         });
       }
       const requestedAt = DateTime.formatIso(yield* DateTime.now);

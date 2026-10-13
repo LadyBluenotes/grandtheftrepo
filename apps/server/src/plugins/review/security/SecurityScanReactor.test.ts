@@ -1,9 +1,13 @@
 import { assert, it } from "@effect/vitest";
 import {
   EventId,
+  MessageId,
   OrchestrationV2Checkpoint,
   type OrchestrationV2DomainEvent,
+  type OrchestrationV2Run,
+  ProviderInstanceId,
   type ReviewVerdictError,
+  RunId,
 } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -24,7 +28,7 @@ import * as SqlitePersistence from "../../../persistence/Sqlite.ts";
 import * as Attention from "../../Attention.ts";
 import * as CorrectionStore from "../../learning/CorrectionStore.ts";
 import * as PluginReactor from "../../PluginReactor.ts";
-import { harness, projectId, ready, reviewed } from "../testkit.ts";
+import { harness, other, projectId, ready, reviewed } from "../testkit.ts";
 import * as SecurityScanReactor from "./SecurityScanReactor.ts";
 
 // A real event sink on an in-memory core database, as the routing reactor test does.
@@ -76,6 +80,28 @@ const turnCheckpoint = (ordinal: number, scopeId = `scope:${reviewed}`) =>
     capturedAt,
   });
 
+/** `reviewed`'s run for turn `ordinal`, as the read model reports it. */
+const stoppedRun = (ordinal: number): OrchestrationV2Run => {
+  const providerInstanceId = ProviderInstanceId.make("codex");
+  return {
+    id: RunId.make(`run:${ordinal}`),
+    threadId: reviewed,
+    ordinal,
+    providerInstanceId,
+    modelSelection: { instanceId: providerInstanceId, model: "gpt-5" },
+    providerThreadId: null,
+    userMessageId: MessageId.make(`message:${ordinal}`),
+    rootNodeId: null,
+    activeAttemptId: null,
+    status: "interrupted",
+    requestedAt: capturedAt,
+    startedAt: capturedAt,
+    completedAt: capturedAt,
+    checkpointId: null,
+    contextHandoffId: null,
+  };
+};
+
 let eventCount = 0;
 const captured = (checkpoint: OrchestrationV2Checkpoint): OrchestrationV2DomainEvent => ({
   id: EventId.make(`event:security-${++eventCount}`),
@@ -112,6 +138,9 @@ const boot = (
 ) =>
   Effect.gen(function* () {
     const kit = yield* harness;
+    // The read model's latest checkpoint of `reviewed` was scanned before these tests begin.
+    yield* kit.review`INSERT INTO security_scan (checkpoint_id, thread_id, scanned_at)
+      VALUES (${ready}, ${reviewed}, '2026-10-01T00:00:00.000Z')`;
     const asked = yield* Ref.make<ReadonlyArray<string>>([]);
     const diffQuery = CheckpointDiffQuery.CheckpointDiffQuery.of({
       getFullThreadDiff: () => Effect.die("unused"),
@@ -171,6 +200,12 @@ const boot = (
       failures: kit.review<{
         readonly attempts: number;
       }>`SELECT attempts FROM host_reactor_failure ORDER BY sequence`,
+      scanned: Effect.map(
+        kit.review<{
+          readonly checkpoint_id: string;
+        }>`SELECT checkpoint_id FROM security_scan ORDER BY checkpoint_id`,
+        (rows) => rows.map((row) => row.checkpoint_id),
+      ),
       holdFlags: kit.attention.listOpen({ pluginId: "review", kind: "security_hold" }),
     };
   });
@@ -313,9 +348,10 @@ it.effect("after a stopped turn the diff starts at the last turn it can diff fro
   Effect.scoped(
     Effect.gen(function* () {
       const kit = yield* boot({
-        // Turn 1 was stopped: it has no checkpoint to diff from, nor one to diff to.
+        // Turn 1 was stopped: it has no checkpoint to diff from.
         "1->2": refFrom(1, "from"),
         "0->2": configDiff([`+export const token = "${token}";`]),
+        // Turn 3 was rolled back after it was captured: nothing is left to diff to.
         "2->3": refFrom(3, "to"),
       });
       yield* kit.publish(captured(turnCheckpoint(2)));
@@ -389,6 +425,75 @@ it.effect("warn: a failed scan is retried by the sweep until it reads the turn",
       assert.deepEqual(
         (yield* kit.security.findings({ threadId: reviewed })).map((finding) => finding.patternId),
         ["secret.token"],
+      );
+    }),
+  ).pipe(Effect.provide(layerSink)),
+);
+
+it.effect("a stopped turn holds the thread in block and is passed over in warn", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const kit = yield* boot({ "0->1": configDiff([`+export const token = "${token}";`]) });
+      yield* kit.setRuns(reviewed, [stoppedRun(1), stoppedRun(2)]);
+
+      // `warn`: a warning, the event done, nothing recorded and nothing to retry.
+      yield* kit.publish(captured(turnCheckpoint(1)));
+      assert.deepEqual(yield* kit.asked, []);
+      assert.deepEqual(yield* kit.failures, []);
+      assert.deepEqual(yield* kit.security.findings({ threadId: reviewed }), []);
+
+      // `block`: the turn cannot be checked, so it holds the thread.
+      yield* kit.security.setMode({ projectId, mode: "block" });
+      yield* kit.publish(captured(turnCheckpoint(2)));
+      assert.deepEqual(yield* kit.asked, []);
+      assert.deepEqual(yield* kit.failures, []);
+      assert.deepEqual(
+        (yield* kit.security.findings({ threadId: reviewed })).map((finding) => [
+          finding.checkpointId,
+          finding.patternId,
+        ]),
+        [[turnCheckpoint(2).id, "scan_failed"]],
+      );
+      assert.includeMembers(yield* kit.scanned, [turnCheckpoint(1).id, turnCheckpoint(2).id]);
+    }),
+  ).pipe(Effect.provide(layerSink)),
+);
+
+it.effect("block: a review waits for the scan of the latest checkpoint to commit", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const kit = yield* boot({});
+      yield* kit.review`DELETE FROM security_scan`;
+      // `warn` never waits.
+      const early = yield* kit.requests.request({ threadId: other, requestedBy: "user" });
+      assert.strictEqual(early.status, "open");
+
+      yield* kit.security.setMode({ projectId, mode: "block" });
+      const pending = yield* refusal(
+        kit.requests.request({ threadId: reviewed, requestedBy: "user" }),
+      );
+      assert.deepInclude(pending, {
+        code: "scan_pending",
+        message:
+          "The security scan of this thread's latest checkpoint has not finished. Ask again shortly.",
+      });
+
+      // The reactor reaches the checkpoint; a scan that found nothing still counts.
+      yield* kit.publish(captured({ ...turnCheckpoint(1), id: ready }));
+      assert.deepEqual(yield* kit.scanned, [ready]);
+      const asked = yield* kit.requests.request({ threadId: reviewed, requestedBy: "user" });
+      assert.strictEqual(asked.checkpointId, ready);
+
+      // `other`'s latest checkpoint has no scan, and waits while the scan began before it.
+      const waiting = yield* refusal(
+        kit.requests.request({ threadId: other, requestedBy: "user" }),
+      );
+      assert.strictEqual(waiting.code, "scan_pending");
+      // Captured before the scan began, it never will be scanned, so it does not wait.
+      yield* kit.review`UPDATE security_scan_since SET since = '2026-10-02T00:00:00.000Z'`;
+      assert.deepEqual(
+        yield* kit.requests.request({ threadId: other, requestedBy: "user" }),
+        early,
       );
     }),
   ).pipe(Effect.provide(layerSink)),
