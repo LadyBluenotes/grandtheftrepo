@@ -38,8 +38,8 @@ same file, so any plugin can raise one without depending on the plugin that show
 
 ## Upstream seams
 
-These are the only lines upstream files carry for the plugin system. A merge conflict in one of
-them is resolved by keeping the line.
+These are the only lines upstream files carry for this fork. A merge conflict in one of them is
+resolved by keeping the line.
 
 | File                                                         | Line                                                                                                                                                                   |
 | ------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -61,6 +61,7 @@ them is resolved by keeping the line.
 | `apps/web/src/components/sidebar/SidebarChrome.tsx`          | the board's `SidebarUtilityItem`, gated on `kanbanSupportedAtom`, and `<PluginSidebarEntries />` after the Usage entry, plus imports; `SidebarUtilityItem` is exported |
 | `apps/web/src/components/CommandPalette.tsx`                 | the board's `actionItems.push` block, gated the same way, plus imports                                                                                                 |
 | `third-party-licenses.config.json`                           | the `Caveman reply rules` and `Ponytail ladder` entries at the end of `customNotices`, so the adapted policy text is credited in the app's license list                |
+| `scripts/build-desktop-artifact.ts`                          | `{ identity: "-", hardenedRuntime: false }` for unsigned builds in `createBuildConfig`'s mac config, so Mac nightlies open on Apple silicon, plus its test             |
 
 ## Plugin services and the type system
 
@@ -216,13 +217,23 @@ anything new. Only Fork CI, Sync upstream and Fork nightly release stay active.
 ## Nightly builds
 
 `.github/workflows/release-fork.yml` runs at 05:41 UTC on days `main` moved and can be run by hand.
-It builds the Windows x64 and Linux x64 desktop apps and CLI archives, unsigned, through upstream's
-reusable build job on GitHub-hosted runners, and publishes them as a prerelease tagged
-`v<version>-nightly.<date>.<n>`. There is no macOS build; signing it needs an Apple developer
-account.
+It builds the Windows x64, macOS arm64 and Linux x64 desktop apps and CLI archives through
+upstream's reusable build job on GitHub-hosted runners, and publishes them as a prerelease tagged
+`v<version>-nightly.<date>.<n>`. None carry a publisher signature, which needs an Apple developer
+account and a Windows signing certificate. The macOS app and CLI are signed ad hoc, which Apple
+silicon needs to open them. There is no Intel Mac build.
 
-Install the first copy by hand from the Releases page. Windows shows a SmartScreen prompt once
-because the build is unsigned: More info, then Run anyway. From then on the app updates itself from
-this fork's releases on the nightly channel. An app installed from upstream keeps updating from
-upstream, so it has to be replaced once. The `t3` CLI from one of these archives updates from this
-fork as well.
+Install the first copy by hand from the Releases page. An app installed from upstream keeps updating
+from upstream, so it has to be replaced once. The `t3` CLI from one of these archives updates from
+this fork as well.
+
+Windows shows a SmartScreen prompt once because the build is unsigned: More info, then Run anyway.
+From then on the app updates itself from this fork's releases on the nightly channel.
+
+On a Mac, open the `arm64` DMG and drag the app to Applications. Gatekeeper blocks the first launch
+because the app has no Developer ID. On macOS 14 and earlier, Control-click the app and choose Open.
+On macOS 15 and later, try to open it once, then choose Open Anyway under System Settings > Privacy
+& Security. The Mac app cannot update itself: macOS updates go through Squirrel.Mac, which only
+installs an update signed to match the running app, and an ad hoc signature matches only its own
+build. The app still offers each new nightly, but the update fails, so install every nightly by
+hand from its DMG the same way.
