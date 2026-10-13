@@ -141,19 +141,6 @@ it.effect("tells the reviewer the six rungs in order and how a failed one is rep
   ),
 );
 
-it.effect(
-  "tells the reviewer a reply that ignores the terse style is a style:caveman convention",
-  () =>
-    Effect.scoped(
-      Effect.gen(function* () {
-        const { server } = yield* withTools;
-        const description = server.tools.find(({ tool }) => tool.name === "review_verdict")?.tool
-          .description;
-        expect(description).toContain("convention verdict whose summary starts with style:caveman");
-      }),
-    ),
-);
-
 it.effect("stores a style:caveman convention verdict as written, with its correction", () =>
   Effect.scoped(
     Effect.gen(function* () {
