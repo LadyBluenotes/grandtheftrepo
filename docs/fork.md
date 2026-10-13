@@ -250,8 +250,9 @@ them half-evaluated. The host hands `toolkitRegistration` to `ServerPlugin.mcp` 
   whose record differs from what the accepted pages render to and whose file still holds what was
   recorded, even with no agent in use, and only while no thread in the project has a run; a file
   edited by hand stays `drifted` in `verify` until a person installs. The learning plugin's
-  promoter proposes a draft with source `item`, and a page whose source names a promotion is never
-  proposed again for it, whatever became of the draft. Server:
+  promoter calls `proposeForPromotion`, which looks for a page whose source names the promotion
+  and saves the draft with source `item` in one transaction: overlapping deliveries save one
+  draft, and a repeat, whatever became of the draft, answers with it. Server:
   `apps/server/src/plugins/knowledge/`. Contracts: `packages/contracts/src/plugins/knowledge.ts`.
   Web: `apps/web/src/plugins/knowledge/`, at `/plugins/knowledge`. User guide:
   [Project knowledge](./user/knowledge.md).

@@ -277,7 +277,7 @@ it.effect("a promoter that fails leaves its record pending, and the next attempt
           state: "pending",
           attempts: 1,
           next_attempt_at: "1970-01-01T06:00:00.000Z",
-          last_error: "Could not read the pages.",
+          last_error: "Could not save the page.",
         },
       ]);
       assert.deepStrictEqual(yield* world.items, [

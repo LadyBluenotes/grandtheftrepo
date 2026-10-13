@@ -27,8 +27,9 @@ const store = Effect.serviceOption(KnowledgeStore.KnowledgeStore);
  * reached when the sweep runs, so learning needs no dependency on it: with the plugin off the kind
  * is not available and its promotions wait.
  *
- * A page whose source names the promotion was written by an earlier call, whatever became of it
- * since, so a repeat, even after a person discarded the draft, writes nothing.
+ * `proposeForPromotion` saves one page per promotion, atomically, and answers a repeat with the page
+ * saved before, whatever became of it since, so a repeat, even one that overlaps or follows a
+ * person discarding the draft, writes nothing.
  */
 export const promoter = {
   ownerKind,
@@ -43,17 +44,9 @@ export const promoter = {
         });
       }
       const { projectId, failureMode } = detail.item;
-      const written = yield* pages.value.list({ projectId });
-      if (
-        written.some(
-          (page) => page.source.kind === "item" && page.source.promotionId === promotionId,
-        )
-      ) {
-        return;
-      }
-      yield* pages.value.propose(
+      yield* pages.value.proposeForPromotion(
         { projectId, key: keyOf(failureMode, itemId), ...learnedDraft(detail) },
-        { kind: "item", itemId, promotionId },
+        { itemId, promotionId },
       );
     }).pipe(
       Effect.catchTags({

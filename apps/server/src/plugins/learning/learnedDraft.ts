@@ -1,7 +1,7 @@
 import type { LearningItemDetail } from "@t3tools/contracts";
 
 /** How many of an item's latest pieces of evidence a draft quotes. */
-export const DRAFT_EVIDENCE_COUNT = 5;
+const DRAFT_EVIDENCE_COUNT = 5;
 
 const oneLine = (text: string) => text.replace(/\s+/g, " ").trim();
 

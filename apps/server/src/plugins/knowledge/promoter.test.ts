@@ -1,16 +1,32 @@
 import { assert, it } from "@effect/vitest";
-import { KnowledgeKey, type LearningItemDetail } from "@t3tools/contracts";
+import { KnowledgeKey, type LearningItemDetail, type Project } from "@t3tools/contracts";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
+import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/sql/SqlClient";
 
+import * as ProjectService from "../../project/ProjectService.ts";
 import * as Promoter from "../learning/Promoter.ts";
 import * as KnowledgeStore from "./KnowledgeStore.ts";
 import { promoter } from "./promoter.ts";
 import { onHost, projectId, world } from "./testkit.ts";
 
 const at = "2026-10-01T00:00:00.000Z";
+
+/** A proposal only checks that the server knows the project; it writes nothing under its root. */
+const project: Project = {
+  id: projectId,
+  title: "Project",
+  workspaceRoot: "/nonexistent/project",
+  defaultModelSelection: null,
+  scripts: [],
+  createdAt: at,
+  updatedAt: at,
+  deletedAt: null,
+};
 const isKey = Schema.is(KnowledgeKey);
 
 /** An item with `evidence` pieces of evidence, numbered from one. */
@@ -128,6 +144,35 @@ it.effect(
     }).pipe(Effect.provide(layerTest)),
 );
 
+it.effect("two deliveries of one promotion at once write one draft, and neither fails", () =>
+  Effect.gen(function* () {
+    const store = yield* KnowledgeStore.KnowledgeStore;
+    const arrived = yield* Ref.make(0);
+    const together = yield* Deferred.make<void>();
+    // Each delivery waits at the project lookup, which a proposal makes before it saves anything,
+    // until the other has reached it. Two supervisor ticks can overlap like this, and a check made
+    // before this point would find no page for either.
+    const projects = Layer.mock(ProjectService.ProjectService)({
+      getById: (id) =>
+        Effect.gen(function* () {
+          if ((yield* Ref.updateAndGet(arrived, (count) => count + 1)) === 2) {
+            yield* Deferred.succeed(together, undefined);
+          }
+          yield* Deferred.await(together);
+          return id === projectId ? Option.some(project) : Option.none();
+        }),
+    });
+    yield* Effect.all(
+      [promoter.promote(detail(3), keyFor(3)), promoter.promote(detail(3), keyFor(3))],
+      { concurrency: "unbounded" },
+    ).pipe(Effect.provide(projects));
+    assert.deepStrictEqual(
+      (yield* store.list({ projectId })).map((page) => [page.key, page.state]),
+      [["learned-convention-7", "draft"]],
+    );
+  }).pipe(Effect.provide(layerTest)),
+);
+
 it.effect("a failure mode is cut so the key stays valid, and the item id keeps it unique", () =>
   Effect.gen(function* () {
     const store = yield* KnowledgeStore.KnowledgeStore;
@@ -150,7 +195,7 @@ it.effect("a database failure is a PromotionError, and the next attempt succeeds
     assert.instanceOf(failed, Promoter.PromotionError);
     assert.deepInclude(failed, {
       ownerKind: "project_knowledge",
-      message: "Could not read the pages.",
+      message: "Could not save the page.",
     });
 
     yield* sql`ALTER TABLE knowledge_entry_away RENAME TO knowledge_entry`;
