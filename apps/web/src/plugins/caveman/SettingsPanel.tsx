@@ -1,4 +1,3 @@
-import { useAtomValue } from "@effect/atom-react";
 import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
@@ -21,7 +20,6 @@ import { Button } from "~/components/ui/button";
 import { Collapsible, CollapsiblePanel, CollapsibleTrigger } from "~/components/ui/collapsible";
 import { Switch } from "~/components/ui/switch";
 import { stackedThreadToast, toastManager } from "~/components/ui/toast";
-import { primaryServerProvidersAtom } from "~/state/server";
 import { formatRelativeTimeLabel } from "~/timestampFormat";
 import {
   scanScopeLabel,
@@ -31,6 +29,7 @@ import {
   useCavemanSetRoute,
   useCavemanStatus,
 } from "./state";
+import { usePluginServerConfig } from "../pluginState";
 
 const ROUTE_BADGE: Record<
   CavemanRoute,
@@ -74,7 +73,7 @@ const switchable = (row: CavemanAgentRoute) =>
 export function SettingsPanel() {
   const status = useCavemanStatus();
   const { canWrite, set } = useCavemanSetRoute();
-  const providers = useAtomValue(primaryServerProvidersAtom);
+  const { providers } = usePluginServerConfig();
   const [switching, setSwitching] = useState<ProviderInstanceId | null>(null);
 
   const toggle = async (instanceId: ProviderInstanceId, enabled: boolean) => {

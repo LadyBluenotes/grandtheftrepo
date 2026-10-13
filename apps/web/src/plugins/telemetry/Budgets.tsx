@@ -20,8 +20,8 @@ import {
 } from "~/components/ui/table";
 import { stackedThreadToast, toastManager } from "~/components/ui/toast";
 import { useProjects } from "~/state/entities";
-import { usePrimaryEnvironmentId } from "~/state/environments";
 import { useTelemetryBudgetCommands, useTelemetryBudgets } from "./state";
+import { usePluginEnvironmentId } from "../pluginState";
 
 const TIER_LABEL: Record<RoutingTier, string> = {
   cheap: "Cheap",
@@ -42,7 +42,7 @@ const DIRECTION_LABEL: Record<TelemetryBudget["direction"], string> = {
  * controls never show a value the server has already replaced.
  */
 export function Budgets() {
-  const environmentId = usePrimaryEnvironmentId();
+  const environmentId = usePluginEnvironmentId();
   const projects = useProjects().filter((project) => project.environmentId === environmentId);
   const budgets = useTelemetryBudgets();
   const { canWrite, save, remove } = useTelemetryBudgetCommands();

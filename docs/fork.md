@@ -11,7 +11,9 @@ directories and never edit an upstream file. Upstream is merged nightly by
 - `packages/contracts/src/plugins/` holds each plugin's schemas and method definitions.
 - `apps/web/src/plugins/` holds each plugin's screens.
   A plugin with a screen is registered in `apps/web/src/plugins/registry.ts` and reached at
-  `/plugins/<id>`; every plugin is listed, with an on/off switch, at `/plugins`.
+  `/plugins/<id>`; every plugin is listed, with an on/off switch, at `/plugins`. That page shows
+  the primary environment, or the one its `machine` search names; settings panels read
+  `usePluginEnvironmentId` so they follow it.
 
 Enabled state is `plugins.json` under the server state directory. A missing entry means enabled.
 Changes apply on the next server start.

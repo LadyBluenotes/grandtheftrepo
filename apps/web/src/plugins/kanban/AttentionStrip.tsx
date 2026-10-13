@@ -1,4 +1,3 @@
-import { scopeThreadRef } from "@t3tools/client-runtime/environment";
 import type {
   EnvironmentId,
   KanbanAttentionKind,
@@ -12,8 +11,7 @@ import { Alert, AlertAction, AlertDescription, AlertTitle } from "~/components/u
 import { Badge } from "~/components/ui/badge";
 import { Button } from "~/components/ui/button";
 import { useEnvironmentQuery } from "~/state/query";
-import { buildThreadRouteParams } from "~/threadRoutes";
-import { kanbanAttention } from "./state";
+import { attentionResumeTarget, kanbanAttention } from "./state";
 
 const KIND_LABEL: Record<KanbanAttentionKind, string> = {
   question: "Question",
@@ -44,18 +42,14 @@ export function AttentionStrip({
   if (rows.length === 0) return null;
 
   const resume = (row: KanbanAttentionRow) => {
-    switch (row.resumeAction.target) {
-      case "thread":
-        if (row.threadId === null) return;
-        return void navigate({
-          to: "/$environmentId/$threadId",
-          params: buildThreadRouteParams(scopeThreadRef(environmentId, row.threadId)),
-        });
-      case "board":
-        return void navigate({ to: "/board", search: { environmentId, projectId } });
-      case "settings":
-        // Plugin settings, such as budgets, live on the Plugins page.
-        return void navigate({ to: "/plugins" });
+    const target = attentionResumeTarget(row, { environmentId, projectId });
+    switch (target?.to) {
+      case "/$environmentId/$threadId":
+        return void navigate(target);
+      case "/board":
+        return void navigate(target);
+      case "/plugins":
+        return void navigate(target);
     }
   };
 
@@ -91,7 +85,7 @@ export function AttentionStrip({
               <Button
                 size="xs"
                 variant="outline"
-                disabled={row.resumeAction.target === "thread" && row.threadId === null}
+                disabled={attentionResumeTarget(row, { environmentId, projectId }) === null}
                 onClick={() => resume(row)}
               >
                 {row.resumeAction.label}

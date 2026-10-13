@@ -3,6 +3,7 @@ import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
 } from "@t3tools/client-runtime/state/runtime";
+import type { EnvironmentId } from "@t3tools/contracts";
 import type { ReactNode } from "react";
 
 import { SettingsRow, SettingsSection } from "~/components/settings/settingsLayout";
@@ -12,17 +13,31 @@ import { ScrollArea } from "~/components/ui/scroll-area";
 import { SidebarInset } from "~/components/ui/sidebar";
 import { Switch } from "~/components/ui/switch";
 import { stackedThreadToast, toastManager } from "~/components/ui/toast";
-import { WorkspaceBreadcrumb, WorkspaceBreadcrumbItem } from "~/components/WorkspaceBreadcrumb";
+import {
+  WorkspaceBreadcrumb,
+  WorkspaceBreadcrumbItem,
+  WorkspaceBreadcrumbSeparator,
+} from "~/components/WorkspaceBreadcrumb";
 import { WorkspacePageContainer } from "~/components/WorkspacePageContainer";
 import { WorkspacePageHeader } from "~/components/WorkspacePageHeader";
 import { isElectron } from "~/env";
+import { useEnvironment, usePrimaryEnvironmentId } from "~/state/environments";
 import { useAtomCommand } from "~/state/use-atom-command";
 import { PLUGINS_UNSUPPORTED, pluginBadge } from "./pluginRoute";
-import { pluginSetEnabled, usePluginStatuses } from "./pluginState";
+import { PluginEnvironmentContext, pluginSetEnabled, usePluginStatuses } from "./pluginState";
 import { pluginRegistry } from "./registry";
 
-/** The page frame the Plugins page and a plugin's notice share. */
-export function PluginPageShell({ children }: { readonly children: ReactNode }) {
+/**
+ * The page frame the Plugins page and a plugin's notice share. `environment` names the environment
+ * shown when it is not the primary one.
+ */
+export function PluginPageShell({
+  environment,
+  children,
+}: {
+  readonly environment?: string | undefined;
+  readonly children: ReactNode;
+}) {
   return (
     <SidebarInset className="h-dvh min-h-0 overflow-hidden overscroll-y-none isolate">
       <div className="flex min-h-0 min-w-0 flex-1 flex-col bg-background text-foreground">
@@ -31,6 +46,12 @@ export function PluginPageShell({ children }: { readonly children: ReactNode }) 
             <WorkspaceBreadcrumbItem>
               <h1>Plugins</h1>
             </WorkspaceBreadcrumbItem>
+            {environment === undefined ? null : (
+              <>
+                <WorkspaceBreadcrumbSeparator />
+                <WorkspaceBreadcrumbItem current>{environment}</WorkspaceBreadcrumbItem>
+              </>
+            )}
           </WorkspaceBreadcrumb>
         </WorkspacePageHeader>
         {children}
@@ -49,8 +70,22 @@ export function PluginNotice({ children }: { readonly children: ReactNode }) {
   );
 }
 
-export function PluginsPage() {
+/**
+ * Every plugin of one environment, with its switch and settings: the environment a link named,
+ * such as the board's for a budget flag, else the primary one.
+ */
+export function PluginsPage({ environmentId }: { readonly environmentId: EnvironmentId | null }) {
+  return (
+    <PluginEnvironmentContext.Provider value={environmentId}>
+      <PluginsList />
+    </PluginEnvironmentContext.Provider>
+  );
+}
+
+function PluginsList() {
   const { environmentId, statuses, isPending, refresh } = usePluginStatuses();
+  const primary = usePrimaryEnvironmentId();
+  const named = useEnvironment(environmentId === primary ? null : environmentId);
   const setEnabled = useAtomCommand(pluginSetEnabled, { reportFailure: false });
   const canWrite = useAtomValue(pluginSetEnabled.permissionAtom(environmentId));
 
@@ -73,7 +108,7 @@ export function PluginsPage() {
   };
 
   return (
-    <PluginPageShell>
+    <PluginPageShell environment={named?.label}>
       {statuses === null ? (
         isPending ? null : (
           <PluginNotice>{PLUGINS_UNSUPPORTED}</PluginNotice>

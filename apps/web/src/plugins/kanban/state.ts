@@ -2,6 +2,7 @@ import {
   createPluginRpcCommand,
   createPluginRpcQueryAtomFamily,
 } from "@t3tools/client-runtime/plugins/rpc";
+import { scopeThreadRef } from "@t3tools/client-runtime/environment";
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/models";
 import { createEnvironmentRpcSubscriptionAtomFamily } from "@t3tools/client-runtime/state/runtime";
 import {
@@ -9,6 +10,7 @@ import {
   KANBAN_METHODS,
   KANBAN_WS_METHODS,
   type EnvironmentId,
+  type KanbanAttentionRow,
   type KanbanDecision,
   type KanbanIssue,
   type ProjectId,
@@ -19,6 +21,7 @@ import * as Option from "effect/Option";
 import { connectionAtomRuntime } from "~/connection/runtime";
 import { environmentSummaries } from "~/state/presentation";
 import { environmentThreadShells } from "~/state/threads";
+import { buildThreadRouteParams } from "~/threadRoutes";
 
 /** Live board: a snapshot on subscribe, a fresh one after every change on disk or in the app. */
 export const kanbanBoard = createEnvironmentRpcSubscriptionAtomFamily(connectionAtomRuntime, {
@@ -105,6 +108,30 @@ export const kanbanAttention = createPluginRpcQueryAtomFamily(connectionAtomRunt
   staleTimeMs: 5_000,
   refreshTrigger: ({ environmentId, input }) => attentionSignal(environmentId, input.projectId),
 });
+
+/**
+ * Where a strip row's button leads, always on the board's environment: the row's thread, the
+ * board, or that environment's Plugins page, where budgets and other plugin settings live. Null
+ * when a thread row has no thread.
+ */
+export function attentionResumeTarget(
+  row: Pick<KanbanAttentionRow, "resumeAction" | "threadId">,
+  board: { readonly environmentId: EnvironmentId; readonly projectId: ProjectId },
+) {
+  switch (row.resumeAction.target) {
+    case "thread":
+      return row.threadId === null
+        ? null
+        : ({
+            to: "/$environmentId/$threadId",
+            params: buildThreadRouteParams(scopeThreadRef(board.environmentId, row.threadId)),
+          } as const);
+    case "board":
+      return { to: "/board", search: board } as const;
+    case "settings":
+      return { to: "/plugins", search: { machine: board.environmentId } } as const;
+  }
+}
 
 const pluginStatuses = createPluginRpcQueryAtomFamily(connectionAtomRuntime, {
   label: "environment-data:plugins",

@@ -14,9 +14,9 @@ import * as Cause from "effect/Cause";
 import { AsyncResult } from "effect/reactivity";
 
 import { connectionAtomRuntime } from "~/connection/runtime";
-import { usePrimaryEnvironmentId } from "~/state/environments";
 import { useEnvironmentQuery } from "~/state/query";
 import { useAtomCommand } from "~/state/use-atom-command";
+import { usePluginEnvironmentId } from "../pluginState";
 
 const supervisorStatus = createPluginRpcQueryAtomFamily(connectionAtomRuntime, {
   label: "environment-data:plugins:supervisor",
@@ -40,9 +40,9 @@ const budgetsRemove = createPluginRpcCommand(connectionAtomRuntime, {
   method: TELEMETRY_METHODS.budgetsRemove,
 });
 
-/** The primary environment's supervisor, as `usePluginStatuses` reads its plugins; null while loading or failed. */
+/** The supervisor of the environment `usePluginStatuses` reads; null while loading or failed. */
 export function useSupervisorStatus(): SupervisorStatus | null {
-  const environmentId = usePrimaryEnvironmentId();
+  const environmentId = usePluginEnvironmentId();
   const query = useEnvironmentQuery(
     environmentId === null ? null : supervisorStatus({ environmentId, input: {} }),
   );
@@ -58,9 +58,9 @@ export function lastHeartbeat(status: SupervisorStatus | null): string | null {
     : null;
 }
 
-/** The primary environment's budgets, each with its state over every project it judges. */
+/** The Plugins page environment's budgets, each with its state over every project it judges. */
 export function useTelemetryBudgets() {
-  const environmentId = usePrimaryEnvironmentId();
+  const environmentId = usePluginEnvironmentId();
   return useEnvironmentQuery(
     environmentId === null ? null : telemetryBudgets({ environmentId, input: {} }),
   );
@@ -73,9 +73,9 @@ const noEnvironment = () =>
     ),
   );
 
-/** Saves and removes budgets on the primary environment; `canWrite` follows the settings grant. */
+/** Saves and removes budgets on the Plugins page's environment; `canWrite` follows the settings grant. */
 export function useTelemetryBudgetCommands() {
-  const environmentId = usePrimaryEnvironmentId();
+  const environmentId = usePluginEnvironmentId();
   const runSet = useAtomCommand(budgetsSet, { reportFailure: false });
   const runRemove = useAtomCommand(budgetsRemove, { reportFailure: false });
   const canWrite = useAtomValue(budgetsSet.permissionAtom(environmentId));
