@@ -222,7 +222,8 @@ export const kanbanActiveAtom = createKanbanActiveAtomFamily(connectionAtomRunti
 
 /**
  * Bumped after a write that may have started a board or moved one (a project's first card, or a
- * new folder), so `kanbanBoardEnvironments` reads the projects' board folders again.
+ * new folder), and every 30 seconds while the board shows, for a board another client or an agent
+ * started, so `kanbanBoardEnvironments` reads the projects' board folders again.
  */
 export const kanbanBoardsChanged = Atom.make(0).pipe(Atom.keepAlive);
 

@@ -33,7 +33,15 @@ import {
   SquareKanbanIcon,
   UserRoundCheckIcon,
 } from "lucide-react";
-import { memo, useCallback, useMemo, useState, type CSSProperties, type FormEvent } from "react";
+import {
+  memo,
+  useCallback,
+  useEffect,
+  useMemo,
+  useState,
+  type CSSProperties,
+  type FormEvent,
+} from "react";
 
 import {
   WorkspaceBreadcrumb,
@@ -75,7 +83,9 @@ import {
   boardFanOut,
   boardFolder,
   boardProjectKey,
+  decisionsViewProjects,
   decisionsViewSearch,
+  linkedOutsideScope,
   pickBoardProject,
   scopedBoardProjects,
   subscribedBoards,
@@ -98,8 +108,9 @@ import {
 
 export interface BoardSearch {
   /**
-   * With `projectId`, the project in hand: the open issue's, the decisions view's, and the default
-   * for a new card. Which projects the board shows is the sidebar's project scope.
+   * With `projectId`, the project in hand: the open issue's and the decisions view's, even outside
+   * the sidebar's project scope, and the default for a new card. Which projects the columns show
+   * is the scope.
    */
   readonly environmentId?: EnvironmentId;
   readonly projectId?: ProjectId;
@@ -527,12 +538,29 @@ export function BoardPage({ search }: { readonly search: BoardSearch }) {
     }
     setLastUsed(ref);
   }, []);
-  const inHand =
-    search.environmentId !== undefined && search.projectId !== undefined
-      ? { environmentId: search.environmentId, projectId: search.projectId }
-      : null;
+  const inHand = useMemo(
+    () =>
+      search.environmentId !== undefined && search.projectId !== undefined
+        ? { environmentId: search.environmentId, projectId: search.projectId }
+        : null,
+    [search.environmentId, search.projectId],
+  );
   const newCardProject = pickBoardProject(writable, inHand, lastUsed);
-  const viewProject = pickBoardProject(shown, inHand, lastUsed);
+  // The decisions view shows the URL's project even outside the scope, read on its own so the
+  // scope's read stays as it is and the project's board is subscribed only if it has one.
+  const outside = useMemo(
+    () =>
+      search.view === "decisions" ? linkedOutsideScope(groups, projects, scoped, inHand) : null,
+    [groups, inHand, projects, scoped, search.view],
+  );
+  const outsideEnvironments = useAtomValue(
+    kanbanBoardEnvironments(outside === null ? [] : [outside]),
+  );
+  const viewProjects = useMemo(
+    () => decisionsViewProjects(shown, outside, outsideEnvironments),
+    [outside, outsideEnvironments, shown],
+  );
+  const viewProject = pickBoardProject(viewProjects, inHand, lastUsed);
   const viewSearch =
     viewProject === null
       ? { category: undefined, decision: undefined }
@@ -541,7 +569,12 @@ export function BoardPage({ search }: { readonly search: BoardSearch }) {
   const panelProject = inHand ?? viewProject;
   // Keyed by the refs, so a new list with the same projects keeps the same subscriptions.
   const subscribedOnes = useAtomValue(
-    kanbanBoards(subscribedBoards(shown, search.issue === undefined ? null : panelProject)),
+    kanbanBoards(
+      subscribedBoards(
+        search.view === "decisions" ? viewProjects : shown,
+        search.issue === undefined ? null : panelProject,
+      ),
+    ),
   );
   // The columns show only the scope's boards; the open issue's own project only feeds its panel.
   const boards = useMemo(
@@ -577,6 +610,14 @@ export function BoardPage({ search }: { readonly search: BoardSearch }) {
   const write = useAtomCommand(kanbanWrite, { reportFailure: false });
   const bumpBoards = useAtomSet(kanbanBoardsChanged);
   const boardsChanged = useCallback(() => bumpBoards((count) => count + 1), [bumpBoards]);
+  // Nothing pushes a board that another client or an agent starts, so while the board shows,
+  // re-read which projects have one every 30 seconds. The boards themselves stay live on their own.
+  useEffect(() => {
+    const timer = setInterval(() => {
+      if (document.visibilityState === "visible") boardsChanged();
+    }, 30_000);
+    return () => clearInterval(timer);
+  }, [boardsChanged]);
 
   const cards = useMemo(
     () =>
@@ -841,10 +882,11 @@ export function BoardPage({ search }: { readonly search: BoardSearch }) {
               }
               canWrite={canWriteView}
               projectSelect={
-                shown.length > 1 ? (
+                // It also names a project outside the scope, which the breadcrumb does not.
+                viewProjects.length > 1 || (outside !== null && viewProject === outside) ? (
                   <ProjectSelect
                     className="w-56 min-w-0"
-                    projects={shown}
+                    projects={viewProjects}
                     value={viewProject}
                     onChange={(project) => {
                       remember(project);

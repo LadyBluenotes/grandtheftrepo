@@ -111,9 +111,50 @@ export function boardFolder(
     ?.folders?.find((folder) => folder.projectId === ref.projectId);
 }
 
+const sameRef = (left: ScopedProjectRef) => (right: ScopedProjectRef) =>
+  left.environmentId === right.environmentId && left.projectId === right.projectId;
+
 /**
- * The boards the page subscribes to: every shown board, and, while an issue is open, its project's,
- * which the URL can name outside the scope, so its panel has the project's categories and tickets.
+ * The project the URL names when the scope leaves it out, labelled as in the unscoped board; null
+ * when the URL names none, one in the scope, or one this client does not know. A link or "Find
+ * decision" names it, so the decisions view shows it as the issue panel does, without changing the
+ * scope; the columns keep to the scope.
+ */
+export function linkedOutsideScope(
+  groups: ReadonlyArray<SidebarProjectSnapshot>,
+  projects: ReadonlyArray<Pick<Project, "environmentId" | "id" | "workspaceRoot">>,
+  scoped: ReadonlyArray<BoardProject>,
+  linked: ScopedProjectRef | null,
+): BoardProject | null {
+  if (linked === null || scoped.some(sameRef(linked))) return null;
+  return scopedBoardProjects(groups, null, projects).find(sameRef(linked)) ?? null;
+}
+
+/**
+ * What the decisions view picks from: the shown boards, then the URL's project outside the scope
+ * once its own read, `outsideEnvironments`, says it has a board, since reading its decisions loads
+ * its board. Nothing until that read answers, so the view does not show another project first.
+ */
+export function decisionsViewProjects(
+  shown: ReadonlyArray<BoardProject>,
+  outside: BoardProject | null,
+  outsideEnvironments: ReadonlyArray<BoardEnvironment>,
+): ReadonlyArray<BoardProject> {
+  if (outside === null) return shown;
+  const unknown = outsideEnvironments.some(
+    ({ active, folders, error }) =>
+      active === null || (active && folders === null && error === null),
+  );
+  if (unknown) return [];
+  return boardFanOut([outside], outsideEnvironments).shown.length === 0
+    ? shown
+    : [...shown, outside];
+}
+
+/**
+ * The boards the page subscribes to: every board the view shows, and, while an issue is open, its
+ * project's, which the URL can name outside the scope, so its panel has the project's categories
+ * and tickets.
  */
 export function subscribedBoards(
   shown: ReadonlyArray<BoardProject>,

@@ -5,7 +5,9 @@ import { buildSidebarProjectSnapshots } from "~/sidebarProjectGrouping";
 import type { Project } from "~/types";
 import {
   boardFanOut,
+  decisionsViewProjects,
   decisionsViewSearch,
+  linkedOutsideScope,
   pickBoardProject,
   projectIdsByEnvironment,
   scopedBoardProjects,
@@ -204,6 +206,68 @@ describe("decisionsViewSearch", () => {
     expect(
       decisionsViewSearch({ category: "auth", decision: "auth/use-oauth" }, here),
     ).toStrictEqual(none);
+  });
+});
+
+describe("decisionsViewProjects", () => {
+  const ref = (p: Project) => ({ environmentId: p.environmentId, projectId: p.id });
+  // The sidebar is scoped to the group of A; the URL names B, as "Find decision" in a thread of B
+  // or a recorded decision's link does.
+  const scoped = scopedBoardProjects(groups, keyOf("app"), projects);
+  const shown = scoped.filter((p) => p.projectId === appHere.id);
+  const link = { ...ref(notes), view: "decisions" as const, decision: "auth/use-oauth" };
+  const outside = linkedOutsideScope(groups, projects, scoped, link);
+  const notesRead = (board: boolean) => [
+    {
+      environmentId: local,
+      active: true,
+      folders: [{ projectId: notes.id, directory: "/wiki/notes", board }],
+      error: null,
+    },
+  ];
+
+  it("shows the URL's project outside the scope, with its open decision, once it has a board", () => {
+    const options = decisionsViewProjects(shown, outside, notesRead(true));
+    expect(refs(options)).toEqual(["env-local/app-here", "env-local/notes"]);
+    const view = pickBoardProject(options, ref(notes));
+    expect(view?.projectId).toBe(notes.id);
+    expect(decisionsViewSearch(link, view!)).toStrictEqual({
+      category: undefined,
+      decision: "auth/use-oauth",
+    });
+  });
+
+  it("keeps to the scope's boards when that project has no board or its read fails", () => {
+    expect(decisionsViewProjects(shown, outside, notesRead(false))).toBe(shown);
+    expect(
+      decisionsViewProjects(shown, outside, [
+        { environmentId: local, active: true, folders: null, error: "offline" },
+      ]),
+    ).toBe(shown);
+  });
+
+  it("shows no project until that project's read answers, rather than another one first", () => {
+    expect(
+      decisionsViewProjects(shown, outside, [
+        { environmentId: local, active: true, folders: null, error: null },
+      ]),
+    ).toEqual([]);
+    expect(
+      decisionsViewProjects(shown, outside, [
+        { environmentId: local, active: null, folders: null, error: null },
+      ]),
+    ).toEqual([]);
+  });
+
+  it("adds nothing for a URL project in the scope, an unknown one, or none", () => {
+    expect(linkedOutsideScope(groups, projects, scoped, ref(appThere))).toBeNull();
+    expect(
+      linkedOutsideScope(groups, projects, scoped, {
+        environmentId: local,
+        projectId: ProjectId.make("gone"),
+      }),
+    ).toBeNull();
+    expect(linkedOutsideScope(groups, projects, scoped, null)).toBeNull();
   });
 });
 
