@@ -1,6 +1,8 @@
 import {
   EventId,
+  LEARNING_PROVIDER_FAILURE_KINDS,
   type LearningCorrection,
+  type LearningCorrectionDeclareInput,
   type LearningCorrectionsInput,
   type LearningDeclaredMode,
   LearningError,
@@ -110,6 +112,23 @@ export const countDeclared = (input: {
         AND created_at >= ${input.from} AND created_at < ${input.to}`,
   ).pipe(Effect.map((rows) => rows[0]?.n ?? 0));
 
+/**
+ * Per project, how many corrections the classify sweep left `unclassified` that are no provider
+ * failure, created at or after `from` and at or before `before`, ISO instants. One the sweep has
+ * not read yet is left out, since it may still get a mode. The unclassified sweep flags them; it
+ * has no gateway method.
+ */
+export const countUnclassified = (input: { readonly from: string; readonly before: string }) =>
+  Effect.flatMap(
+    SqlClient.SqlClient,
+    (sql) => sql<{ readonly project_id: ProjectId; readonly n: number }>`
+      SELECT project_id, COUNT(*) AS n FROM corrections
+      WHERE classified_at IS NOT NULL AND cause_class = 'unclassified'
+        AND failure_kind NOT IN ${sql.in([...LEARNING_PROVIDER_FAILURE_KINDS])}
+        AND created_at >= ${input.from} AND created_at <= ${input.before}
+      GROUP BY project_id ORDER BY project_id`,
+  );
+
 export class CorrectionStore extends Context.Service<
   CorrectionStore,
   {
@@ -134,6 +153,14 @@ export class CorrectionStore extends Context.Service<
       input: LearningCorrectionsInput,
     ) => Effect.Effect<ReadonlyArray<LearningCorrection>, LearningError>;
     readonly get: (id: number) => Effect.Effect<LearningCorrection, LearningError>;
+    /**
+     * Declares the review failure mode of a correction that has none and marks it unread, so the next classify
+     * sweep makes it evidence on that mode's item. A provider failure, or a correction that already
+     * declares a mode, is refused.
+     */
+    readonly declare: (
+      input: LearningCorrectionDeclareInput,
+    ) => Effect.Effect<LearningCorrection, LearningError>;
     /** The correction stored under `(failureKind, sourceKey)`, or undefined when there is none. */
     readonly findBySourceKey: (
       failureKind: LearningFailureKind,
@@ -216,7 +243,26 @@ const make = Effect.gen(function* () {
       Effect.catch(io),
     );
 
-  return CorrectionStore.of({ record, recordForProject, list, get, findBySourceKey });
+  const declare: CorrectionStore["Service"]["declare"] = ({ id, declaredMode }) =>
+    Effect.gen(function* () {
+      const at = DateTime.formatIso(yield* DateTime.now);
+      const [declared] = yield* sql<Row>`UPDATE corrections
+        SET declared_mode = ${declaredMode}, classified_at = NULL, classification_reason = NULL,
+          updated_at = ${at}
+        WHERE id = ${id} AND declared_mode IS NULL
+          AND failure_kind NOT IN ${sql.in([...LEARNING_PROVIDER_FAILURE_KINDS])}
+        RETURNING *`.pipe(Effect.catch(io));
+      if (declared !== undefined) return toCorrection(declared);
+      const current = yield* get(id);
+      return yield* new LearningError({
+        code: "invalid",
+        message: LEARNING_PROVIDER_FAILURE_KINDS.has(current.failureKind)
+          ? `Correction ${id} is a provider failure, which says nothing about the work, so it takes no mode.`
+          : `Correction ${id} already declares ${current.declaredMode}.`,
+      });
+    });
+
+  return CorrectionStore.of({ record, recordForProject, list, get, findBySourceKey, declare });
 });
 
 export const layer = Layer.effect(CorrectionStore, make);

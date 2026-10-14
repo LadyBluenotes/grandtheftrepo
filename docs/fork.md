@@ -35,14 +35,16 @@ the `supervisor.json` interval, in registry order, and records each tick in `plu
 `supervisor.status` reads the latest.
 
 A sweep that finds something waiting on a person raises a flag with `Attention.raise` and clears it
-with `Attention.clear` once the cause is gone. Flags live in the host's `attention` table in that
-same file, so any plugin can raise one without depending on the plugin that shows them. The strip
-above the kanban board and a project's weekly report list a flag whose key is not a thread when the
-key ends in `:<projectId>`, has the project id between colons, or starts with `policy:*:`
-(`plugins/attentionKeys.ts`); a flag keyed by none of these is on no board and in no report. A
-flag's resume action leads to its thread, the board, the Plugins page, or a plugin's screen on the
-board's project with an optional tab and record (`AttentionResumeAction`); mobile has no plugin
-screens, so there a row with a plugin target stays on the board.
+with `Attention.clear` once the cause is gone; `Attention.reconcile` does both for a plugin's flags
+of one kind and skips a flag whose text is unchanged, so a tick that finds nothing new writes
+nothing. Flags live in the host's `attention` table in that same file, so any plugin can raise one
+without depending on the plugin that shows them. The strip above the kanban board and a project's
+weekly report list a flag whose key is not a thread when the key ends in `:<projectId>`, has the
+project id between colons, or starts with `policy:*:` (`plugins/attentionKeys.ts`); a flag keyed by
+none of these is on no board and in no report. A flag's resume action leads to its thread, the
+board, the Plugins page, or a plugin's screen on the board's project with an optional tab and record
+(`AttentionResumeAction`); mobile has no plugin screens, so there a row with a plugin target stays
+on the board.
 
 A plugin says what it needs to do its work through `ServerPlugin.readiness`: checks, each `ready`,
 `attention` or `off`, with one sentence and where a person fixes it. `PluginHost.readiness` runs
@@ -130,7 +132,12 @@ them half-evaluated. The host hands `toolkitRegistration` to `ServerPlugin.mcp` 
   `closureCheck`, which every new issue does; files from before have none and stay exempt. A
   settled or merged thread's card failing it gets a `closure_held` flag, keyed
   `closure:<projectId>:<issueId>`, instead of Done, and the `closure` sweep clears it once the card
-  passes.
+  passes. The `findings` sweep keeps one `unowned_finding` flag per project, keyed
+  `findings:<projectId>`, counting the findings with no review on its unarchived Triage cards
+  captured three or more days ago: a finding's reviewer owns it, so any review takes it off the
+  count. It reads every project through `KanbanStore.issues`, which reads a board that is not
+  loaded once from its issue files and leaves it unloaded: no folder, watcher or archiving, so a
+  tick costs no retained board and a dry run changes nothing.
   `kanban.attention.list` feeds the strip above the board from the project's open host
   flags, its threads' pending questions and permission requests, and, while routing runs, its
   routing mismatches. The thread header's decision count reads `kanban.listDecisions` with
@@ -287,7 +294,14 @@ them half-evaluated. The host hands `toolkitRegistration` to `ServerPlugin.mcp` 
   committed event and `host_reactor_failure` is empty. A person setting the item's disposition
   after the adoption answers the flag, so none is raised, and the next tick clears one that is
   open, as it does once the record is rolled back; the sweep never closes or reroutes an item, and
-  never judges `local_only`. Server:
+  never judges `local_only`. The `unclassified` sweep runs after classify and keeps one
+  `unowned_finding` flag per project, keyed `corrections:<projectId>`, counting the corrections
+  classify left `unclassified`, provider failures aside, that are seven days old and still in the
+  Corrections tab's 90-day window, which ends at the next hour, so a counted one can always be
+  declared there.
+  `learning.correctionDeclare` (MCP `learning_correction_declare`, and the Corrections tab)
+  declares a review failure mode, never `security`, for one that has none and clears its
+  classified mark, so the next tick classifies it before the count. Server:
   `apps/server/src/plugins/learning/`. Contracts:
   `packages/contracts/src/plugins/learning.ts` and `prompts.ts`. Web: `apps/web/src/plugins/learning/`, the Learning screen at `/plugins/learning` with the items, corrections, prompts and reviews of a project; `recordId` opens an item, or a prompt on the prompts tab. No mobile screen, and the mobile composer does not list prompts. User guide: [Learning](./user/learning.md).
 - **policy**: reviewed working rules per project (`*` is the whole environment), versioned in the

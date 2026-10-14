@@ -23,6 +23,7 @@ import * as PromptStore from "./prompts/PromptStore.ts";
 import * as Checks from "./readiness.ts";
 import * as RegressionSweep from "./regressions/RegressionSweep.ts";
 import * as ReviewSweep from "./ReviewSweep.ts";
+import * as UnclassifiedSweep from "./UnclassifiedSweep.ts";
 
 /** Every producer's handlers, run by one reactor from the first event the server ever committed. */
 export const handlers = {
@@ -51,6 +52,8 @@ const start = Effect.gen(function* () {
   yield* supervisor.register(yield* RegressionSweep.sweep);
   // A verdict is permanent, so the outcome sweep waits for the reactor that records corrections.
   yield* supervisor.register(yield* OutcomeSweep.sweep(reactor.drain));
+  // After classify, so a mode declared since the last tick is classified before it is counted.
+  yield* supervisor.register(yield* UnclassifiedSweep.sweep);
 }).pipe(Effect.orDie);
 
 /**
@@ -63,12 +66,13 @@ const start = Effect.gen(function* () {
  * project, and hand each item once to the owner kind the rules or a person
  * picked, as a draft someone other than its proposer reviews; a third flags
  * each handover waiting for that review, a fourth opens an item for each
- * efficiency measure that worsened from one week to the next, and a fifth flags
+ * efficiency measure that worsened from one week to the next, a fifth flags
  * an adopted handover whose failure mode kept recurring, or went quiet, in the
- * four weeks after its adoption. MCP tools expose corrections and items to
- * agents, and take an agent's verdict on a handover. It also keeps each
- * project's prompt library, saved prompts and workflows that agents search and
- * propose to over MCP and people manage on the Learning screen.
+ * four weeks after its adoption, and a sixth flags corrections left without a
+ * mode for a week. MCP tools expose corrections and items to agents, and take
+ * an agent's verdict on a handover. It also keeps each project's prompt
+ * library, saved prompts and workflows that agents search and propose to over
+ * MCP and people manage on the Learning screen.
  */
 export const plugin = {
   id: "learning",

@@ -36,11 +36,13 @@ you can unarchive or delete an archived card.
 A strip above the columns lists what in the project is waiting on you, oldest first: questions and
 permission requests agents are waiting on, and flags other plugins raise, such as two agents
 writing the project at once, a stale review, a budget breach, a conflicted decision, a card held
-back from Done, a policy block or knowledge file that was edited or deleted outside T3 Code, or a
-thread that ran another model than routing recommended in the past seven days. A policy for the
-whole environment affects every project, so its flag is on every board. Each row names its thread,
-or the project for a budget, a decision, a held card, or a policy or knowledge file, and has a
-button that takes you there, or to the Plugins page for those.
+back from Done, a policy block or knowledge file that was edited or deleted outside T3 Code, a
+thread that ran another model than routing recommended in the past seven days,
+[findings](#findings) nobody took on, or [corrections](./learning.md#corrections) left without a
+failure mode. A policy for the whole environment affects every project, so its flag is on every
+board. Each row names its thread, or the project for a flag about the whole project, and has a
+button that takes you to the thread, the board, the Plugins page, or a plugin's screen, such as
+Learning's Corrections tab.
 Rows cannot be dismissed: a row leaves on its own once its request is answered or its cause clears.
 Requests on settled or archived threads are not listed. A new flag shows up when you come back to
 the window or the board changes, and the strip is hidden while nothing waits.
@@ -112,6 +114,11 @@ someone reviews it), how far it was confirmed, the evidence, and the thread it w
 rejected or won't fix. Picking open again reopens it. The agent that recorded a finding cannot
 review it; you or another agent do. **Move** puts a finding on the right card, or on a new Triage
 card of its own if it has none. The card it leaves stays where it is.
+
+Whoever reviews a finding owns it. A finding on a card in Triage that nobody has reviewed three
+days after it was recorded is flagged under [Waiting on you](#waiting-on-you), one row for the
+project with the count. Any review takes a finding on, and the row updates or leaves on the next
+sweep.
 
 ## On mobile
 
