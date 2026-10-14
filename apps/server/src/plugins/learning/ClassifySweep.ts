@@ -12,7 +12,8 @@ const BATCH = 500;
  * Classifies corrections nothing has looked at yet. A correction with a failure mode becomes
  * evidence on its project's item for that mode, keyed by the correction, and takes the mode as
  * its cause class; the others stay `unclassified` with the reason. Every one is marked, so none is
- * read twice. A dry run counts and writes nothing.
+ * read twice, unless a mode was declared for it while the run held it: that one is left unread, and
+ * the next run classifies it with the mode. A dry run counts and writes nothing.
  */
 export const sweep = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
@@ -47,10 +48,11 @@ export const sweep = Effect.gen(function* () {
             row.description,
           );
         }
+        // Only the mode it read: a mode declared since then stays unread for the next run.
         yield* sql`UPDATE corrections
           SET cause_class = ${failureMode ?? "unclassified"}, classification_reason = ${reason},
             classified_at = ${at}, updated_at = ${at}
-          WHERE id = ${row.id}`;
+          WHERE id = ${row.id} AND declared_mode IS ${row.declared_mode}`;
       }
       return { examined: rows.length, acted, flags: 0 };
     });

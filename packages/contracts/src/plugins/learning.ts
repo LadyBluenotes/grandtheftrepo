@@ -8,6 +8,7 @@ const LEARNING_WS_METHODS = {
   items: "learning.items",
   item: "learning.item",
   itemsSetDisposition: "learning.itemsSetDisposition",
+  correctionDeclare: "learning.correctionDeclare",
   promotionReview: "learning.promotionReview",
   promotionRollBack: "learning.promotionRollBack",
 } as const;
@@ -23,6 +24,15 @@ export const LearningFailureKind = Schema.Literals([
   "manual",
 ]);
 export type LearningFailureKind = typeof LearningFailureKind.Type;
+
+/**
+ * Kinds a provider's runtime reports. A failed turn says nothing about how the work was judged, so
+ * it stays unclassified and no mode can be declared for it.
+ */
+export const LEARNING_PROVIDER_FAILURE_KINDS: ReadonlySet<LearningFailureKind> = new Set([
+  "provider_turn_failed",
+  "provider_turn_interrupted",
+]);
 
 /** The six failure modes a reviewer declares on a verdict. */
 export const ReviewFailureMode = Schema.Literals([
@@ -218,6 +228,17 @@ export type LearningCorrectionsInput = typeof LearningCorrectionsInput.Type;
 export const LearningCorrectionInput = Schema.Struct({ id: Schema.Int });
 export type LearningCorrectionInput = typeof LearningCorrectionInput.Type;
 
+/**
+ * Declares the review failure mode of a correction that has none, so the next classify sweep makes
+ * it evidence on that mode's item. `security` is the scan's to name, not a person's. A provider
+ * failure, or a correction that already declares a mode, is refused.
+ */
+export const LearningCorrectionDeclareInput = Schema.Struct({
+  id: Schema.Int,
+  declaredMode: ReviewFailureMode,
+});
+export type LearningCorrectionDeclareInput = typeof LearningCorrectionDeclareInput.Type;
+
 /** A project's items, most recently updated first, narrowed to one state when given. */
 export const LearningItemsInput = Schema.Struct({
   projectId: ProjectId,
@@ -300,6 +321,13 @@ export const LEARNING_METHODS = definePluginMethods({
     gateway: "operate",
     input: LearningItemsSetDispositionInput,
     output: LearningItem,
+    error: LearningError,
+  },
+  correctionDeclare: {
+    method: LEARNING_WS_METHODS.correctionDeclare,
+    gateway: "operate",
+    input: LearningCorrectionDeclareInput,
+    output: LearningCorrection,
     error: LearningError,
   },
   /** A client's verdict is a person's (`user`); agents give theirs with `learning_promotion_review`. */

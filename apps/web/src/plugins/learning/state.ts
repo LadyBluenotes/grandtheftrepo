@@ -9,6 +9,7 @@ import {
   REVIEW_METHODS,
   type EnvironmentId,
   type LearningCorrection,
+  type LearningCorrectionDeclareInput,
   type LearningDeclaredMode,
   type LearningFailureKind,
   type LearningItem,
@@ -22,6 +23,7 @@ import {
   type LearningPromotionState,
   type PluginStatus,
   type ProjectId,
+  type ReviewFailureMode,
   type ReviewOutcome,
   type ReviewRequest,
   type ThreadId,
@@ -77,6 +79,11 @@ const reviewRequests = createPluginRpcQueryAtomFamily(connectionAtomRuntime, {
 const learningSetDisposition = createPluginRpcCommand(connectionAtomRuntime, {
   label: "learning:set-disposition",
   method: LEARNING_METHODS.itemsSetDisposition,
+});
+
+const learningCorrectionDeclare = createPluginRpcCommand(connectionAtomRuntime, {
+  label: "learning:correction-declare",
+  method: LEARNING_METHODS.correctionDeclare,
 });
 
 const learningPromotionReview = createPluginRpcCommand(connectionAtomRuntime, {
@@ -165,6 +172,16 @@ export function useLearningSetDisposition(environmentId: EnvironmentId) {
   };
 }
 
+/** Declares a correction's mode on `environmentId`; `canWrite` follows its grant. */
+export function useLearningCorrectionDeclare(environmentId: EnvironmentId) {
+  const run = useAtomCommand(learningCorrectionDeclare, { reportFailure: false });
+  const canWrite = useAtomValue(learningCorrectionDeclare.permissionAtom(environmentId));
+  return {
+    canWrite,
+    declare: (input: LearningCorrectionDeclareInput) => run({ environmentId, input }),
+  };
+}
+
 /**
  * A person's verdict on a promotion in review, and their rollback of an adopted one, on
  * `environmentId`; both are operate methods, so one grant covers them.
@@ -242,13 +259,18 @@ export const FAILURE_KIND_LABEL: Record<LearningFailureKind, string> = {
   manual: "Manual",
 };
 
-export const DECLARED_MODES = [
+/** The modes a person can declare on a correction; `security` is the scan's to name. */
+export const REVIEW_MODES = [
   "defect",
   "incomplete",
   "scope_drift",
   "missing_verification",
   "convention",
   "unclear_spec",
+] as const satisfies ReadonlyArray<ReviewFailureMode>;
+export const isReviewMode = oneOf(REVIEW_MODES);
+export const DECLARED_MODES = [
+  ...REVIEW_MODES,
   "security",
 ] as const satisfies ReadonlyArray<LearningDeclaredMode>;
 export const isDeclaredMode = oneOf(DECLARED_MODES);

@@ -154,6 +154,7 @@ it.effect(
         expect(tools).toContain('"learning_corrections"');
         expect(tools).toContain('"learning_correction"');
         expect(tools).toContain('"learning_correction_add"');
+        expect(tools).toContain('"learning_correction_declare"');
         expect(tools).toContain('"learning_items"');
         expect(tools).toContain('"learning_item"');
         expect(tools).toContain('"learning_promotion_review"');
@@ -234,6 +235,45 @@ it.effect(
         );
         expect(item.evidence.map((e) => e.evidenceKey)).toEqual([`correction:${added.id}`]);
         expect(item.promotions).toEqual([]);
+
+        // A correction recorded without a mode gets one declared later, and counts toward its item.
+        const bare = decodeCorrection(
+          resultText(
+            yield* rpc(9, "tools/call", {
+              name: "learning_correction_add",
+              arguments: { threadId: "thread-1", description: "Missed the second caller." },
+            }),
+          ),
+        );
+        yield* classify.run({ dryRun: false });
+        const declare = (id: number) =>
+          rpc(10, "tools/call", {
+            name: "learning_correction_declare",
+            arguments: { id, declaredMode: "incomplete" },
+          });
+        // `security` is the scan's to name, so a person or agent declaring it is refused.
+        const security = yield* rpc(10, "tools/call", {
+          name: "learning_correction_declare",
+          arguments: { id: bare.id, declaredMode: "security" },
+        });
+        expect(JSON.parse(security)).toMatchObject({ error: { code: -32602 } });
+        const declared = decodeCorrection(resultText(yield* declare(bare.id)));
+        expect([declared.declaredMode, declared.classifiedAt]).toEqual(["incomplete", null]);
+        expect(JSON.parse(resultText(yield* declare(bare.id)))).toMatchObject({
+          message: `Correction ${bare.id} already declares incomplete.`,
+        });
+        yield* classify.run({ dryRun: false });
+        const strengthened = decodeItemDetail(
+          resultText(
+            yield* rpc(11, "tools/call", {
+              name: "learning_item",
+              arguments: { id: items[0]!.id },
+            }),
+          ),
+        );
+        expect(strengthened.evidence.map((e) => e.evidenceKey).toSorted()).toEqual(
+          [`correction:${added.id}`, `correction:${bare.id}`].toSorted(),
+        );
       }),
     ).pipe(
       Effect.provide(
