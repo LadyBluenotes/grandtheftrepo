@@ -23,6 +23,7 @@ const AttentionKind = Schema.Literals([
   "promotion_settled",
   "decision_conflict",
   "promotion_review",
+  "closure_held",
   "deterministic_proposals",
 ]);
 type AttentionKind = typeof AttentionKind.Type;

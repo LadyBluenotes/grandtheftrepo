@@ -35,13 +35,14 @@ you can unarchive or delete an archived card.
 
 A strip above the columns lists what in the project is waiting on you, oldest first: questions and
 permission requests agents are waiting on, and flags other plugins raise, such as two agents
-writing the project at once, a stale review, a budget breach, a conflicted decision, a policy block
-or knowledge file that was edited or deleted outside T3 Code, a thread that ran another model than
-routing recommended in the past seven days, [findings](#findings) nobody took on, or
-[corrections](./learning.md#corrections) left without a failure mode. A policy for the whole
-environment affects every project, so its flag is on every board. Each row names its thread, or the
-project for a flag about the whole project, and has a button that takes you to the thread, the
-board, the Plugins page, or a plugin's screen, such as Learning's Corrections tab.
+writing the project at once, a stale review, a budget breach, a conflicted decision, a card held
+back from Done, a policy block or knowledge file that was edited or deleted outside T3 Code, a
+thread that ran another model than routing recommended in the past seven days,
+[findings](#findings) nobody took on, or [corrections](./learning.md#corrections) left without a
+failure mode. A policy for the whole environment affects every project, so its flag is on every
+board. Each row names its thread, or the project for a flag about the whole project, and has a
+button that takes you to the thread, the board, the Plugins page, or a plugin's screen, such as
+Learning's Corrections tab.
 Rows cannot be dismissed: a row leaves on its own once its request is answered or its cause clears.
 Requests on settled or archived threads are not listed. A new flag shows up when you come back to
 the window or the board changes, and the strip is hidden while nothing waits.
@@ -57,6 +58,12 @@ a note at the bottom of the log.
 as they hold, and the card cannot move to Done while one is open, whether you drag it or a thread
 settles. A new thread started from the card sees the checklist. The **tier** (cheap, standard,
 strong) records the model class you expect the work to need.
+
+Done also needs the call behind the work: a [decision](#decisions) about the card, or a reason no
+decision was needed, written under **Decisions** in its panel (empty the field to take it back).
+And none of its [findings](#findings) may still be open. When a thread settles or a pull request
+merges on a card missing either, the card stays put and [Waiting on you](#waiting-on-you) says
+what is missing until it is there. Cards created before this check came in are exempt.
 
 Create a card with the **+** in a column header. Cards you create start in that column; cards an
 agent files start in Triage.
@@ -136,13 +143,14 @@ refused; checking a spec you wrote still works.
 
 Agents reach the board through ten MCP tools. `kanban_list` lists issues or decisions, or one of
 them in full. `kanban_write` files an issue, moves it, adds a note, blocks it when it needs you,
-links the calling thread, or records, changes or supersedes a decision; an agent must say why, and
-cannot delete one. Agent-filed issues land in Triage. `kanban_decisions` searches decisions by their
-words. `kanban_stop` sets or clears the emergency stop. `finding_search`, `finding_capture`,
-`finding_review` and `finding_move` work with [findings](#findings); a capture needs a search the
-same thread made in the last 30 minutes, and each search allows one capture. Agents are told to
-record a decision whenever they choose one approach over another, and a finding whenever they find
-a problem outside their task, without being asked.
+links the calling thread, says why it needed no decision, or records, changes or supersedes a
+decision; an agent must say why, and cannot delete one. Agent-filed issues land in Triage.
+`kanban_decisions` searches decisions by their words. `kanban_stop` sets or clears the emergency
+stop. `finding_search`, `finding_capture`, `finding_review` and `finding_move` work with
+[findings](#findings); a capture needs a search the same thread made in the last 30 minutes, and
+each search allows one capture. Agents are told to record a decision whenever they choose one
+approach over another, and a finding whenever they find a problem outside their task, without being
+asked.
 
 Under the last reply of a turn, **Recorded this turn** lists what the agent recorded during it:
 decisions, findings, corrections, knowledge pages and prompts, each with the state it had then.

@@ -1,4 +1,4 @@
-import type { OrchestrationV2DomainEvent } from "@t3tools/contracts";
+import type { OrchestrationV2DomainEvent, ProjectId, ThreadId } from "@t3tools/contracts";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -8,6 +8,7 @@ import * as Stream from "effect/Stream";
 import * as ThreadManagementService from "../../orchestration-v2/ThreadManagementService.ts";
 import { forkParked } from "../../serverActivation.ts";
 import * as AttentionService from "./AttentionService.ts";
+import * as ClosureSweep from "./ClosureSweep.ts";
 import * as DecisionSweep from "./DecisionSweep.ts";
 import * as FindingService from "./findings/FindingService.ts";
 import * as UnownedSweep from "./findings/UnownedSweep.ts";
@@ -21,23 +22,32 @@ import * as WriterSweep from "./WriterSweep.ts";
 /**
  * Status follows linked work, forward only: a thread starting moves its card to
  * In Progress, a finished turn to In Review, a merged pull request or settled
- * thread to Done. Cards in Triage or Inbox never move on their own. The writers
- * sweep watches for two agents writing the same project, the decisions sweep for conflicted
- * decisions, and the findings sweep for Triage findings nobody owns.
+ * thread to Done. Cards in Triage or Inbox never move on their own, and a card failing the
+ * closure check gets a flag instead of Done. The writers sweep watches for two agents writing the
+ * same project, the decisions sweep for conflicted decisions, the closure sweep for held cards
+ * that pass, and the findings sweep for Triage findings nobody owns.
  */
 const start = Effect.gen(function* () {
   const store = yield* KanbanStore.KanbanStore;
   const threads = yield* ThreadManagementService.ThreadManagementService;
+  const hold = yield* ClosureSweep.hold;
+
+  const done = (projectId: ProjectId, threadId: ThreadId) =>
+    Effect.flatMap(store.advance(projectId, threadId, "done"), (held) =>
+      hold(projectId, held).pipe(
+        Effect.catch((cause) => Effect.logWarning("kanban: could not flag a held card", { cause })),
+      ),
+    );
 
   const advance = (event: OrchestrationV2DomainEvent) => {
     switch (event.type) {
       case "thread.created":
         return store.advance(event.payload.projectId, event.payload.id, "in_progress");
       case "thread.settled":
-        return store.advance(event.payload.projectId, event.payload.id, "done");
+        return done(event.payload.projectId, event.payload.id);
       case "thread.pull-request-synced":
         return event.payload.pullRequests?.some((link) => link.snapshot?.state === "merged")
-          ? store.advance(event.payload.projectId, event.payload.id, "done")
+          ? done(event.payload.projectId, event.payload.id)
           : Effect.void;
       case "run.updated": {
         if (event.payload.status !== "completed") return Effect.void;
@@ -61,6 +71,7 @@ const start = Effect.gen(function* () {
   // A second sweep under this plugin's own name is a defect, not a state the plugin can run in.
   yield* WriterSweep.register.pipe(Effect.orDie);
   yield* DecisionSweep.register.pipe(Effect.orDie);
+  yield* ClosureSweep.register.pipe(Effect.orDie);
   yield* UnownedSweep.register.pipe(Effect.orDie);
   yield* forkParked(
     store.sweepArchive.pipe(Effect.repeat(Schedule.spaced(Duration.hours(1))), Effect.asVoid),

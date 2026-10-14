@@ -308,6 +308,28 @@ it.effect("registers kanban tools through the plugin host and files an issue ove
       expect(yield* specGet(7)).toContain(
         "from the description: valid. The spec passed; the issue is in todo.",
       );
+      // Done names what is missing, so the agent can supply it.
+      const toDone = (id: number) =>
+        rpc(id, "tools/call", {
+          name: "kanban_write",
+          arguments: { projectId, action: "issue.move", id: "spec-me", status: "done" },
+        }).pipe(Effect.map(resultText));
+      const notDone = yield* toDone(15);
+      expect(notDone).toContain("1 acceptance criterion is still open");
+      expect(notDone).toContain("issue.noDecision");
+      yield* rpc(16, "tools/call", {
+        name: "kanban_write",
+        arguments: { projectId, action: "issue.noDecision", id: "spec-me", reason: "No choice." },
+      });
+      expect(yield* toDone(17)).not.toContain("issue.noDecision");
+      expect(
+        resultText(
+          yield* rpc(18, "tools/call", {
+            name: "kanban_list",
+            arguments: { projectId, kind: "issue", id: "spec-me" },
+          }),
+        ),
+      ).toContain("no decision needed: No choice.");
       expect(yield* specify(8)).toContain("This ticket is already admitted.");
       yield* rpc(20, "tools/call", {
         name: "kanban_write",
