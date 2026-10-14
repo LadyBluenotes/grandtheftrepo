@@ -1,6 +1,6 @@
 import * as Schema from "effect/Schema";
 import { CheckpointId, IsoDateTime, ProjectId, ThreadId } from "../baseSchemas.ts";
-import { LearningDeclaredMode, ReviewFailureMode } from "./learning.ts";
+import { ReviewFailureMode } from "./learning.ts";
 import { definePluginMethods } from "./method.ts";
 
 export const ReviewOutcome = Schema.Literals(["approve", "changes_requested"]);
@@ -38,7 +38,7 @@ export const ReviewVerdict = Schema.Struct({
   checkpointId: CheckpointId,
   outcome: ReviewOutcome,
   /** Null on `approve`. */
-  failureMode: Schema.NullOr(LearningDeclaredMode),
+  failureMode: Schema.NullOr(ReviewFailureMode),
   summary: Schema.String,
   correctionId: Schema.NullOr(Schema.Int),
   createdAt: IsoDateTime,

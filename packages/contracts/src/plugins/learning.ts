@@ -36,6 +36,8 @@ export const ReviewFailureMode = Schema.Literals([
  * The failure mode a correction declares: a review failure mode, which a reviewer, a person or a
  * reopened ticket names, or `security`, which the security scan names.
  */
+export type ReviewFailureMode = typeof ReviewFailureMode.Type;
+
 export const LearningDeclaredMode = Schema.Literals([...ReviewFailureMode.literals, "security"]);
 export type LearningDeclaredMode = typeof LearningDeclaredMode.Type;
 
