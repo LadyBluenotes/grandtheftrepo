@@ -280,7 +280,8 @@ function Column({
   const [adding, setAdding] = useState(false);
   const [title, setTitle] = useState("");
   const [picked, setPicked] = useState<BoardProject | null>(null);
-  const project = picked ?? defaultProject;
+  // A pick the scope has since dropped falls back to the default.
+  const project = pickBoardProject(projects, picked, defaultProject);
   const submit = async (event: FormEvent) => {
     event.preventDefault();
     const trimmed = title.trim();
@@ -385,7 +386,8 @@ function FolderPopover({
   const [picked, setPicked] = useState<BoardProject | null>(null);
   // Null until edited: the field shows the project's folder as last read.
   const [draft, setDraft] = useState<string | null>(null);
-  const project = picked ?? defaultProject;
+  // A pick the scope has since dropped falls back to the default.
+  const project = pickBoardProject(projects, picked, defaultProject);
   const canSave = useAtomValue(kanbanSetDirectory.permissionAtom(project?.environmentId ?? null));
   const current = project === null ? undefined : boardFolder(environments, project)?.directory;
   const value = draft ?? current ?? "";

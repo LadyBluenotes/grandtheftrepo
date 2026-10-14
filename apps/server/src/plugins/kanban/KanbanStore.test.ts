@@ -1508,6 +1508,27 @@ describe("boardFolders", () => {
     }).pipe(Effect.provide(layerTwoProjects(KanbanStore.layer))),
   );
 
+  it.effect("shows a folder two overrides reach through a symlink under one project only", () =>
+    Effect.gen(function* () {
+      const store = yield* KanbanStore.KanbanStore;
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const { baseDir } = yield* ServerConfig.ServerConfig;
+      const real = path.join(baseDir, "shared-board");
+      const link = path.join(baseDir, "shared-link");
+      yield* fs.makeDirectory(path.join(real, "issues"), { recursive: true });
+      yield* fs.symlink(real, link);
+      yield* store.setDirectory({ projectId, directory: real });
+      yield* store.setDirectory({ projectId: otherId, directory: link });
+
+      // The first by id keeps it; each keeps the folder it was given.
+      assert.deepEqual(yield* store.boardFolders([otherId, projectId]), [
+        { projectId: otherId, directory: link, board: false },
+        { projectId, directory: real, board: true },
+      ]);
+    }).pipe(Effect.provide(layerTwoProjects(KanbanStore.layer))),
+  );
+
   it.effect(
     "refuses a move to a folder that cannot be created, and keeps the board where it was",
     () =>

@@ -1205,17 +1205,28 @@ const make = Effect.gen(function* () {
       const folders = (yield* Effect.forEach(projectIds, (id) => folderOf(id, overrides), {
         concurrency: 8,
       })).filter((folder) => folder !== null);
-      // Two projects can resolve to one folder (the default is keyed by title). Its board shows
-      // under the first of them by id only, so a client showing both lists its cards once.
+      // Two projects can resolve to one folder: the default is keyed by title, and two overrides
+      // can name one folder through a symlink. Its board shows under the first of them by id only,
+      // so a client showing both lists its cards once. The key is the folder's real path when it
+      // exists; the response keeps the configured one.
+      const keys = yield* Effect.forEach(
+        folders,
+        (folder) =>
+          folder.board
+            ? fs
+                .realPath(folder.directory)
+                .pipe(Effect.orElseSucceed(() => path.resolve(folder.directory)))
+            : Effect.succeed(path.resolve(folder.directory)),
+        { concurrency: 8 },
+      );
       const owners = new Map<string, ProjectId>();
-      for (const folder of folders) {
-        const key = path.resolve(folder.directory);
-        const owner = owners.get(key);
+      folders.forEach((folder, index) => {
+        const owner = owners.get(keys[index]!);
         if (folder.board && (owner === undefined || folder.projectId < owner))
-          owners.set(key, folder.projectId);
-      }
-      return folders.map((folder) =>
-        folder.board && owners.get(path.resolve(folder.directory)) !== folder.projectId
+          owners.set(keys[index]!, folder.projectId);
+      });
+      return folders.map((folder, index) =>
+        folder.board && owners.get(keys[index]!) !== folder.projectId
           ? { ...folder, board: false }
           : folder,
       );

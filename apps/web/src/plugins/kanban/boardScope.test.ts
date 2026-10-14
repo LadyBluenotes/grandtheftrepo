@@ -176,6 +176,12 @@ describe("pickBoardProject", () => {
     ).toBe(options[0]?.projectId);
     expect(pickBoardProject([], ref(notes))).toBeNull();
   });
+
+  it("drops a pick the scope no longer covers for the default", () => {
+    // Project B picked, then the scope narrowed to the group of A.
+    const narrowed = scopedBoardProjects(groups, keyOf("app"), projects);
+    expect(pickBoardProject(narrowed, ref(notes), ref(appThere))?.projectId).toBe(appThere.id);
+  });
 });
 
 describe("decisionsCategory", () => {
