@@ -191,9 +191,11 @@ function DecisionDetails({
               <p className="text-muted-foreground">None recorded.</p>
             ) : (
               <ul className="flex flex-col gap-2">
-                {decision.alternatives.map((alternative) => (
+                {decision.alternatives.map((alternative, index) => (
                   <li
-                    key={`${alternative.title}|${alternative.disposition}`}
+                    // Alternatives have no id, and two may share a title; this list only reads them.
+                    // oxlint-disable-next-line react/no-array-index-key
+                    key={index}
                     className="flex flex-col gap-0.5"
                   >
                     <span className="flex flex-wrap items-center gap-1.5">

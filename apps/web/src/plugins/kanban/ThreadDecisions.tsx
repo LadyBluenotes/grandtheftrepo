@@ -30,8 +30,13 @@ export function ThreadDecisions({
   readonly thread: ScopedThreadRef | null;
   readonly project: { readonly id: ProjectId } | null;
 }) {
+  // Keyed by the whole scope, so moving to another thread or environment starts the drawers closed.
   return thread === null || project === null ? null : (
-    <DecisionsCount threadRef={thread} projectId={project.id} />
+    <DecisionsCount
+      key={`${thread.environmentId}:${thread.threadId}:${project.id}`}
+      threadRef={thread}
+      projectId={project.id}
+    />
   );
 }
 
@@ -49,14 +54,12 @@ function DecisionsCount({
       ? kanbanThreadDecisions({ environmentId, input: { projectId, thread: threadId } })
       : null,
   );
-  // Which thread the drawer was opened for, so moving to another thread closes it.
-  const [openFor, setOpenFor] = useState<string | null>(null);
-  const open = openFor === threadId;
+  const [open, setOpen] = useState(false);
   const count = linked.data?.length ?? 0;
   if (count === 0 && !open) return null;
   return (
     <>
-      <Button size="xs" variant="ghost-muted" onClick={() => setOpenFor(threadId)}>
+      <Button size="xs" variant="ghost-muted" onClick={() => setOpen(true)}>
         <ScaleIcon />
         Decisions ({count})
       </Button>
@@ -66,7 +69,7 @@ function DecisionsCount({
         threadRef={threadRef}
         open={open}
         onClose={() => {
-          setOpenFor(null);
+          setOpen(false);
           // An edit in the drawer reaches the count only on its next read, so read now.
           linked.refresh();
         }}

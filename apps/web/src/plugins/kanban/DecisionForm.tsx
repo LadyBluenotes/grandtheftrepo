@@ -171,10 +171,15 @@ export function DecisionForm({
     if (result._tag === "Success") onDone();
   };
 
+  // One alternative is chosen: choosing another passes over the one chosen before.
   const patchAlternative = (key: number, patch: Partial<KanbanAlternative>) =>
     setAlternatives((current) =>
       current.map((alternative) =>
-        alternative.key === key ? { ...alternative, ...patch } : alternative,
+        alternative.key === key
+          ? { ...alternative, ...patch }
+          : patch.disposition === "chosen" && alternative.disposition === "chosen"
+            ? { ...alternative, disposition: "rejected" }
+            : alternative,
       ),
     );
 
