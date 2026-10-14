@@ -130,3 +130,54 @@ const make = Effect.gen(function* () {
 });
 
 export const layer = Layer.effect(Attention, make);
+
+/**
+ * Brings `pluginId`'s open flags of `kind` in line with what a tick found. `judged` maps a flag's
+ * key to the sentence for a cause that stands, or to undefined for one that is gone; a flag is
+ * raised for the first, cleared for the second, and rewritten only when its sentence changed, so a
+ * tick that finds what the last one found writes nothing. An open flag whose key was not judged
+ * belongs to a cause the plugin no longer tracks, and is cleared, unless `leave` names it: a cause
+ * the tick could not read keeps whatever flag it had. A dry run changes nothing. `changes` counts
+ * the raises, rewrites and clears, and `standing` the flags that stand after them.
+ */
+export const reconcile = Effect.fn("Attention.reconcile")(function* (
+  attention: Attention["Service"],
+  input: {
+    readonly pluginId: string;
+    readonly kind: AttentionKind;
+    readonly resumeAction: typeof ResumeAction.Type;
+    readonly dryRun: boolean;
+    readonly judged: ReadonlyMap<string, string | undefined>;
+    readonly leave: (key: string) => boolean;
+  },
+) {
+  const open = new Map(
+    (yield* attention.listOpen({ pluginId: input.pluginId, kind: input.kind })).map((flag) => [
+      flag.threadId,
+      flag.text,
+    ]),
+  );
+  const flag = (key: string) =>
+    ({ pluginId: input.pluginId, threadId: key, kind: input.kind }) as const;
+  let changes = 0;
+  let standing = 0;
+  for (const [key, text] of input.judged) {
+    if (text !== undefined) standing += 1;
+    if (text === open.get(key)) continue;
+    changes += 1;
+    if (input.dryRun) continue;
+    yield* text === undefined
+      ? attention.clear(flag(key))
+      : attention.raise({ ...flag(key), text, resumeAction: input.resumeAction });
+  }
+  for (const key of open.keys()) {
+    if (input.judged.has(key)) continue;
+    if (input.leave(key)) {
+      standing += 1;
+      continue;
+    }
+    changes += 1;
+    if (!input.dryRun) yield* attention.clear(flag(key));
+  }
+  return { changes, standing };
+});
