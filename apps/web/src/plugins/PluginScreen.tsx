@@ -1,13 +1,37 @@
+import type { EnvironmentId } from "@t3tools/contracts";
 import { Link } from "@tanstack/react-router";
 import { Suspense } from "react";
 
 import { PLUGINS_UNSUPPORTED, pluginScreenView } from "./pluginRoute";
-import { usePluginStatuses } from "./pluginState";
+import { PluginEnvironmentContext, usePluginStatuses } from "./pluginState";
 import { PluginNotice, PluginPageShell } from "./PluginsPage";
 import { pluginRegistry } from "./registry";
 
-/** `/plugins/<id>`: the plugin's own screen, or one line saying why there is none. */
-export function PluginScreen({ pluginId }: { readonly pluginId: string }) {
+/**
+ * `/plugins/<id>`: the plugin's own screen, or one line saying why there is none, for the
+ * environment a link named, such as the board's for a flag, else the primary one.
+ */
+export function PluginScreen({
+  pluginId,
+  environmentId,
+}: {
+  readonly pluginId: string;
+  readonly environmentId: EnvironmentId | null;
+}) {
+  return (
+    <PluginEnvironmentContext.Provider value={environmentId}>
+      <PluginScreenBody pluginId={pluginId} environmentId={environmentId} />
+    </PluginEnvironmentContext.Provider>
+  );
+}
+
+function PluginScreenBody({
+  pluginId,
+  environmentId,
+}: {
+  readonly pluginId: string;
+  readonly environmentId: EnvironmentId | null;
+}) {
   const { statuses, isPending } = usePluginStatuses();
   if (statuses === null) {
     return (
@@ -31,7 +55,9 @@ export function PluginScreen({ pluginId }: { readonly pluginId: string }) {
         {view.linkToPlugins ? (
           <>
             {" "}
-            <Link to="/plugins">Plugins</Link>
+            <Link to="/plugins" search={environmentId === null ? {} : { machine: environmentId }}>
+              Plugins
+            </Link>
           </>
         ) : null}
       </PluginNotice>

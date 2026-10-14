@@ -11,9 +11,10 @@ directories and never edit an upstream file. Upstream is merged nightly by
 - `packages/contracts/src/plugins/` holds each plugin's schemas and method definitions.
 - `apps/web/src/plugins/` holds each plugin's screens.
   A plugin with a screen is registered in `apps/web/src/plugins/registry.ts` and reached at
-  `/plugins/<id>`; every plugin is listed, with an on/off switch, at `/plugins`. That page shows
-  the primary environment, or the one its `machine` search names; settings panels read
-  `usePluginEnvironmentId` so they follow it.
+  `/plugins/<id>`; every plugin is listed, with an on/off switch, at `/plugins`. Both show the
+  primary environment, or the one their `machine` search names; screens and settings panels read
+  `usePluginEnvironmentId` so they follow it. A screen keeps its tab and open record in the URL
+  (`tab` and `recordId`, through `usePluginScreenSearch`), so a link can open the thing it is about.
 
 Enabled state is `plugins.json` under the server state directory. A missing entry means enabled.
 Changes apply on the next server start.
@@ -37,7 +38,10 @@ with `Attention.clear` once the cause is gone. Flags live in the host's `attenti
 same file, so any plugin can raise one without depending on the plugin that shows them. The strip
 above the kanban board and a project's weekly report list a flag whose key is not a thread when the
 key ends in `:<projectId>`, has the project id between colons, or starts with `policy:*:`
-(`plugins/attentionKeys.ts`); a flag keyed by none of these is on no board and in no report.
+(`plugins/attentionKeys.ts`); a flag keyed by none of these is on no board and in no report. A
+flag's resume action leads to its thread, the board, the Plugins page, or a plugin's screen with an
+optional tab and record (`AttentionResumeAction`); mobile has no plugin screens, so there a row
+with a plugin target stays on the board.
 
 A plugin says what it needs to do its work through `ServerPlugin.readiness`: checks, each `ready`,
 `attention` or `off`, with one sentence and where a person fixes it. `PluginHost.readiness` runs
@@ -216,7 +220,7 @@ them half-evaluated. The host hands `toolkitRegistration` to `ServerPlugin.mcp` 
   after the delivery answers the flag, so none is raised, and the next tick clears one that is
   open; the sweep never closes or reroutes an item, and never judges `local_only`. Server:
   `apps/server/src/plugins/learning/`. Contracts:
-  `packages/contracts/src/plugins/learning.ts`. Web: `apps/web/src/plugins/learning/`, the Learning screen at `/plugins/learning` with the items, corrections and reviews of a project.
+  `packages/contracts/src/plugins/learning.ts`. Web: `apps/web/src/plugins/learning/`, the Learning screen at `/plugins/learning` with the items, corrections and reviews of a project; `recordId` opens an item.
 - **policy**: reviewed working rules per project (`*` is the whole environment), versioned in the
   plugin's database and rendered as one marked block each, with `<state dir>/RULES.md` ahead of
   the body, into the instruction file each agent reads from the user's home. Verify re-reads the

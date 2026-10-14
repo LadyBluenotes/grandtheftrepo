@@ -1,8 +1,8 @@
 import { ShrinkIcon } from "lucide-react";
-import { useState } from "react";
 
 import { SettingsRow, SettingsSection } from "~/components/settings/settingsLayout";
 import { PluginDetailShell, type PluginDetailTab } from "../PluginDetailShell";
+import { usePluginScreenSearch } from "../pluginScreenSearch";
 import { CavemanImprovements } from "./CavemanImprovements";
 import { CavemanSettings } from "./CavemanSettings";
 
@@ -11,13 +11,19 @@ const TABS = [
   { id: "settings", label: "Settings" },
   { id: "improvements", label: "Improvements" },
 ] as const satisfies ReadonlyArray<PluginDetailTab<string>>;
-type Tab = (typeof TABS)[number]["id"];
 
 /** `/plugins/caveman`: what it is, how it routes your agents, and where tokens go. */
 export function CavemanScreen() {
-  const [tab, setTab] = useState<Tab>("overview");
+  const search = usePluginScreenSearch();
+  const tab = TABS.find((candidate) => candidate.id === search.tab)?.id ?? "overview";
   return (
-    <PluginDetailShell title="Caveman" icon={ShrinkIcon} tabs={TABS} tab={tab} onTabChange={setTab}>
+    <PluginDetailShell
+      title="Caveman"
+      icon={ShrinkIcon}
+      tabs={TABS}
+      tab={tab}
+      onTabChange={search.setTab}
+    >
       {tab === "overview" ? (
         <CavemanOverview />
       ) : tab === "settings" ? (

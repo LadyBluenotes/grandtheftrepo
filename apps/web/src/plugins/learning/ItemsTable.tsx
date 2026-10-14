@@ -35,11 +35,18 @@ import { When } from "./When";
 
 /**
  * A project's items, the most recently updated first, narrowed to one state. A row's failure mode
- * opens the drawer, and a disposition set there refetches the list.
+ * opens the drawer on `openId`, and a disposition set there refetches the list.
  */
-export function ItemsTable({ environmentId, projectId }: LearningScope) {
+export function ItemsTable({
+  environmentId,
+  projectId,
+  openId,
+  onOpen,
+}: LearningScope & {
+  readonly openId: number | null;
+  readonly onOpen: (id: number | null) => void;
+}) {
   const [state, setState] = useState<LearningItemState | null>(null);
-  const [openId, setOpenId] = useState<number | null>(null);
   const items = useLearningItems({ environmentId, projectId });
   const rows = useMemo(() => itemRows(items.data ?? [], state), [items.data, state]);
 
@@ -98,7 +105,7 @@ export function ItemsTable({ environmentId, projectId }: LearningScope) {
             {rows.map((row) => (
               <TableRow key={row.id}>
                 <TableCell>
-                  <InlineButton onClick={() => setOpenId(row.id)}>
+                  <InlineButton onClick={() => onOpen(row.id)}>
                     {failureModeLabel(row.failureMode)}
                   </InlineButton>
                 </TableCell>
@@ -130,7 +137,7 @@ export function ItemsTable({ environmentId, projectId }: LearningScope) {
       <ItemDrawer
         environmentId={environmentId}
         itemId={openId}
-        onClose={() => setOpenId(null)}
+        onClose={() => onOpen(null)}
         onChanged={items.refresh}
       />
     </div>

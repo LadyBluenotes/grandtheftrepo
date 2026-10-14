@@ -15,6 +15,7 @@ import {
   failureModeLabel,
   filterCorrections,
   itemRows,
+  learningItemId,
   pluginActive,
   threadLabel,
   threadsByActivity,
@@ -180,5 +181,14 @@ describe("threadsByActivity", () => {
   it("labels a thread without a title", () => {
     expect(threadLabel({ title: "  " })).toBe("Untitled thread");
     expect(threadLabel({ title: "Fix login" })).toBe("Fix login");
+  });
+});
+
+describe("learningItemId", () => {
+  it("reads a link's record as an item id, and nothing else as one", () => {
+    expect(learningItemId("12")).toBe(12);
+    for (const recordId of [undefined, "", "0", "-3", "1.5", "12abc", "9007199254740993"]) {
+      expect(learningItemId(recordId)).toBeNull();
+    }
   });
 });

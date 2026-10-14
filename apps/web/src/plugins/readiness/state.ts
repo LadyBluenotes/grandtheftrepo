@@ -115,9 +115,9 @@ export const pluginRowId = (plugin: string) => `plugin-${plugin}`;
 
 /**
  * A check's link. `plugin` opens the plugin's own screen when it has one and the checklist shows
- * the primary environment: `/plugins/<id>` takes no `machine` yet, so for another environment it
- * would open the primary one's. Otherwise it is the plugin's row on this page, as `plugins` always
- * is, which keeps the page's environment.
+ * the primary environment: the link names no `machine`, so for another environment it would open
+ * the primary one's. Otherwise it is the plugin's row on this page, as `plugins` always is, which
+ * keeps the page's environment.
  */
 export function readinessLink(
   target: ReadinessTarget | null,
