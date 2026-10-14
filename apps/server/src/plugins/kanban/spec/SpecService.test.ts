@@ -1146,29 +1146,31 @@ describe("SpecService", () => {
     ).pipe(Effect.provide(layerTest)),
   );
 
-  it.effect("a drafting run that ends without completing leaves a malformed attempt", () =>
-    Effect.scoped(
-      Effect.gen(function* () {
-        const { spec, launched, specify, react, file, fileText } = yield* start;
-        const { id } = yield* file("Login loops", rough);
-        const before = yield* fileText(id);
+  it.effect.each(["failed", "rolled_back"] as const)(
+    "a drafting run that ends %s leaves a malformed attempt",
+    (status) =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const { spec, launched, specify, react, file, fileText } = yield* start;
+          const { id } = yield* file("Login loops", rough);
+          const before = yield* fileText(id);
 
-        yield* specify({ projectId, id });
-        const threadId = launched[0]!.threadId!;
-        yield* react([
-          threadCreated(threadId),
-          runUpdated(threadId, RunId.make("run:spec-failed"), "failed"),
-        ]);
+          yield* specify({ projectId, id });
+          const threadId = launched[0]!.threadId!;
+          yield* react([
+            threadCreated(threadId),
+            runUpdated(threadId, RunId.make(`run:spec-${status}`), status),
+          ]);
 
-        const report = yield* spec.latest({ projectId, id });
-        assert.strictEqual(report?.attempt.status, "malformed");
-        assert.strictEqual(
-          report?.attempt.reason,
-          "The drafting run ended failed before it sent a spec.",
-        );
-        assert.strictEqual(yield* fileText(id), before);
-      }),
-    ).pipe(Effect.provide(layerTest)),
+          const report = yield* spec.latest({ projectId, id });
+          assert.strictEqual(report?.attempt.status, "malformed");
+          assert.strictEqual(
+            report?.attempt.reason,
+            `The drafting run ended ${status} before it sent a spec.`,
+          );
+          assert.strictEqual(yield* fileText(id), before);
+        }),
+      ).pipe(Effect.provide(layerTest)),
   );
 
   it.effect("useExisting validates the description and never starts a thread", () =>

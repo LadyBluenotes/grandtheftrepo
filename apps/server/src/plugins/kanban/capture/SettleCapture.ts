@@ -27,7 +27,7 @@ import * as PluginServices from "../../PluginServices.ts";
 import * as TierSelectionService from "../../routing/TierSelectionService.ts";
 import * as FindingService from "../findings/FindingService.ts";
 import * as KanbanStore from "../KanbanStore.ts";
-import { ENDED, finalMessage } from "../spec/SpecService.ts";
+import { finalMessage } from "../spec/SpecService.ts";
 import * as StopGate from "../StopGate.ts";
 
 const DecisionDraft = Schema.Struct({
@@ -323,7 +323,7 @@ const make = Effect.gen(function* () {
 
   const finish: SettleCapture["Service"]["finish"] = Effect.fn("SettleCapture.finish")(
     function* (run) {
-      if (!ENDED.has(run.status)) return;
+      if (!ThreadManagementService.isTerminalRunStatus(run.status)) return;
       const rows = yield* sql<CaptureRow>`UPDATE settle_capture
           SET status = ${run.status === "completed" ? "done" : "failed"}
           WHERE child_thread_id = ${run.threadId} AND status = 'running'
@@ -382,7 +382,9 @@ const make = Effect.gen(function* () {
           by,
         );
       }
-      // Off the active list: its drafts are on the board, and the thread stays readable.
+      // Off the active list: its drafts are on the board, and the thread stays readable. A settle
+      // that fails rolls the capture back to running, and the reactor retries the event at its
+      // next start, filing nothing twice.
       yield* threads
         .settleThread({
           threadId: capture.child_thread_id,
@@ -391,7 +393,16 @@ const make = Effect.gen(function* () {
         })
         .pipe(
           Effect.catch((cause) =>
-            Effect.logWarning("kanban: could not settle a capture thread", { cause }),
+            Effect.logWarning("kanban: could not settle a capture thread", { cause }).pipe(
+              Effect.andThen(
+                Effect.fail(
+                  new KanbanError({
+                    code: "io",
+                    message: `Could not settle the capture thread "${capture.child_thread_id}".`,
+                  }),
+                ),
+              ),
+            ),
           ),
         );
     },

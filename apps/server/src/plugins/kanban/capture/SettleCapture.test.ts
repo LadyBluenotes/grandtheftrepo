@@ -24,6 +24,7 @@ import * as SqlClient from "effect/sql/SqlClient";
 import * as ServerConfig from "../../../config.ts";
 import * as EventSink from "../../../orchestration-v2/EventSink.ts";
 import * as EventStore from "../../../orchestration-v2/EventStore.ts";
+import * as Orchestrator from "../../../orchestration-v2/Orchestrator.ts";
 import * as ProjectionStore from "../../../orchestration-v2/ProjectionStore.ts";
 import * as ThreadLaunchService from "../../../orchestration-v2/ThreadLaunchService.ts";
 import * as ThreadManagementService from "../../../orchestration-v2/ThreadManagementService.ts";
@@ -232,12 +233,13 @@ const answer = (decisions: ReadonlyArray<string>) =>
 /**
  * The plugin's services over a fresh board folder and an in-memory kanban database, run by the
  * plugin's reactor. Launches go to a stub that records them, on a cheap tier that always resolves,
- * and settling a thread is recorded.
+ * and settling a thread is recorded, or refused while `failSettles(true)` holds.
  */
 const start = Effect.gen(function* () {
   const { sql } = yield* PluginDatabase.open({ id: "kanban", filename: ":memory:", migrations });
   const projections = yield* ProjectionStore.ProjectionStoreV2;
   const settledThreads: Array<ThreadId> = [];
+  let settleFails = false;
   const services = yield* Layer.build(
     Layer.merge(SettleCapture.layer, SpecService.layer).pipe(
       Layer.provideMerge(FindingService.layer),
@@ -248,11 +250,19 @@ const start = Effect.gen(function* () {
           Layer.mock(ThreadManagementService.ThreadManagementService)({
             getThreadRecords: (threadId, fields, filter) =>
               projections.getThreadRecords(threadId, fields, filter).pipe(Effect.orDie),
-            settleThread: ({ threadId }) =>
-              Effect.sync(() => {
-                settledThreads.push(threadId);
-                return { sequence: 0 };
-              }),
+            settleThread: ({ threadId, commandId }) =>
+              settleFails
+                ? Effect.fail(
+                    new Orchestrator.OrchestratorDispatchError({
+                      commandId,
+                      commandType: "thread.settle",
+                      cause: "The settle was refused.",
+                    }),
+                  )
+                : Effect.sync(() => {
+                    settledThreads.push(threadId);
+                    return { sequence: 0 };
+                  }),
           }),
           Layer.mock(ProjectService.ProjectService)({
             getById: (id) =>
@@ -296,7 +306,8 @@ const start = Effect.gen(function* () {
   });
 
   /**
-   * Commits events, then runs the reactor until it has handled every one. Its fiber holds the
+   * Commits events, then starts the reactor, which first retries the events that failed, as it
+   * does at every server start, and runs it until it has handled every one. Its fiber holds the
    * launcher and the routing plugin's tier service, as `PluginServices` gives it on the server.
    */
   const react = (events: ReadonlyArray<OrchestrationV2DomainEvent>) =>
@@ -317,7 +328,11 @@ const start = Effect.gen(function* () {
   /** The capture thread's turn ending with `text`. */
   const extract = (threadId: ThreadId, text: string) => react(turn(threadId, "Capture", text));
 
-  return { store, launched, routed, settledThreads, react, extract };
+  const failSettles = (fail: boolean) => {
+    settleFails = fail;
+  };
+
+  return { sql, store, launched, routed, settledThreads, failSettles, react, extract };
 });
 
 describe("SettleCapture", () => {
@@ -476,6 +491,76 @@ describe("SettleCapture", () => {
           assert.strictEqual(launched.length, 1);
         }),
       ).pipe(Effect.provide(layerTest)),
+  );
+
+  it.effect(
+    "a capture thread whose settle fails is settled when the reactor retries the event, filing nothing twice",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const { store, launched, settledThreads, failSettles, react, extract } = yield* start;
+          yield* store.setCapture({ projectId, enabled: true });
+          yield* react([
+            ...turn(worked, "Cache token lookups", reply),
+            settled(worked, "Cache token lookups"),
+          ]);
+          const child = launched[0]!.threadId!;
+          const filed = Effect.gen(function* () {
+            return {
+              decisions: (yield* store.listDecisions({ projectId })).map((d) => d.title),
+              findings: (yield* store.board(projectId)).issues.map((i) => i.labels),
+            };
+          });
+
+          failSettles(true);
+          yield* extract(child, answer(["Cache token lookups in SQLite, not Redis"]));
+          assert.deepEqual(settledThreads, []);
+          // The drafts landed before the settle failed.
+          const once = {
+            decisions: ["Cache token lookups in SQLite, not Redis"],
+            findings: [["finding"]],
+          };
+          assert.deepEqual(yield* filed, once);
+
+          // The next start retries the event.
+          failSettles(false);
+          yield* react([]);
+          assert.deepEqual(settledThreads, [child]);
+          assert.deepEqual(yield* filed, once);
+        }),
+      ).pipe(Effect.provide(layerTest)),
+  );
+
+  it.effect("a capture run rolled back closes the capture as failed, filing nothing", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { sql, store, launched, settledThreads, react } = yield* start;
+        yield* store.setCapture({ projectId, enabled: true });
+        yield* react([
+          ...turn(worked, "Cache token lookups", reply),
+          settled(worked, "Cache token lookups"),
+        ]);
+        const child = launched[0]!.threadId!;
+
+        yield* react([
+          {
+            ...eventBase(),
+            type: "thread.created",
+            threadId: child,
+            payload: appThread(child, "Capture"),
+          },
+          runUpdated(child, "rolled_back"),
+        ]);
+        const rows = yield* sql<{ readonly status: string }>`
+          SELECT status FROM settle_capture WHERE child_thread_id = ${child}`;
+        assert.deepEqual(
+          rows.map((row) => row.status),
+          ["failed"],
+        );
+        assert.deepEqual(settledThreads, []);
+        assert.deepEqual(yield* store.listDecisions({ projectId }), []);
+      }),
+    ).pipe(Effect.provide(layerTest)),
   );
 
   it.effect("with the setting off, no turn starts", () =>
