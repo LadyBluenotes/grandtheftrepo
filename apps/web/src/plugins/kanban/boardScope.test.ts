@@ -7,11 +7,13 @@ import {
   boardFanOut,
   decisionsViewProjects,
   decisionsViewSearch,
+  linkedBoard,
   linkedOutsideScope,
   pickBoardProject,
   projectIdsByEnvironment,
   scopedBoardProjects,
   subscribedBoards,
+  type BoardEnvironment,
 } from "./boardScope";
 
 const local = EnvironmentId.make("env-local");
@@ -209,54 +211,86 @@ describe("decisionsViewSearch", () => {
   });
 });
 
-describe("decisionsViewProjects", () => {
+describe("decisionsViewProjects and linkedBoard", () => {
   const ref = (p: Project) => ({ environmentId: p.environmentId, projectId: p.id });
-  // The sidebar is scoped to the group of A; the URL names B, as "Find decision" in a thread of B
-  // or a recorded decision's link does.
+  const folder = (p: Project, board: boolean) => ({
+    projectId: p.id,
+    directory: `/wiki/${p.id}`,
+    board,
+  });
+  // The sidebar is scoped to the group of A, whose checkout here has a board; the URL names B, as
+  // "Find decision" in a thread of B, a recorded decision's link or a stale issue link does.
   const scoped = scopedBoardProjects(groups, keyOf("app"), projects);
-  const shown = scoped.filter((p) => p.projectId === appHere.id);
-  const link = { ...ref(notes), view: "decisions" as const, decision: "auth/use-oauth" };
-  const outside = linkedOutsideScope(groups, projects, scoped, link);
-  const notesRead = (board: boolean) => [
-    {
-      environmentId: local,
-      active: true,
-      folders: [{ projectId: notes.id, directory: "/wiki/notes", board }],
-      error: null,
-    },
+  const scopeRead = [
+    { environmentId: local, active: true, folders: [folder(appHere, true)], error: null },
+    { environmentId: remote, active: true, folders: [folder(appThere, false)], error: null },
   ];
+  const { shown } = boardFanOut(scoped, scopeRead);
+  const link = { ...ref(notes), view: "decisions" as const, decision: "auth/use-oauth" };
+  const outside = linkedOutsideScope(groups, projects, scoped, link)!;
+  const notesRead = (folders: ReadonlyArray<ReturnType<typeof folder>> | null) => [
+    { environmentId: local, active: true, folders, error: null },
+  ];
+  const view = (outsideRead: ReadonlyArray<BoardEnvironment>) =>
+    decisionsViewProjects(
+      shown,
+      scopeRead,
+      outside,
+      linkedBoard(scoped, scopeRead, outsideRead, outside),
+    );
 
   it("shows the URL's project outside the scope, with its open decision, once it has a board", () => {
-    const options = decisionsViewProjects(shown, outside, notesRead(true));
-    expect(refs(options)).toEqual(["env-local/app-here", "env-local/notes"]);
-    const view = pickBoardProject(options, ref(notes));
-    expect(view?.projectId).toBe(notes.id);
-    expect(decisionsViewSearch(link, view!)).toStrictEqual({
+    const options = view(notesRead([folder(notes, true)]));
+    expect(refs(options ?? [])).toEqual(["env-local/app-here", "env-local/notes"]);
+    const project = pickBoardProject(options ?? [], ref(notes));
+    expect(project?.projectId).toBe(notes.id);
+    expect(decisionsViewSearch(link, project!)).toStrictEqual({
       category: undefined,
       decision: "auth/use-oauth",
     });
   });
 
   it("keeps to the scope's boards when that project has no board or its read fails", () => {
-    expect(decisionsViewProjects(shown, outside, notesRead(false))).toBe(shown);
-    expect(
-      decisionsViewProjects(shown, outside, [
-        { environmentId: local, active: true, folders: null, error: "offline" },
-      ]),
-    ).toBe(shown);
+    expect(view(notesRead([folder(notes, false)]))).toBe(shown);
+    expect(view([{ environmentId: local, active: true, folders: null, error: "offline" }])).toBe(
+      shown,
+    );
   });
 
   it("shows no project until that project's read answers, rather than another one first", () => {
+    expect(view(notesRead(null))).toBeNull();
+    expect(view([{ environmentId: local, active: null, folders: null, error: null }])).toBeNull();
+  });
+
+  it("says there is no board only once every read of the scope has answered", () => {
+    const empty = { environmentId: local, active: true, folders: [], error: null };
+    const unknown = { environmentId: remote, active: null, folders: null, error: null };
+    expect(decisionsViewProjects([], [empty, unknown], null, null)).toBeNull();
+    expect(decisionsViewProjects([], [empty, { ...unknown, active: false }], null, null)).toEqual(
+      [],
+    );
+  });
+
+  it("tells an open issue's project has a board only from the read that covers it", () => {
+    // In the scope: the scope's read answers.
+    expect(linkedBoard(scoped, scopeRead, [], ref(appHere))).toBe(true);
+    expect(linkedBoard(scoped, scopeRead, [], ref(appThere))).toBe(false);
+    // Outside it: its own read, so a stale link to a project without a board subscribes to nothing.
+    expect(linkedBoard(scoped, scopeRead, [], ref(notes))).toBeNull();
+    expect(linkedBoard(scoped, scopeRead, notesRead(null), ref(notes))).toBeNull();
+    expect(linkedBoard(scoped, scopeRead, notesRead([folder(notes, false)]), ref(notes))).toBe(
+      false,
+    );
+    // A project that is gone is left out of the read.
+    expect(linkedBoard(scoped, scopeRead, notesRead([]), ref(notes))).toBe(false);
     expect(
-      decisionsViewProjects(shown, outside, [
-        { environmentId: local, active: true, folders: null, error: null },
-      ]),
-    ).toEqual([]);
-    expect(
-      decisionsViewProjects(shown, outside, [
-        { environmentId: local, active: null, folders: null, error: null },
-      ]),
-    ).toEqual([]);
+      linkedBoard(
+        scoped,
+        scopeRead,
+        [{ environmentId: local, active: false, folders: null, error: null }],
+        ref(notes),
+      ),
+    ).toBe(false);
   });
 
   it("adds nothing for a URL project in the scope, an unknown one, or none", () => {

@@ -85,6 +85,7 @@ import {
   boardProjectKey,
   decisionsViewProjects,
   decisionsViewSearch,
+  linkedBoard,
   linkedOutsideScope,
   pickBoardProject,
   scopedBoardProjects,
@@ -546,33 +547,53 @@ export function BoardPage({ search }: { readonly search: BoardSearch }) {
     [search.environmentId, search.projectId],
   );
   const newCardProject = pickBoardProject(writable, inHand, lastUsed);
-  // The decisions view shows the URL's project even outside the scope, read on its own so the
-  // scope's read stays as it is and the project's board is subscribed only if it has one.
+  // The URL's project outside the scope gets a read of its own while the decisions view or an open
+  // issue needs to know whether it has a board, so the scope's read stays as it is.
+  const outsideRef =
+    inHand !== null &&
+    (search.view === "decisions" || search.issue !== undefined) &&
+    !scoped.some(sameProject(inHand))
+      ? inHand
+      : null;
+  const outsideEnvironments = useAtomValue(
+    kanbanBoardEnvironments(outsideRef === null ? [] : [outsideRef]),
+  );
+  // The decisions view shows that project, labelled, even outside the scope.
   const outside = useMemo(
     () =>
       search.view === "decisions" ? linkedOutsideScope(groups, projects, scoped, inHand) : null,
     [groups, inHand, projects, scoped, search.view],
   );
-  const outsideEnvironments = useAtomValue(
-    kanbanBoardEnvironments(outside === null ? [] : [outside]),
-  );
+  // Null while the view cannot tell which project to show, or whether there is none.
   const viewProjects = useMemo(
-    () => decisionsViewProjects(shown, outside, outsideEnvironments),
-    [outside, outsideEnvironments, shown],
+    () =>
+      decisionsViewProjects(
+        shown,
+        environments,
+        outside,
+        outside === null ? null : linkedBoard(scoped, environments, outsideEnvironments, outside),
+      ),
+    [environments, outside, outsideEnvironments, scoped, shown],
   );
-  const viewProject = pickBoardProject(viewProjects, inHand, lastUsed);
+  const viewProject =
+    viewProjects === null ? null : pickBoardProject(viewProjects, inHand, lastUsed);
   const viewSearch =
     viewProject === null
       ? { category: undefined, decision: undefined }
       : decisionsViewSearch(search, viewProject);
   // The open issue is in the URL's project even outside the scope; the panel stays mounted to close.
   const panelProject = inHand ?? viewProject;
+  // Its issue is read, and its board subscribed to, only once it is known to have a board.
+  const panelBoard =
+    panelProject === null
+      ? null
+      : linkedBoard(scoped, environments, outsideEnvironments, panelProject);
   // Keyed by the refs, so a new list with the same projects keeps the same subscriptions.
   const subscribedOnes = useAtomValue(
     kanbanBoards(
       subscribedBoards(
-        search.view === "decisions" ? viewProjects : shown,
-        search.issue === undefined ? null : panelProject,
+        search.view === "decisions" ? (viewProjects ?? shown) : shown,
+        search.issue !== undefined && panelBoard === true ? panelProject : null,
       ),
     ),
   );
@@ -847,7 +868,7 @@ export function BoardPage({ search }: { readonly search: BoardSearch }) {
             </EmptyHeader>
           </Empty>
         ) : search.view === "decisions" ? (
-          viewProject === null ? (
+          viewProjects === null ? null : viewProject === null ? (
             <Empty className="m-auto">
               <EmptyHeader>
                 <EmptyTitle>No board yet</EmptyTitle>
@@ -951,6 +972,7 @@ export function BoardPage({ search }: { readonly search: BoardSearch }) {
           environmentId={panelProject.environmentId}
           projectId={panelProject.projectId}
           issueId={search.issue ?? null}
+          board={panelBoard}
           categories={boardOf(panelProject)?.decisionCategories ?? []}
           issues={boardOf(panelProject)?.issues ?? []}
           canWrite={canWritePanel}

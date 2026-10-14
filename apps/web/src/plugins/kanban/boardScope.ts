@@ -130,25 +130,43 @@ export function linkedOutsideScope(
   return scopedBoardProjects(groups, null, projects).find(sameRef(linked)) ?? null;
 }
 
+/** Whether the environment's read of its board folders has answered, or it runs no kanban. */
+const boardsRead = ({ active, folders, error }: BoardEnvironment) =>
+  active === false || (active === true && (folders !== null || error !== null));
+
+/**
+ * Whether `ref` has a board: from the scope's read, `environments`, when the scope covers it, else
+ * from its own, `outsideEnvironments`; null until that read answers. A failed read counts as none.
+ * Nothing reads a project's issue or decisions or subscribes to its board before this says it has
+ * one, since loading a board creates its folder and watchers.
+ */
+export function linkedBoard(
+  scoped: ReadonlyArray<BoardProject>,
+  environments: ReadonlyArray<BoardEnvironment>,
+  outsideEnvironments: ReadonlyArray<BoardEnvironment>,
+  ref: ScopedProjectRef,
+): boolean | null {
+  const read = scoped.some(sameRef(ref)) ? environments : outsideEnvironments;
+  const environment = read.find((candidate) => candidate.environmentId === ref.environmentId);
+  if (environment === undefined || !boardsRead(environment)) return null;
+  return environment.active === true && boardFolder(read, ref)?.board === true;
+}
+
 /**
  * What the decisions view picks from: the shown boards, then the URL's project outside the scope
- * once its own read, `outsideEnvironments`, says it has a board, since reading its decisions loads
- * its board. Nothing until that read answers, so the view does not show another project first.
+ * when `outsideBoard` says it has a board. Null while it cannot tell yet: until the outside
+ * project's read answers, so it does not show another project first, and while nothing has a board
+ * but some of the scope's reads are unanswered, so it does not claim there is none.
  */
 export function decisionsViewProjects(
   shown: ReadonlyArray<BoardProject>,
+  environments: ReadonlyArray<BoardEnvironment>,
   outside: BoardProject | null,
-  outsideEnvironments: ReadonlyArray<BoardEnvironment>,
-): ReadonlyArray<BoardProject> {
-  if (outside === null) return shown;
-  const unknown = outsideEnvironments.some(
-    ({ active, folders, error }) =>
-      active === null || (active && folders === null && error === null),
-  );
-  if (unknown) return [];
-  return boardFanOut([outside], outsideEnvironments).shown.length === 0
-    ? shown
-    : [...shown, outside];
+  outsideBoard: boolean | null,
+): ReadonlyArray<BoardProject> | null {
+  if (outside !== null && outsideBoard === null) return null;
+  const projects = outside !== null && outsideBoard === true ? [...shown, outside] : shown;
+  return projects.length === 0 && !environments.every(boardsRead) ? null : projects;
 }
 
 /**
