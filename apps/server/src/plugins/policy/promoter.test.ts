@@ -12,7 +12,7 @@ import * as Promoter from "../learning/Promoter.ts";
 import * as PluginDatabase from "../PluginDatabase.ts";
 import { migrations } from "./migrations.ts";
 import * as PolicyService from "./PolicyService.ts";
-import { policyPromoter, promptPromoter } from "./promoter.ts";
+import { policyPromoter } from "./promoter.ts";
 
 const projectId = ProjectId.make("project:policy");
 const at = "2026-10-01T00:00:00.000Z";
@@ -110,24 +110,6 @@ it.layer(layerTest)("policy promoters", (it) => {
     }),
   );
 
-  it.effect("a prompt promotion is the same draft under the prompt- key", () =>
-    Effect.gen(function* () {
-      const policies = yield* PolicyService.PolicyService;
-      yield* promptPromoter.promote(
-        detail("convention", ["Used tabs."], "prompt"),
-        keyFor(6, "prompt", "convention"),
-      );
-      const listed = yield* policies.list(projectId);
-      assert.deepStrictEqual(
-        listed.map((policy) => [policy.key, policy.version, policy.state, policy.title]),
-        [
-          ["learned-scope-drift", 1, "draft", "Learned: scope drift"],
-          ["prompt-learned-convention", 1, "draft", "Learned: convention"],
-        ],
-      );
-    }),
-  );
-
   it.effect("the draft is the next version when the key has an accepted one", () =>
     Effect.gen(function* () {
       const policies = yield* PolicyService.PolicyService;
@@ -207,18 +189,13 @@ it.layer(layerTest)("policy promoters", (it) => {
 
 it.effect("is available only while the policy plugin's service is in the context", () =>
   Effect.gen(function* () {
-    for (const promoter of [policyPromoter, promptPromoter]) {
-      assert.isFalse(yield* promoter.available);
-      const refused = yield* Effect.flip(promoter.promote(detail("defect", ["x"]), keyFor(1)));
-      assert.deepInclude(refused, {
-        _tag: "PromotionError",
-        message: "The policy plugin is not running.",
-      });
-      assert.isTrue(yield* promoter.available.pipe(Effect.provide(layerTest)));
-    }
-    assert.deepStrictEqual(
-      [policyPromoter.ownerKind, promptPromoter.ownerKind],
-      ["policy", "prompt"],
-    );
+    assert.isFalse(yield* policyPromoter.available);
+    const refused = yield* Effect.flip(policyPromoter.promote(detail("defect", ["x"]), keyFor(1)));
+    assert.deepInclude(refused, {
+      _tag: "PromotionError",
+      message: "The policy plugin is not running.",
+    });
+    assert.isTrue(yield* policyPromoter.available.pipe(Effect.provide(layerTest)));
+    assert.strictEqual(policyPromoter.ownerKind, "policy");
   }),
 );

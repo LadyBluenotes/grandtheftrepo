@@ -7,6 +7,8 @@ import {
   LearningItem,
   PLUGIN_GATEWAY_WS_METHODS,
   ProjectId,
+  Prompt,
+  PROMPT_METHODS,
   ThreadId,
   type Project,
 } from "@t3tools/contracts";
@@ -103,6 +105,7 @@ const operateCall = (method: string, input: unknown) =>
 
 const decodeItems = Schema.decodeUnknownEffect(Schema.Array(LearningItem));
 const decodePages = Schema.decodeUnknownEffect(Schema.Array(KnowledgeEntry));
+const decodePrompts = Schema.decodeUnknownEffect(Schema.Array(Prompt));
 
 /** The running host: a tick, the learning database, and the reads a test makes. */
 const running = Effect.gen(function* () {
@@ -211,7 +214,7 @@ it.effect(
 );
 
 it.effect(
-  "policy on: scope drift becomes a policy draft, and a person's prompt a prompt- draft",
+  "policy on: scope drift becomes a policy draft, and a person's prompt a proposed prompt",
   () =>
     withPlugins(
       ["learning", "policy"],
@@ -246,11 +249,25 @@ it.effect(
           ownerKind: "prompt",
         });
         assert.deepInclude(yield* world.tick, { status: "ok", examined: 2, acted: 2, flags: 0 });
+        // The prompt library is learning's own: no policy draft, a proposed prompt instead.
         assert.deepStrictEqual(
           (yield* world.policyVersions).map((v) => [v.key, v.version, v.state]),
+          [["learned-scope-drift", 1, "draft"]],
+        );
+        const prompts = yield* readCall(PROMPT_METHODS.list.method, { projectId }).pipe(
+          Effect.flatMap(decodePrompts),
+        );
+        assert.deepStrictEqual(
+          prompts.map((p) => [p.kind, p.state, p.origin, p.title, p.body, p.version]),
           [
-            ["learned-scope-drift", 1, "draft"],
-            ["prompt-learned-convention", 1, "draft"],
+            [
+              "prompt",
+              "proposed",
+              "learning",
+              "Learned: convention",
+              "Set by a person.\n\n- Used tabs.",
+              1,
+            ],
           ],
         );
         assert.deepStrictEqual(yield* world.items, [

@@ -115,6 +115,39 @@ const promotionOutcome: PluginMigration[2] = Effect.gen(function* () {
   )`;
 });
 
+// The prompt library. `prompts` holds the latest version's text, so a list reads one table;
+// `prompt_versions` is append-only. `source_key` names what proposed a prompt, such as a learning
+// promotion, so a repeat of that proposal finds it. `accepted_at` is set once a person accepted or
+// saved it, and decides whether unarchiving makes it active again or proposed.
+const prompts: PluginMigration[2] = Effect.gen(function* () {
+  const sql = yield* SqlClient.SqlClient;
+  yield* sql`CREATE TABLE prompts (
+    id INTEGER PRIMARY KEY,
+    project_id TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    state TEXT NOT NULL,
+    origin TEXT NOT NULL,
+    title TEXT NOT NULL,
+    body TEXT NOT NULL,
+    version INTEGER NOT NULL,
+    use_count INTEGER NOT NULL DEFAULT 0,
+    last_used_at TEXT,
+    source_key TEXT UNIQUE,
+    accepted_at TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  )`;
+  yield* sql`CREATE INDEX prompts_project ON prompts (project_id, updated_at)`;
+  yield* sql`CREATE TABLE prompt_versions (
+    prompt_id INTEGER NOT NULL REFERENCES prompts (id),
+    version INTEGER NOT NULL,
+    title TEXT NOT NULL,
+    body TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    PRIMARY KEY (prompt_id, version)
+  )`;
+});
+
 export const migrations = [
   [1, "Corrections", corrections],
   [2, "LearningItems", learningItems],
@@ -122,4 +155,5 @@ export const migrations = [
   [4, "RegressionRuns", regressionRuns],
   [5, "DispositionAt", dispositionAt],
   [6, "PromotionOutcome", promotionOutcome],
+  [7, "Prompts", prompts],
 ] as const satisfies ReadonlyArray<PluginMigration>;

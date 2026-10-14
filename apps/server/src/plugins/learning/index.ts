@@ -18,6 +18,8 @@ import * as Reopened from "./producers/reopened.ts";
 import * as TurnFailures from "./producers/turnFailures.ts";
 import * as PromoteSweep from "./PromoteSweep.ts";
 import * as Promoter from "./Promoter.ts";
+import * as PromptPromoter from "./prompts/promoter.ts";
+import * as PromptStore from "./prompts/PromptStore.ts";
 import * as Checks from "./readiness.ts";
 import * as RegressionSweep from "./regressions/RegressionSweep.ts";
 
@@ -33,11 +35,12 @@ export const handlers = {
 const start = Effect.gen(function* () {
   const reactor = yield* PluginReactor.start({ plugin: "learning", from: "start", handlers });
   // The knowledge and policy plugins are reached when a sweep runs, so each promoter says whether
-  // its plugin is there; learning depends on neither, and a plugin that is off costs nothing.
+  // its plugin is there; learning depends on neither, and a plugin that is off costs nothing. The
+  // prompt library is this plugin's own.
   const promoters = yield* Promoter.PromoterRegistry;
   yield* promoters.register(KnowledgePromoter.promoter);
   yield* promoters.register(PolicyPromoter.policyPromoter);
-  yield* promoters.register(PolicyPromoter.promptPromoter);
+  yield* promoters.register(yield* PromptPromoter.promoter);
   const supervisor = yield* PluginSupervisor.PluginSupervisor;
   // Classify before promote, so a tick hands over what it just classified.
   yield* supervisor.register(yield* ClassifySweep.sweep);
@@ -56,14 +59,17 @@ const start = Effect.gen(function* () {
  * picked; a third opens an item for each efficiency measure that worsened from
  * one week to the next, and a fourth flags a handover whose failure mode kept
  * recurring, or went quiet, in the four weeks after it. MCP tools expose
- * corrections and items to agents.
+ * corrections and items to agents. It also keeps each project's prompt library, saved prompts and
+ * workflows that agents search and propose to over MCP and people manage on the Learning screen.
  */
 export const plugin = {
   id: "learning",
   dependsOn: [],
   migrations,
   layer: Layer.merge(Layer.effectDiscard(start), Checks.layer).pipe(
-    Layer.provideMerge(Layer.mergeAll(CorrectionStore.layer, ItemStore.layer, Promoter.layer)),
+    Layer.provideMerge(
+      Layer.mergeAll(CorrectionStore.layer, ItemStore.layer, Promoter.layer, PromptStore.layer),
+    ),
   ),
   mcp: (register) => register(Mcp.LearningToolkit, Mcp.handlers),
   readiness: fromService(Checks.LearningReadiness),

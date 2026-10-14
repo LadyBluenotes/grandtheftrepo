@@ -255,7 +255,13 @@ function ItemDetails({
   );
 }
 
-function Field({ label, children }: { readonly label: string; readonly children: ReactNode }) {
+export function Field({
+  label,
+  children,
+}: {
+  readonly label: string;
+  readonly children: ReactNode;
+}) {
   return (
     <div className="flex flex-col gap-1.5">
       <span className="text-xs font-medium text-muted-foreground">{label}</span>

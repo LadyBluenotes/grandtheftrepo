@@ -191,15 +191,22 @@ them half-evaluated. The host hands `toolkitRegistration` to `ServerPlugin.mcp` 
   them over MCP. Two sweeps turn corrections with a declared failure mode into learning items, one
   per mode per project, routed by fixed rules on the mode to an owner kind, and hand each item
   over through one promotion record, at least once, keyed by the record's id so a promoter can
-  drop a repeat. The plugin registers the promoters for `project_knowledge`, `policy` and `prompt`
-  itself, from `knowledge/promoter.ts` and `policy/promoter.ts`, because a plugin's layer cannot
-  see the registry of one it does not depend on. Each reaches its plugin's service with
+  drop a repeat. The plugin registers the promoters for `project_knowledge` and `policy` itself,
+  from `knowledge/promoter.ts` and `policy/promoter.ts`, because a plugin's layer cannot see the
+  registry of one it does not depend on. Each reaches its plugin's service with
   `Effect.serviceOption` when the sweep runs and hands over a draft: a knowledge page keyed
-  `learned-<mode>-<item id>`, or a policy version keyed `learned-<mode>`, `prompt-learned-<mode>`
-  for a prompt, until briefs read prompt policies. A promoter has an `available` check, false while
-  its plugin is off, and the registry's `ownerKinds` leaves such a kind out, so its records wait
-  without counting an attempt, as a kind with no promoter does; the report's `promoters` is the
-  same list. A third sweep compares each
+  `learned-<mode>-<item id>`, or a policy version keyed `learned-<mode>`. A promoter has an
+  `available` check, false while its plugin is off, and the registry's `ownerKinds` leaves such a
+  kind out, so its records wait without counting an attempt, as a kind with no promoter does; the
+  report's `promoters` is the same list. The `prompt` kind goes to the plugin's own prompt library
+  (`prompts/`): saved prompts and workflows per project, `active`, `proposed` or `archived`, with
+  append-only versions and a use count. `PromptStore.proposeFrom` saves a sweep's proposal once per
+  source key (`promotion:<id>` for a promotion), in the transaction that looks for it. Agents
+  reach the library with `prompt_search`, `prompt_save` and `prompt_get`; a save is proposed and
+  needs a search id from the last 15 minutes, kept in memory, so it checked for a duplicate first.
+  People save, edit, revert, accept, archive and unarchive through the `learning.prompt*` gateway
+  methods on the Learning screen's Prompts tab; `learning.promptsUse` counts a use. A third sweep
+  compares each
   project's telemetry measures over the last seven whole UTC days with the seven before, once a
   day, and opens or strengthens an `efficiency_regression:<measure>` item, with no owner kind, for
   each measure worse by its threshold in `regressions/thresholds.ts`, except a volume measure
@@ -216,7 +223,7 @@ them half-evaluated. The host hands `toolkitRegistration` to `ServerPlugin.mcp` 
   after the delivery answers the flag, so none is raised, and the next tick clears one that is
   open; the sweep never closes or reroutes an item, and never judges `local_only`. Server:
   `apps/server/src/plugins/learning/`. Contracts:
-  `packages/contracts/src/plugins/learning.ts`. Web: `apps/web/src/plugins/learning/`, the Learning screen at `/plugins/learning` with the items, corrections and reviews of a project.
+  `packages/contracts/src/plugins/learning.ts` and `prompts.ts`. Web: `apps/web/src/plugins/learning/`, the Learning screen at `/plugins/learning` with the items, corrections, prompts and reviews of a project. No mobile screen. User guide: [Learning](./user/learning.md).
 - **policy**: reviewed working rules per project (`*` is the whole environment), versioned in the
   plugin's database and rendered as one marked block each, with `<state dir>/RULES.md` ahead of
   the body, into the instruction file each agent reads from the user's home. Verify re-reads the
