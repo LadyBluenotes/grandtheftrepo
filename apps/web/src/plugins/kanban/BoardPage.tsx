@@ -82,6 +82,8 @@ export interface BoardSearch {
   readonly issue?: string;
   readonly view?: "decisions";
   readonly category?: string;
+  /** The decision open in the decisions view's drawer, as `category/id`. */
+  readonly decision?: string;
   readonly needsYou?: true;
   readonly archived?: true;
 }
@@ -410,7 +412,13 @@ export function BoardPage({ search }: { readonly search: BoardSearch }) {
                   } catch {
                     // Remembering the project is a convenience; the URL still carries it.
                   }
-                  void setSearch({ ...next, issue: undefined, category: undefined });
+                  // Issues, categories and decision refs belong to one project.
+                  void setSearch({
+                    ...next,
+                    issue: undefined,
+                    category: undefined,
+                    decision: undefined,
+                  });
                 }}
               >
                 <SelectTrigger size="xs" variant="ghost" aria-label="Project">
@@ -459,7 +467,11 @@ export function BoardPage({ search }: { readonly search: BoardSearch }) {
               variant="outline"
               pressed={search.view === "decisions"}
               onPressedChange={(pressed) =>
-                void setSearch({ view: pressed ? "decisions" : undefined, issue: undefined })
+                void setSearch({
+                  view: pressed ? "decisions" : undefined,
+                  issue: undefined,
+                  decision: undefined,
+                })
               }
               aria-label="Show decisions"
             >
@@ -567,6 +579,8 @@ export function BoardPage({ search }: { readonly search: BoardSearch }) {
             category={search.category}
             categories={board.data?.decisionCategories ?? []}
             onCategoryChange={(category) => void setSearch({ category })}
+            openRef={search.decision ?? null}
+            onOpenRef={(decision) => void setSearch({ decision: decision ?? undefined })}
             canWrite={canWrite}
           />
         ) : (

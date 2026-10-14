@@ -19,6 +19,7 @@ import * as Schema from "effect/Schema";
 import { Atom } from "effect/reactivity";
 
 import { connectionAtomRuntime } from "~/connection/runtime";
+import { appAtomRegistry } from "~/rpc/atomRegistry";
 import { useEnvironmentQuery } from "~/state/query";
 import { useAtomCommand } from "~/state/use-atom-command";
 import type { LearningScope } from "./state";
@@ -62,6 +63,11 @@ const promptUnarchive = createPluginRpcCommand(connectionAtomRuntime, {
   label: "learning:prompt-unarchive",
   method: PROMPT_METHODS.unarchive,
 });
+/** Counts a message sent with a prompt; the composer runs it, so no person waits on it. */
+export const promptUse = createPluginRpcCommand(connectionAtomRuntime, {
+  label: "learning:prompt-use",
+  method: PROMPT_METHODS.use,
+});
 
 /**
  * A project's prompts as summaries, narrowed by state and by the words of `query` on the server,
@@ -85,8 +91,27 @@ export function usePrompts(
 }
 
 /** One prompt with its versions; nothing while `id` is null. */
-export function usePrompt(environmentId: EnvironmentId, id: number | null) {
-  return useEnvironmentQuery(id === null ? null : promptDetail({ environmentId, input: { id } }));
+export function usePrompt(environmentId: EnvironmentId | null, id: number | null) {
+  return useEnvironmentQuery(
+    environmentId === null || id === null ? null : promptDetail({ environmentId, input: { id } }),
+  );
+}
+
+/** A project's active prompts, as the composer's `/` menu lists them. */
+export const activePromptsAtom = ({ environmentId, projectId }: LearningScope) =>
+  promptList({ environmentId, input: { projectId, state: "active" } });
+
+/** One prompt with its latest body and its versions. */
+export const promptDetailAtom = (environmentId: EnvironmentId, id: number) =>
+  promptDetail({ environmentId, input: { id } });
+
+/**
+ * Re-reads the project's unfiltered and active lists, which the Prompts tab opens on and the
+ * composer's `/` menu reads, after a change made away from the list that shows it.
+ */
+export function refreshPromptLists({ environmentId, projectId }: LearningScope) {
+  appAtomRegistry.refresh(promptList({ environmentId, input: { projectId } }));
+  appAtomRegistry.refresh(activePromptsAtom({ environmentId, projectId }));
 }
 
 /** A person's commands on `environmentId`'s prompt library; every one needs the operate grant. */

@@ -202,8 +202,8 @@ describe("followOpenItem", () => {
   // Each step is the open item's project as the screen sees it: undefined while none is open or
   // it is loading, or a person's pick.
   type Step = { readonly item: string | undefined } | { readonly pick: string };
-  const projectAfter = (steps: ReadonlyArray<Step>) => {
-    let choice = NO_PROJECT_CHOICE;
+  const projectAfter = (steps: ReadonlyArray<Step>, start = NO_PROJECT_CHOICE) => {
+    let choice = start;
     for (const step of steps) {
       choice =
         "pick" in step ? { ...choice, projectId: step.pick } : followOpenItem(choice, step.item);
@@ -236,6 +236,12 @@ describe("followOpenItem", () => {
 
   it("leaves the environment's first project with no item and no pick", () => {
     expect(projectAfter([{ item: undefined }])).toBeNull();
+  });
+
+  it("starts on the URL's project, and an item the URL opens selects its own over it", () => {
+    const fromLink = { ...NO_PROJECT_CHOICE, projectId: "board" };
+    expect(projectAfter([{ item: undefined }], fromLink)).toBe("board");
+    expect(projectAfter([{ item: undefined }, { item: "a" }], fromLink)).toBe("a");
   });
 });
 
