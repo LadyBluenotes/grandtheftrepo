@@ -10,7 +10,7 @@ import {
   type ProjectId,
 } from "@t3tools/contracts";
 import { useNavigate } from "@tanstack/react-router";
-import { useState, type FormEvent } from "react";
+import { useRef, useState, type FormEvent } from "react";
 
 import { Badge } from "~/components/ui/badge";
 import { Button } from "~/components/ui/button";
@@ -163,6 +163,28 @@ export function FindingRow({
   );
 }
 
+/**
+ * A form's submit that sends one request at a time: `pending` holds from the submit until the
+ * request settles, and a submit meanwhile, a double click included, does nothing.
+ */
+function useSubmitOnce(send: () => Promise<void>) {
+  const inFlight = useRef(false);
+  const [pending, setPending] = useState(false);
+  const submit = async (event: FormEvent) => {
+    event.preventDefault();
+    if (inFlight.current) return;
+    inFlight.current = true;
+    setPending(true);
+    try {
+      await send();
+    } finally {
+      inFlight.current = false;
+      setPending(false);
+    }
+  };
+  return { pending, submit };
+}
+
 /** Sets the disposition with a reason; picking open reopens the finding. */
 function ReviewForm({
   environmentId,
@@ -178,19 +200,19 @@ function ReviewForm({
   const review = useAtomCommand(kanbanFindingReview, { reportFailure: false });
   const [disposition, setDisposition] = useState(finding.disposition);
   const [reason, setReason] = useState("");
-  const submit = async (event: FormEvent) => {
-    event.preventDefault();
+  const { pending, submit } = useSubmitOnce(async () => {
     const result = await review({
       environmentId,
       input: { projectId, id: finding.id, disposition, reason: reason.trim() },
     });
     reportFailure("Could not review the finding", result);
     if (result._tag === "Success") onDone();
-  };
+  });
   return (
     <form className="flex gap-2 pt-1" onSubmit={submit}>
       <Select
         value={disposition}
+        disabled={pending}
         onValueChange={(value) =>
           typeof value === "string" && setDisposition(value as KanbanFindingDisposition)
         }
@@ -212,9 +234,15 @@ function ReviewForm({
         value={reason}
         placeholder="Why"
         aria-label="Reason"
+        disabled={pending}
         onChange={(event) => setReason(event.target.value)}
       />
-      <Button type="submit" size="sm" variant="outline" disabled={reason.trim().length === 0}>
+      <Button
+        type="submit"
+        size="sm"
+        variant="outline"
+        disabled={pending || reason.trim().length === 0}
+      >
         Save
       </Button>
     </form>
@@ -240,19 +268,19 @@ function MoveForm({
   const move = useAtomCommand(kanbanFindingMove, { reportFailure: false });
   const targets = issues.filter((issue) => issue.id !== issueId && issue.archivedAt === null);
   const [target, setTarget] = useState(NEW_CARD);
-  const submit = async (event: FormEvent) => {
-    event.preventDefault();
+  const { pending, submit } = useSubmitOnce(async () => {
     const result = await move({
       environmentId,
       input: { projectId, id: finding.id, ...(target === NEW_CARD ? {} : { issueId: target }) },
     });
     reportFailure("Could not move the finding", result);
     if (result._tag === "Success") onDone();
-  };
+  });
   return (
     <form className="flex gap-2 pt-1" onSubmit={submit}>
       <Select
         value={target}
+        disabled={pending}
         onValueChange={(value) => typeof value === "string" && setTarget(value)}
       >
         <SelectTrigger size="sm" className="min-w-0 flex-1" aria-label="Move to">
@@ -269,7 +297,7 @@ function MoveForm({
           ))}
         </SelectPopup>
       </Select>
-      <Button type="submit" size="sm" variant="outline">
+      <Button type="submit" size="sm" variant="outline" disabled={pending}>
         Move
       </Button>
     </form>

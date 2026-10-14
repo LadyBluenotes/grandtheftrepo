@@ -76,15 +76,15 @@ exist, so the agent can look them up instead of relitigating them.
 A finding is a problem an agent noticed outside its task: a bug, debt or a risk it was not asked
 to fix. Agents record them without being asked. One that concerns an existing card is attached to
 it; otherwise the agent opens a new card in **Triage** labeled `finding`, with the evidence as its
-description. An agent has to search the board before it records one, so the same problem is not
-filed twice.
+description. An agent has to search the board before it records one, so it checks first whether
+the problem is already there.
 
 A card's panel lists its findings under **Findings**: what is to be done about each (open until
 someone reviews it), how far it was confirmed, the evidence, and the thread it was found in.
 **Review** sets what happens to it, with a reason: fix now, ticketed, accepted risk, duplicate,
 rejected or won't fix. Picking open again reopens it. The agent that recorded a finding cannot
 review it; you or another agent do. **Move** puts a finding on the right card, or on a new Triage
-card of its own. The card it leaves stays where it is.
+card of its own if it has none. The card it leaves stays where it is.
 
 Whoever reviews a finding owns it. A finding on a card in Triage that nobody has reviewed three
 days after it was recorded is flagged under [Waiting on you](#waiting-on-you), one row for the

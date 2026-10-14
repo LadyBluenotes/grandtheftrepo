@@ -90,11 +90,12 @@ const VERIFICATION: Record<KanbanFindingTruth, KanbanVerification> = {
   unknown: "unverified",
 };
 
+/** Runs of letters and digits in any script; accents fall away, so "café" is "cafe". */
 const words = (text: string) =>
   text
     .normalize("NFKD")
     .toLowerCase()
-    .match(/[a-z0-9]+/g) ?? [];
+    .match(/[\p{L}\p{N}]+/gu) ?? [];
 
 /** How many of the query's words start a word of `text`. */
 const score = (query: ReadonlySet<string>, text: string) => {
@@ -115,13 +116,21 @@ const best =
       .slice(0, SEARCH_LIMIT)
       .map((match) => match.item);
 
+/**
+ * Every issue holding finding `id`, and the finding as the first of them has it. Normally one; a
+ * move whose second write failed leaves it on two until a move is tried again.
+ */
 const locate = (issues: ReadonlyMap<string, KanbanIssue>, id: string) => {
-  for (const issue of issues.values()) {
-    const finding = issue.findings.find((f) => f.id === id);
-    if (finding !== undefined) return Effect.succeed({ issue, finding });
-  }
-  return Effect.fail(notFound(`No finding "${id}".`));
+  const held = [...issues.values()].filter((issue) => issue.findings.some((f) => f.id === id));
+  const finding = held[0]?.findings.find((f) => f.id === id);
+  return finding === undefined
+    ? Effect.fail(notFound(`No finding "${id}".`))
+    : Effect.succeed({ held, finding });
 };
+
+/** A card opened for a finding, which a move to "a card of its own" reuses: no other finding. */
+const isOwnCard = (issue: KanbanIssue) =>
+  issue.labels.includes("finding") && issue.findings.length === 1;
 
 /** `issue` holding `finding`, in place of one with its id or at the end, with `text` logged. */
 const holding = (
@@ -136,7 +145,9 @@ const holding = (
     ? issue.findings.map((f) => (f.id === finding.id ? finding : f))
     : [...issue.findings, finding],
   updatedAt: at,
-  log: [...issue.log, { at, by, kind: "finding", text }],
+  // A `note`, which every client can read: a log kind an older client does not know fails the whole
+  // issue there.
+  log: [...issue.log, { at, by, kind: "note", text: `finding ${text}` }],
 });
 
 /**
@@ -222,40 +233,40 @@ const make = Effect.gen(function* () {
         return yield* invalid(
           `Search first: call finding_search from this thread and pass its searchId. Search "${input.searchId}" was not made by this thread in this project in the last ${SEARCH_WINDOW_MINUTES} minutes, or a capture used it already.`,
         );
-      // Taken before the write, so no second capture uses it meanwhile; given back on failure.
+      // Taken before the write, so no second capture uses it meanwhile. It is given back only when
+      // the capture is refused before anything is written, such as for an unknown issue: once the
+      // write may have landed, a retry with it could file the finding twice.
       searches.delete(input.searchId);
       const by = `thread:${input.threadId}`;
-      return yield* store
-        .transact(input.projectId, (issues, at) =>
-          Effect.gen(function* () {
-            const taken = new Set([...issues.values()].flatMap((i) => i.findings.map((f) => f.id)));
-            const finding: KanbanFinding = {
-              id: uniqueSlug(slugOf(input.title), (slug) => taken.has(slug)),
-              title: input.title,
-              evidence: input.evidence,
-              truthStatus: input.truthStatus,
-              scopeRelation: input.scopeRelation,
-              disposition: "open",
-              proposedBy: by,
-              proposedAt: at,
-              threadId: input.threadId,
-              review: null,
-            };
-            const issue = yield* placed(
-              issues,
-              input.issueId,
-              finding,
-              by,
-              at,
-              `${finding.id} added: ${finding.title}`,
-            );
-            return {
-              result: { projectId: input.projectId, issueId: issue.id, finding },
-              save: [issue],
-            };
-          }),
-        )
-        .pipe(Effect.onError(() => Effect.sync(() => searches.set(input.searchId, made))));
+      return yield* store.transact(input.projectId, (issues, at) =>
+        Effect.gen(function* () {
+          const taken = new Set([...issues.values()].flatMap((i) => i.findings.map((f) => f.id)));
+          const finding: KanbanFinding = {
+            id: uniqueSlug(slugOf(input.title), (slug) => taken.has(slug)),
+            title: input.title,
+            evidence: input.evidence,
+            truthStatus: input.truthStatus,
+            scopeRelation: input.scopeRelation,
+            disposition: "open",
+            proposedBy: by,
+            proposedAt: at,
+            threadId: input.threadId,
+            review: null,
+          };
+          const issue = yield* placed(
+            issues,
+            input.issueId,
+            finding,
+            by,
+            at,
+            `${finding.id} added: ${finding.title}`,
+          );
+          return {
+            result: { projectId: input.projectId, issueId: issue.id, finding },
+            save: [issue],
+          };
+        }).pipe(Effect.tapError(() => Effect.sync(() => searches.set(input.searchId, made)))),
+      );
     });
 
   const review: FindingService["Service"]["review"] = (
@@ -264,16 +275,19 @@ const make = Effect.gen(function* () {
   ) =>
     store.transact(projectId, (issues, at) =>
       Effect.gen(function* () {
-        const { issue, finding } = yield* locate(issues, id);
+        const { held, finding } = yield* locate(issues, id);
         if (finding.proposedBy === by)
           return yield* new KanbanError({
             code: "gated",
             message: "A finding is reviewed by someone other than the one who captured it.",
           });
         const reviewed: KanbanFinding = { ...finding, disposition, review: { by, at, reason } };
+        // Every copy, so a move tried again keeps the review whichever copy it takes.
         return {
-          result: { projectId, issueId: issue.id, finding: reviewed },
-          save: [holding(issue, reviewed, by, at, `${id} ${disposition}: ${reason}`)],
+          result: { projectId, issueId: held[0]!.id, finding: reviewed },
+          save: held.map((issue) =>
+            holding(issue, reviewed, by, at, `${id} ${disposition}: ${reason}`),
+          ),
         };
       }),
     );
@@ -281,17 +295,40 @@ const make = Effect.gen(function* () {
   const move: FindingService["Service"]["move"] = ({ projectId, id, issueId }, by) =>
     store.transact(projectId, (issues, at) =>
       Effect.gen(function* () {
-        const { issue: from, finding } = yield* locate(issues, id);
-        if (issueId === from.id) return yield* invalid(`Finding "${id}" is already on ${issueId}.`);
-        const to = yield* placed(issues, issueId, finding, by, at, `${id} moved from ${from.id}`);
-        const left: KanbanIssue = {
-          ...from,
-          findings: from.findings.filter((f) => f.id !== id),
+        const { held, finding } = yield* locate(issues, id);
+        // Already there when an earlier move added it but failed to remove it: only the other
+        // copies go. Without an issue that is the card of its own such a move opened.
+        const already = held.find((issue) =>
+          issueId === undefined ? isOwnCard(issue) : issue.id === issueId,
+        );
+        const from = held.filter((issue) => issue !== already);
+        if (from.length === 0)
+          return yield* invalid(
+            issueId === undefined
+              ? `Finding "${id}" already has a card of its own, ${held[0]!.id}.`
+              : `Finding "${id}" is already on ${issueId}.`,
+          );
+        const to =
+          already ??
+          (yield* placed(
+            issues,
+            issueId,
+            finding,
+            by,
+            at,
+            `${id} moved from ${from.map((issue) => issue.id).join(", ")}`,
+          ));
+        const left = from.map((issue): KanbanIssue => ({
+          ...issue,
+          findings: issue.findings.filter((f) => f.id !== id),
           updatedAt: at,
-          log: [...from.log, { at, by, kind: "finding", text: `${id} moved to ${to.id}` }],
+          log: [...issue.log, { at, by, kind: "note", text: `finding ${id} moved to ${to.id}` }],
+        }));
+        // Added before it is removed: a failed later write leaves it on two issues, not on none.
+        return {
+          result: { projectId, issueId: to.id, finding },
+          save: already === undefined ? [to, ...left] : left,
         };
-        // Added before it is removed: a failed second write leaves it on both issues, not neither.
-        return { result: { projectId, issueId: to.id, finding }, save: [to, left] };
       }),
     );
 
