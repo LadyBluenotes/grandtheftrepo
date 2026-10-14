@@ -123,6 +123,14 @@ export const KanbanReopen = Schema.Struct({
 });
 export type KanbanReopen = typeof KanbanReopen.Type;
 
+/** Why an issue needed no decision, stated in place of a linked one so it can move to Done. */
+export const KanbanNoDecision = Schema.Struct({
+  reason: Schema.String,
+  at: IsoDateTime,
+  by: KanbanActor,
+});
+export type KanbanNoDecision = typeof KanbanNoDecision.Type;
+
 /** How far a finding was confirmed. */
 export const KanbanFindingTruth = Schema.Literals([
   "seen",
@@ -224,6 +232,7 @@ export const KanbanLogKind = Schema.Literals([
   "reopened",
   "criterion",
   "finding",
+  "no_decision",
 ]);
 export type KanbanLogKind = typeof KanbanLogKind.Type;
 
@@ -239,6 +248,12 @@ export const KanbanIssue = Schema.Struct({
   ...KanbanIssueFields,
   criteria: Schema.Array(KanbanCriterion),
   findings: Schema.Array(KanbanFinding),
+  /**
+   * Whether Done also needs a decision listing this issue or a `noDecision`, and no open finding.
+   * Every issue filed since that check began has it; an older issue file does not, and is exempt.
+   */
+  closureCheck: Schema.Boolean,
+  noDecision: Schema.NullOr(KanbanNoDecision),
   description: Schema.String,
   log: Schema.Array(KanbanLogEntry),
 });
@@ -301,6 +316,7 @@ export const KanbanWriteAction = Schema.Literals([
   "issue.archive",
   "issue.unarchive",
   "issue.delete",
+  "issue.noDecision",
   "criterion.add",
   "criterion.update",
   "criterion.remove",
@@ -334,7 +350,10 @@ export const KanbanWrite = Schema.Struct({
   criterionId: Schema.optional(TrimmedNonEmptyString),
   /** New checked state for `criterion.update`. */
   checked: Schema.optional(Schema.Boolean),
-  /** Block reason for `issue.block`. */
+  /**
+   * Block reason for `issue.block`; for `issue.noDecision`, why the issue needed no decision, and
+   * empty clears it.
+   */
   reason: Schema.optional(Schema.String),
   threadId: Schema.optional(ThreadId),
   category: Schema.optional(KanbanSlug),
@@ -491,6 +510,7 @@ export const KanbanAttentionKind = Schema.Literals([
   "promotion_ineffective",
   "promotion_settled",
   "decision_conflict",
+  "closure_held",
 ]);
 export type KanbanAttentionKind = typeof KanbanAttentionKind.Type;
 
@@ -511,6 +531,7 @@ export const KANBAN_ATTENTION_KIND_LABELS: Record<KanbanAttentionKind, string> =
   promotion_ineffective: "Handover ineffective",
   promotion_settled: "Handover settled",
   decision_conflict: "Decision conflict",
+  closure_held: "Held from Done",
 };
 
 /**

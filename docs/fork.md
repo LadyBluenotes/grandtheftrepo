@@ -116,7 +116,12 @@ them half-evaluated. The host hands `toolkitRegistration` to `ServerPlugin.mcp` 
   and spec attempts. The `writers` sweep raises an attention flag when two agents write one
   project, and the `decisions` sweep one per conflicted decision, keyed
   `decision:<projectId>:<category>/<id>`; it sees only projects the store has loaded, so a flag on
-  one not loaded since the server started stays until the store next loads it.
+  one not loaded since the server started stays until the store next loads it. Done also needs a
+  decision listing the issue or a `noDecision` reason, and no open finding, for an issue carrying
+  `closureCheck`, which every new issue does; files from before have none and stay exempt. A
+  settled or merged thread's card failing it gets a `closure_held` flag, keyed
+  `closure:<projectId>:<issueId>`, instead of Done, and the `closure` sweep clears it once the card
+  passes.
   `kanban.attention.list` feeds the strip above the board from the project's open host
   flags, its threads' pending questions and permission requests, and, while routing runs, its
   routing mismatches. `kanban.ticket.specify` (MCP `kanban_ticket_specify`) checks a Triage or

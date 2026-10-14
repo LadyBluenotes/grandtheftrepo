@@ -126,6 +126,8 @@ function IssueDetails({
   const [note, setNote] = useState("");
   const [blockReason, setBlockReason] = useState("");
   const [criterion, setCriterion] = useState("");
+  // Null until edited, so the field shows the reason as it is now, whoever set it.
+  const [noDecision, setNoDecision] = useState<string | null>(null);
   const [reopenTo, setReopenTo] = useState<KanbanStatus | null>(null);
   const [recording, setRecording] = useState(false);
   const [starting, setStarting] = useState(false);
@@ -570,7 +572,11 @@ function IssueDetails({
               />
             ) : null}
             {decisions.length === 0 && !recording ? (
-              <p className="text-sm text-muted-foreground">None about this ticket.</p>
+              <p className="text-sm text-muted-foreground">
+                {issue.closureCheck && issue.noDecision === null
+                  ? "None about this ticket. Done needs one, or a reason none was needed."
+                  : "None about this ticket."}
+              </p>
             ) : (
               <ul className="flex flex-col gap-2">
                 {decisions.map((decision) => (
@@ -585,6 +591,25 @@ function IssueDetails({
                 ))}
               </ul>
             )}
+            {issue.noDecision !== null || (decisions.length === 0 && canWrite) ? (
+              <Input
+                size="sm"
+                aria-label="Why no decision was needed"
+                value={noDecision ?? issue.noDecision?.reason ?? ""}
+                disabled={!canWrite}
+                placeholder="No decision needed, because…"
+                onChange={(event) => setNoDecision(event.target.value)}
+                onBlur={() =>
+                  noDecision !== null &&
+                  noDecision.trim() !== (issue.noDecision?.reason ?? "") &&
+                  void change({
+                    action: "issue.noDecision",
+                    id: issue.id,
+                    reason: noDecision.trim(),
+                  })
+                }
+              />
+            ) : null}
           </Field>
 
           <Field label="Log">
@@ -678,6 +703,12 @@ function LogRow({ entry }: { readonly entry: KanbanLogEntry }) {
           <>criterion {entry.text}</>
         ) : entry.kind === "finding" ? (
           <>finding {entry.text}</>
+        ) : entry.kind === "no_decision" ? (
+          entry.text.length === 0 ? (
+            <>cleared the no-decision reason</>
+          ) : (
+            <>no decision needed: {entry.text}</>
+          )
         ) : (
           entry.text
         )}

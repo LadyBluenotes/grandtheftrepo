@@ -12,6 +12,7 @@ import {
   KanbanLabel,
   KanbanLogEntry,
   KanbanLogKind,
+  KanbanNoDecision,
   KanbanPriority,
   KanbanReopen,
   KanbanSlug,
@@ -67,6 +68,9 @@ const IssueFrontmatter = Schema.Struct({
   tier: Schema.optional(Schema.NullOr(KanbanTier)),
   criteria: Schema.optional(Schema.NullOr(Schema.Array(KanbanCriterion))),
   findings: Schema.optional(Schema.NullOr(Schema.Array(KanbanFinding))),
+  /** Written on every issue filed since the closure check began; a file without it is exempt. */
+  closureCheck: Schema.optional(Schema.NullOr(Schema.Boolean)),
+  noDecision: Schema.optional(Schema.NullOr(KanbanNoDecision)),
   blocked: Schema.optional(Schema.NullOr(KanbanBlock)),
   reopened: Schema.optional(Schema.NullOr(KanbanReopen)),
   threads: Schema.optional(Schema.NullOr(Schema.Array(KanbanThreadLink))),
@@ -116,6 +120,8 @@ export function parseIssue(id: string, text: string): ParsedIssue | null {
       tier: front.tier ?? null,
       criteria: front.criteria ?? [],
       findings: front.findings ?? [],
+      closureCheck: front.closureCheck ?? false,
+      noDecision: front.noDecision ?? null,
       blocked: front.blocked ?? null,
       reopened: front.reopened ?? null,
       threads: front.threads ?? [],
@@ -160,12 +166,25 @@ export function formatLogEntry(entry: KanbanLogEntry): string {
 }
 
 export function serializeIssue(issue: KanbanIssue, project: string): string {
-  const { id: _id, description, log, blocked, reopened, criteria, findings, ...rest } = issue;
+  const {
+    id: _id,
+    description,
+    log,
+    blocked,
+    reopened,
+    criteria,
+    findings,
+    closureCheck,
+    noDecision,
+    ...rest
+  } = issue;
   const front = {
     ...rest,
     project,
     ...(criteria.length === 0 ? {} : { criteria }),
     ...(findings.length === 0 ? {} : { findings }),
+    ...(closureCheck ? { closureCheck } : {}),
+    ...(noDecision === null ? {} : { noDecision }),
     ...(blocked === null ? {} : { blocked }),
     ...(reopened === null ? {} : { reopened }),
   };

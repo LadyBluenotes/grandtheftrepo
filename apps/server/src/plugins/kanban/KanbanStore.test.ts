@@ -5,6 +5,8 @@ import {
   ThreadId,
   type KanbanDecision,
   type KanbanError,
+  type KanbanFinding,
+  type KanbanFindingDisposition,
   type Project,
 } from "@t3tools/contracts";
 import * as Context from "effect/Context";
@@ -54,6 +56,20 @@ const layerTest = Layer.empty.pipe(
   ),
   Layer.provideMerge(NodeServices.layer),
 );
+
+/** A finding with `disposition`, captured at `at`. */
+const finding = (disposition: KanbanFindingDisposition, at: string): KanbanFinding => ({
+  id: "cookie-path",
+  title: "Cookie path is too broad",
+  evidence: "Set-Cookie: sid=...; Path=/",
+  truthStatus: "seen",
+  scopeRelation: "adjacent",
+  disposition,
+  proposedBy: "thread:thr_finder",
+  proposedAt: at,
+  threadId: ThreadId.make("thr_finder"),
+  review: null,
+});
 
 const failureCode = <A>(effect: Effect.Effect<A, KanbanError>) =>
   effect.pipe(
@@ -258,6 +274,11 @@ it.layer(layerTest)("KanbanStore", (it) => {
           action: "issue.create",
           title: "Ship it",
         });
+        yield* store.write(projectId, "user", {
+          action: "issue.noDecision",
+          id: todo.id,
+          reason: "Nothing to choose between.",
+        });
         yield* store.write(projectId, "user", { action: "issue.link", id: todo.id, threadId });
         const held = yield* store.write(projectId, "thread:x", {
           action: "issue.create",
@@ -338,6 +359,11 @@ it.layer(layerTest)("KanbanStore", (it) => {
           title: "Ship criteria",
           tier: "strong",
         });
+        yield* store.write(projectId, "user", {
+          action: "issue.noDecision",
+          id,
+          reason: "Only criteria matter here.",
+        });
         yield* store.write(projectId, "user", { action: "criterion.add", id, text: "Tests pass" });
         yield* store.write(projectId, "thread:t", {
           action: "criterion.add",
@@ -392,6 +418,7 @@ it.layer(layerTest)("KanbanStore", (it) => {
           issue.log.map((e) => e.kind),
           [
             "status",
+            "no_decision",
             "criterion",
             "criterion",
             "criterion",
@@ -408,6 +435,195 @@ it.layer(layerTest)("KanbanStore", (it) => {
         yield* store.write(projectId, "user", { action: "issue.link", id, threadId });
         yield* store.advance(projectId, threadId, "done");
         assert.strictEqual((yield* store.getIssue({ projectId, id })).status, "todo");
+      }),
+    );
+
+    it.effect("refuses Done without a linked decision or a reason none was needed", () =>
+      Effect.gen(function* () {
+        const store = yield* KanbanStore.KanbanStore;
+        const toDone = (id: string) =>
+          store.write(projectId, "user", { action: "issue.move", id, status: "done" });
+        const { id } = yield* store.write(projectId, "user", {
+          action: "issue.create",
+          title: "Bump the timeout",
+        });
+        const refused = yield* Effect.flip(toDone(id));
+        assert.strictEqual(refused.code, "invalid");
+        assert.include(refused.message, "linked decision");
+        assert.include(refused.message, "issue.noDecision");
+
+        // A reason stands in for a decision; it can be changed, and cleared again.
+        yield* store.write(projectId, "user", {
+          action: "issue.noDecision",
+          id,
+          reason: "A config value.",
+        });
+        yield* store.write(projectId, "thread:t", {
+          action: "issue.noDecision",
+          id,
+          reason: "Only a config value.",
+        });
+        let issue = yield* store.getIssue({ projectId, id });
+        assert.deepStrictEqual(
+          [issue.noDecision?.reason, issue.noDecision?.by],
+          ["Only a config value.", "thread:t"],
+        );
+        yield* store.write(projectId, "user", { action: "issue.noDecision", id, reason: " " });
+        issue = yield* store.getIssue({ projectId, id });
+        assert.isNull(issue.noDecision);
+        assert.deepStrictEqual(
+          issue.log.filter((entry) => entry.kind === "no_decision").map((entry) => entry.text),
+          ["A config value.", "Only a config value.", ""],
+        );
+        assert.strictEqual(yield* failureCode(toDone(id)), "invalid");
+        yield* store.write(projectId, "user", {
+          action: "issue.noDecision",
+          id,
+          reason: "A config value.",
+        });
+        yield* toDone(id);
+        assert.strictEqual((yield* store.getIssue({ projectId, id })).status, "done");
+
+        // A decision listing the issue does too, in any state.
+        const linked = yield* store.write(projectId, "user", {
+          action: "issue.create",
+          title: "Pick a queue",
+        });
+        assert.strictEqual(yield* failureCode(toDone(linked.id)), "invalid");
+        const decision = yield* store.write(projectId, "thread:t", {
+          action: "decision.create",
+          category: "queues",
+          state: "proposed",
+          title: "Use SQS",
+          why: "Managed, and the team knows it.",
+          issues: [linked.id],
+        });
+        yield* toDone(linked.id);
+        assert.strictEqual((yield* store.getIssue({ projectId, id: linked.id })).status, "done");
+        // The decisions tests count this board's categories.
+        yield* store.write(projectId, "user", {
+          action: "decision.delete",
+          category: "queues",
+          id: decision.id,
+        });
+      }),
+    );
+
+    it.effect("refuses Done while a finding on the issue is open", () =>
+      Effect.gen(function* () {
+        const store = yield* KanbanStore.KanbanStore;
+        const { id } = yield* store.write(projectId, "user", {
+          action: "issue.create",
+          title: "Harden login",
+        });
+        yield* store.write(projectId, "user", {
+          action: "issue.noDecision",
+          id,
+          reason: "A fix, not a choice.",
+        });
+        const withFinding = (disposition: KanbanFindingDisposition) =>
+          store.transact(projectId, (issues, at) =>
+            Effect.succeed({
+              result: undefined,
+              save: [{ ...issues.get(id)!, findings: [finding(disposition, at)] }],
+            }),
+          );
+        const toDone = store.write(projectId, "user", { action: "issue.move", id, status: "done" });
+
+        yield* withFinding("open");
+        const refused = yield* Effect.flip(toDone);
+        assert.include(refused.message, "finding cookie-path is still open");
+        assert.notInclude(refused.message, "linked decision");
+        yield* withFinding("ticketed");
+        yield* toDone;
+        assert.strictEqual((yield* store.getIssue({ projectId, id })).status, "done");
+      }),
+    );
+
+    it.effect("holds a card failing the check back from Done when its thread settles", () =>
+      Effect.gen(function* () {
+        const store = yield* KanbanStore.KanbanStore;
+        const threadId = ThreadId.make("thr_held");
+        const { id } = yield* store.write(projectId, "user", {
+          action: "issue.create",
+          title: "Held card",
+        });
+        yield* store.write(projectId, "user", { action: "issue.link", id, threadId });
+        assert.deepStrictEqual(yield* store.advance(projectId, threadId, "in_review"), []);
+
+        const held = yield* store.advance(projectId, threadId, "done");
+        assert.deepStrictEqual(
+          held.map((card) => [card.id, card.title]),
+          [[id, "Held card"]],
+        );
+        assert.include(held[0]?.missing.join(), "linked decision");
+        assert.strictEqual((yield* store.getIssue({ projectId, id })).status, "in_review");
+
+        yield* store.write(projectId, "user", {
+          action: "issue.noDecision",
+          id,
+          reason: "Plain bug fix.",
+        });
+        assert.deepStrictEqual(yield* store.advance(projectId, threadId, "done"), []);
+        assert.strictEqual((yield* store.getIssue({ projectId, id })).status, "done");
+      }),
+    );
+
+    it.effect("lets an issue filed before the check move to Done, by hand or on its own", () =>
+      Effect.gen(function* () {
+        const store = yield* KanbanStore.KanbanStore;
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const folder = yield* fs.makeTempDirectoryScoped({ prefix: "t3code-kanban-older-" });
+        yield* fs.makeDirectory(path.join(folder, "issues"), { recursive: true });
+        const threadId = ThreadId.make("thr_older");
+        const at = "2026-10-01T00:00:00.000Z";
+        // As the server wrote them before the check: no `closureCheck`, and here an open finding.
+        for (const id of ["dragged", "settled"])
+          yield* fs.writeFileString(
+            path.join(folder, "issues", `${id}${ISSUE_EXTENSION}`),
+            serializeIssue(
+              {
+                id,
+                title: id,
+                status: "in_review",
+                priority: "p3",
+                labels: [],
+                verification: "unverified",
+                tier: null,
+                criteria: [],
+                findings: [finding("open", at)],
+                closureCheck: false,
+                noDecision: null,
+                blocked: null,
+                reopened: null,
+                threads: [{ id: threadId, linkedAt: at }],
+                createdAt: at,
+                createdBy: "user",
+                updatedAt: at,
+                doneAt: null,
+                archivedAt: null,
+                description: "",
+                log: [],
+              },
+              "grand-theft-repo",
+            ),
+          );
+        assert.notInclude(
+          yield* fs.readFileString(path.join(folder, "issues", `dragged${ISSUE_EXTENSION}`)),
+          "closureCheck",
+        );
+        yield* store.setDirectory({ projectId, directory: folder });
+
+        yield* store.write(projectId, "user", {
+          action: "issue.move",
+          id: "dragged",
+          status: "done",
+        });
+        assert.strictEqual((yield* store.getIssue({ projectId, id: "dragged" })).status, "done");
+        assert.deepStrictEqual(yield* store.advance(projectId, threadId, "done"), []);
+        assert.strictEqual((yield* store.getIssue({ projectId, id: "settled" })).status, "done");
+        yield* store.setDirectory({ projectId, directory: null });
       }),
     );
   });
@@ -484,6 +700,8 @@ it.layer(layerTest)("KanbanStore", (it) => {
               tier: null,
               criteria: [],
               findings: [],
+              closureCheck: false,
+              noDecision: null,
               blocked: null,
               reopened: null,
               threads: [],
