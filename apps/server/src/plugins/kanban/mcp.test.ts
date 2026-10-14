@@ -107,6 +107,7 @@ const layerRequestServices = Layer.mergeAll(
         }),
       checkWorktreeBase: () => Effect.void,
       retryPreparation: () => Effect.die("unused"),
+      prepareRun: () => Effect.die("unused"),
     }),
   ),
   Layer.succeed(

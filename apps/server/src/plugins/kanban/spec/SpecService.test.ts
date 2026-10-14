@@ -325,6 +325,7 @@ const start = Effect.gen(function* () {
       ),
     checkWorktreeBase: () => Effect.void,
     retryPreparation: () => Effect.die("unused"),
+    prepareRun: () => Effect.die("unused"),
   });
   const tiers = (entry: RoutingEntry | null) =>
     TierSelectionService.TierSelectionService.of({
