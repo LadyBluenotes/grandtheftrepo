@@ -5,6 +5,8 @@ import {
   ThreadId,
   type LearningCorrection,
   type LearningItem,
+  type LearningItemDetail,
+  type LearningPromotion,
   type PluginStatus,
 } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
@@ -19,6 +21,7 @@ import {
   learningItemId,
   NO_PROJECT_CHOICE,
   pluginActive,
+  promotionChain,
   threadLabel,
   threadsByActivity,
 } from "./state";
@@ -233,5 +236,158 @@ describe("followOpenItem", () => {
 
   it("leaves the environment's first project with no item and no pick", () => {
     expect(projectAfter([{ item: undefined }])).toBeNull();
+  });
+});
+
+describe("promotionChain", () => {
+  const promotion = (patch: Partial<LearningPromotion>): LearningPromotion => ({
+    id: 1,
+    itemId: 1,
+    projectId,
+    failureMode: "scope_drift",
+    ownerKind: "policy",
+    state: "proposed",
+    proposedBy: "supervisor",
+    attempts: 0,
+    nextAttemptAt: null,
+    lastError: null,
+    deliveredAt: null,
+    adoptedAt: null,
+    rolledBackAt: null,
+    rolledBackBy: null,
+    createdAt: "2026-10-01T00:00:00.000Z",
+    updatedAt: "2026-10-01T00:00:00.000Z",
+    ...patch,
+  });
+  const detail = (patch: Partial<LearningItemDetail>): LearningItemDetail => ({
+    item: item({ failureMode: "scope_drift", ownerKind: "policy", state: "candidate" }),
+    evidence: [],
+    promotions: [],
+    reviews: [],
+    outcomes: [],
+    ...patch,
+  });
+  /** Each step as `label:state`. */
+  const steps = (input: LearningItemDetail) =>
+    promotionChain(input).steps.map((step) => `${step.label}:${step.state}`);
+  const delivered = { deliveredAt: "2026-10-02T00:00:00.000Z" };
+  const adopted = { ...delivered, adoptedAt: "2026-10-03T00:00:00.000Z" };
+
+  it("is on the corrections until a handover is proposed", () => {
+    expect(steps(detail({}))).toEqual([
+      "Corrections:current",
+      "Proposed:upcoming",
+      "In review:upcoming",
+      "Adopted:upcoming",
+      "Outcome:upcoming",
+    ]);
+  });
+
+  it("marks the review as current, with the latest revision asked", () => {
+    const chain = promotionChain(
+      detail({
+        promotions: [promotion({ state: "in_review", ...delivered })],
+        reviews: [
+          {
+            id: 1,
+            promotionId: 1,
+            verdict: "revise",
+            reviewer: "thread:reviewer",
+            note: "Narrow it.",
+            createdAt: "2026-10-02T06:00:00.000Z",
+          },
+        ],
+      }),
+    );
+    expect(chain.steps.map((step) => step.state)).toEqual([
+      "done",
+      "done",
+      "current",
+      "upcoming",
+      "upcoming",
+    ]);
+    expect(chain.steps[1]).toMatchObject({ by: "supervisor", at: "2026-10-01T00:00:00.000Z" });
+    expect(chain.steps[2]?.detail).toBe("Revision asked by an agent: Narrow it.");
+  });
+
+  it("watches the outcome once adopted, and shows the verdict once judged", () => {
+    const review = {
+      id: 1,
+      promotionId: 1,
+      verdict: "adopt" as const,
+      reviewer: "user",
+      note: null,
+      createdAt: adopted.adoptedAt,
+    };
+    const watching = detail({
+      promotions: [promotion({ state: "adopted", ...adopted })],
+      reviews: [review],
+    });
+    expect(steps(watching)).toEqual([
+      "Corrections:done",
+      "Proposed:done",
+      "In review:done",
+      "Adopted:done",
+      "Outcome:current",
+    ]);
+    expect(promotionChain(watching).steps[3]).toMatchObject({
+      by: "user",
+      at: adopted.adoptedAt,
+    });
+    expect(promotionChain(watching).steps[4]?.detail).toBe("Judged four weeks after adoption.");
+    const judged = promotionChain({
+      ...watching,
+      outcomes: [{ promotionId: 1, verdict: "settled", judgedAt: "2026-10-31T00:00:00.000Z" }],
+    });
+    expect(judged.steps[4]).toMatchObject({
+      state: "current",
+      detail: "Settled: the mode did not recur.",
+    });
+  });
+
+  it("ends on a rejection, and puts a rollback in the outcome's place", () => {
+    expect(
+      steps(
+        detail({
+          item: item({ ownerKind: "policy", state: "open" }),
+          promotions: [promotion({ state: "rejected", ...delivered })],
+        }),
+      ),
+    ).toEqual(["Corrections:done", "Proposed:done", "In review:done", "Rejected:current"]);
+    expect(
+      steps(
+        detail({
+          promotions: [
+            promotion({
+              state: "rolled_back",
+              ...adopted,
+              rolledBackAt: "2026-10-05T00:00:00.000Z",
+              rolledBackBy: "user",
+            }),
+          ],
+        }),
+      ),
+    ).toEqual([
+      "Corrections:done",
+      "Proposed:done",
+      "In review:done",
+      "Adopted:done",
+      "Rolled back:current",
+    ]);
+  });
+
+  it("follows the handover for the item's owner kind, else its latest", () => {
+    const promotions = [
+      promotion({ id: 1, ownerKind: "project_knowledge", state: "adopted", ...adopted }),
+      promotion({ id: 2, ownerKind: "policy", state: "proposed" }),
+    ];
+    expect(promotionChain(detail({ promotions })).promotion?.id).toBe(2);
+    expect(
+      promotionChain(detail({ item: item({ ownerKind: "local_only" }), promotions })).promotion?.id,
+    ).toBe(2);
+    expect(
+      promotionChain(detail({ item: item({ ownerKind: "project_knowledge" }), promotions }))
+        .promotion?.id,
+    ).toBe(1);
   });
 });

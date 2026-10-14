@@ -8,6 +8,9 @@ import {
   LearningItemDetail,
   LearningItemInput,
   LearningItemsInput,
+  LearningPromotion,
+  LearningPromotionReviewInput,
+  LearningPromotionRollBackInput,
   OrchestratorMcpFailure,
   ProjectId,
   ThreadId,
@@ -58,7 +61,7 @@ const CorrectionTool = Tool.make("learning_correction", {
 const CorrectionAddTool = Tool.make("learning_correction_add", {
   ...shared,
   description:
-    "Record a correction by hand: an instance of work being wrong that no server event caught. Omit threadId for the calling thread; the correction takes the thread's project, and a projectId that differs from it is refused. declaredMode names the review failure mode when a reviewer or person named one. Secrets in the description are redacted and it is cut at 500 characters.",
+    "Record a correction by hand: an instance of work being wrong that no server event caught. Omit threadId for the calling thread; the correction takes the thread's project, and a projectId that differs from it is refused. declaredMode names the failure mode when a reviewer or person named one. Secrets in the description are redacted and it is cut at 500 characters.",
   parameters: Schema.Struct({
     projectId: Schema.optional(ProjectId),
     threadId: Schema.optional(ThreadId),
@@ -89,12 +92,38 @@ const ItemsTool = Tool.make("learning_items", {
 const ItemTool = Tool.make("learning_item", {
   ...shared,
   description:
-    "One learning item by id, with its evidence (one entry per occurrence) and its promotion records.",
+    "One learning item by id, with its evidence (one entry per occurrence), its promotion records (handovers to an owner kind: proposed, in_review, adopted, rejected, rolled_back or failed, and who proposed each), the review verdicts on them and the outcome of each adopted one four weeks on.",
   parameters: LearningItemInput,
   success: LearningItemDetail,
 })
   .annotate(Tool.Readonly, true)
   .annotate(Tool.Destructive, false);
+
+const PromotionReviewTool = Tool.make("learning_promotion_review", {
+  ...shared,
+  description:
+    "Review a learning promotion that is in_review, as learning_item lists it: the draft its owner kind's plugin holds (a knowledge page, a policy version or a prompt) is the proposal. verdict adopt adopts it, promotes the item and starts the four-week outcome window; reject turns it down and reopens the item; revise asks for changes and leaves it in review for another verdict. note says why, at most 500 characters, secrets redacted. Refused unless the promotion is in review, when your own thread proposed it (a promotion is reviewed by someone other than its proposer), and adopt while the item is no longer a candidate for that owner kind. From a T3 thread only. Answers with the promotion.",
+  parameters: LearningPromotionReviewInput,
+  success: LearningPromotion,
+})
+  .annotate(Tool.Title, "Review a learning promotion")
+  .annotate(Tool.Readonly, false)
+  .annotate(Tool.Destructive, false)
+  .annotate(Tool.Idempotent, false)
+  .annotate(Tool.OpenWorld, false);
+
+const PromotionRollBackTool = Tool.make("learning_promotion_rollback", {
+  ...shared,
+  description:
+    "Roll back an adopted learning promotion: it becomes rolled_back, its outcome is no longer judged, and its item is open again for a person to route elsewhere or close. The draft in its owner kind's plugin is left as it is. Refused unless the promotion is adopted. From a T3 thread only. Answers with the promotion.",
+  parameters: LearningPromotionRollBackInput,
+  success: LearningPromotion,
+})
+  .annotate(Tool.Title, "Roll back a learning promotion")
+  .annotate(Tool.Readonly, false)
+  .annotate(Tool.Destructive, false)
+  .annotate(Tool.Idempotent, false)
+  .annotate(Tool.OpenWorld, false);
 
 export const LearningToolkit = Toolkit.make(
   CorrectionsTool,
@@ -102,11 +131,14 @@ export const LearningToolkit = Toolkit.make(
   CorrectionAddTool,
   ItemsTool,
   ItemTool,
+  PromotionReviewTool,
+  PromotionRollBackTool,
 );
 
 const failure = (error: LearningError) =>
   new OrchestratorMcpFailure({
-    code: error.code === "not_found" ? "invalid_request" : "orchestration_error",
+    code:
+      error.code === "io" || error.code === "inactive" ? "orchestration_error" : "invalid_request",
     message: error.message,
   });
 
@@ -120,6 +152,19 @@ const running = <A>(service: Option.Option<A>) =>
         }),
       ),
     onSome: Effect.succeed,
+  });
+
+/** The calling thread as an actor, `thread:<id>`; `what` is refused for a client outside T3. */
+const threadActor = (what: string) =>
+  Effect.gen(function* () {
+    const { caller } = yield* readCaller();
+    if (caller === undefined) {
+      return yield* new OrchestratorMcpFailure({
+        code: "thread_credential_required",
+        message: `${what} is given by a T3 thread; this MCP client is not running in one.`,
+      });
+    }
+    return `thread:${caller.id}`;
   });
 
 /**
@@ -184,6 +229,21 @@ export const handlers = McpToolAccess.toLayer(
           yield* readCaller();
           const items = yield* itemStore;
           return yield* items.get(id);
+        }).pipe(Effect.catchTags({ LearningError: (error) => Effect.fail(failure(error)) })),
+      ),
+      // An agent acts as its thread, so the proposer check can tell two agents apart.
+      learning_promotion_review: McpToolAccess.actsAsCaller((input) =>
+        Effect.gen(function* () {
+          const reviewer = yield* threadActor("A review");
+          const items = yield* itemStore;
+          return yield* items.reviewPromotion(input, reviewer);
+        }).pipe(Effect.catchTags({ LearningError: (error) => Effect.fail(failure(error)) })),
+      ),
+      learning_promotion_rollback: McpToolAccess.actsAsCaller((input) =>
+        Effect.gen(function* () {
+          const actor = yield* threadActor("A rollback");
+          const items = yield* itemStore;
+          return yield* items.rollBackPromotion(input, actor);
         }).pipe(Effect.catchTags({ LearningError: (error) => Effect.fail(failure(error)) })),
       ),
     };

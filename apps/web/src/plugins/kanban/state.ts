@@ -56,6 +56,16 @@ export const kanbanWrite = createPluginRpcCommand(connectionAtomRuntime, {
   method: KANBAN_METHODS.write,
 });
 
+export const kanbanFindingReview = createPluginRpcCommand(connectionAtomRuntime, {
+  label: "kanban:finding-review",
+  method: KANBAN_METHODS.findingReview,
+});
+
+export const kanbanFindingMove = createPluginRpcCommand(connectionAtomRuntime, {
+  label: "kanban:finding-move",
+  method: KANBAN_METHODS.findingMove,
+});
+
 export const kanbanSetDirectory = createPluginRpcCommand(connectionAtomRuntime, {
   label: "kanban:set-directory",
   method: KANBAN_METHODS.setDirectory,
@@ -91,11 +101,13 @@ const kanbanProjectsAttention = createKanbanProjectsAttentionAtomFamily(connecti
 
 /**
  * Where a strip row's button leads, always on the row's environment: the row's thread, the
- * board, that environment's Plugins page, where budgets and other plugin settings live, or a
- * plugin's screen on the tab and record the flag names. Null when a thread row has no thread.
+ * board (its decisions view for a decision conflict) on the row's project, or on no project for a
+ * row about every project, that environment's Plugins page, where budgets and other plugin
+ * settings live, or a plugin's screen on the tab and record the flag names. Null when a thread row
+ * has no thread.
  */
 export function attentionResumeTarget(
-  row: Pick<KanbanAttentionRow, "resumeAction" | "threadId">,
+  row: Pick<KanbanAttentionRow, "resumeAction" | "threadId" | "kind">,
   board: { readonly environmentId: EnvironmentId; readonly projectId: ProjectId | null },
 ) {
   switch (row.resumeAction.target) {
@@ -106,14 +118,15 @@ export function attentionResumeTarget(
             to: "/$environmentId/$threadId",
             params: buildThreadRouteParams(scopeThreadRef(board.environmentId, row.threadId)),
           } as const);
-    case "board":
-      return {
-        to: "/board",
-        search:
-          board.projectId === null
-            ? {}
-            : { environmentId: board.environmentId, projectId: board.projectId },
-      } as const;
+    case "board": {
+      const project =
+        board.projectId === null
+          ? {}
+          : { environmentId: board.environmentId, projectId: board.projectId };
+      return row.kind === "decision_conflict"
+        ? ({ to: "/board", search: { ...project, view: "decisions" } } as const)
+        : ({ to: "/board", search: project } as const);
+    }
     case "settings":
       return { to: "/plugins", search: { machine: board.environmentId } } as const;
     case "plugin": {
@@ -270,17 +283,21 @@ export function buildIssuePrompt(
   decisions: ReadonlyArray<KanbanDecision>,
   categories: ReadonlyArray<{ readonly category: string; readonly count: number }>,
 ): string {
-  const byCategory = new Map<string, { for: number; against: number }>();
+  // Per category, how many decisions are in each state, in the order the states first appear.
+  const byCategory = new Map<string, Map<KanbanDecision["state"], number>>();
   for (const decision of decisions) {
-    const counts = byCategory.get(decision.category) ?? { for: 0, against: 0 };
-    counts[decision.stance] += 1;
+    const counts = byCategory.get(decision.category) ?? new Map<KanbanDecision["state"], number>();
+    counts.set(decision.state, (counts.get(decision.state) ?? 0) + 1);
     byCategory.set(decision.category, counts);
   }
   const onTicket =
     decisions.length === 0
       ? "Decisions on this ticket: none."
       : `Decisions on this ticket (${decisions.length}): ${[...byCategory]
-          .map(([category, counts]) => `${category}: for ${counts.for}, against ${counts.against}`)
+          .map(
+            ([category, counts]) =>
+              `${category}: ${[...counts].map(([state, count]) => `${state} ${count}`).join(", ")}`,
+          )
           .join("; ")}`;
   const all =
     categories.length === 0

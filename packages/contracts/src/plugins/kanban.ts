@@ -1,3 +1,4 @@
+import * as Effect from "effect/Effect";
 import * as Rpc from "effect/rpc/Rpc";
 import * as Schema from "effect/Schema";
 import { AuthOrchestrationReadScope, EnvironmentAuthorizationError } from "../auth.ts";
@@ -34,8 +35,49 @@ export const KanbanVerification = Schema.Literals(["unverified", "partial", "ver
 export type KanbanVerification = typeof KanbanVerification.Type;
 export const KANBAN_VERIFICATIONS = KanbanVerification.literals;
 
-export const KanbanStance = Schema.Literals(["for", "against"]);
-export type KanbanStance = typeof KanbanStance.Type;
+/**
+ * Where a decision stands. `superseded` is set only by `decision.supersede`, which links the
+ * replacement; any other state may follow any other.
+ */
+export const KanbanDecisionState = Schema.Literals([
+  "proposed",
+  "accepted",
+  "rejected",
+  "deferred",
+  "conflicted",
+  "superseded",
+]);
+export type KanbanDecisionState = typeof KanbanDecisionState.Type;
+export const KANBAN_DECISION_STATES = KanbanDecisionState.literals;
+
+/** What became of one option a decision weighed. */
+export const KanbanAlternativeDisposition = Schema.Literals([
+  "chosen",
+  "rejected",
+  "deferred",
+  "unverified",
+  "out_of_scope",
+]);
+export type KanbanAlternativeDisposition = typeof KanbanAlternativeDisposition.Type;
+
+/**
+ * Whether the reason holds for good, only in today's context, or for want of evidence. A
+ * contextual or unverified rejection is the one worth reconsidering.
+ */
+export const KanbanAlternativeReasonKind = Schema.Literals([
+  "permanent",
+  "contextual",
+  "lack_of_evidence",
+]);
+export type KanbanAlternativeReasonKind = typeof KanbanAlternativeReasonKind.Type;
+
+export const KanbanAlternative = Schema.Struct({
+  title: TrimmedNonEmptyString,
+  disposition: KanbanAlternativeDisposition,
+  reason: Schema.String,
+  reasonKind: KanbanAlternativeReasonKind,
+});
+export type KanbanAlternative = typeof KanbanAlternative.Type;
 
 /** `user`, `system` (automation), `spec` (a validated spec admitting a card), or `thread:<threadId>`. */
 export const KanbanActor = TrimmedNonEmptyString;
@@ -82,6 +124,72 @@ export const KanbanReopen = Schema.Struct({
 });
 export type KanbanReopen = typeof KanbanReopen.Type;
 
+/** How far a finding was confirmed. */
+export const KanbanFindingTruth = Schema.Literals([
+  "seen",
+  "partially_verified",
+  "reproduced",
+  "refuted",
+  "unknown",
+]);
+export type KanbanFindingTruth = typeof KanbanFindingTruth.Type;
+
+/** How a finding relates to the change the agent was making when it found it. */
+export const KanbanFindingScope = Schema.Literals([
+  "caused_by_current_change",
+  "pre_existing",
+  "adjacent",
+  "unrelated",
+  "unknown",
+]);
+export type KanbanFindingScope = typeof KanbanFindingScope.Type;
+
+/** What is to be done about a finding: `open` until a review decides, and again once reopened. */
+export const KanbanFindingDisposition = Schema.Literals([
+  "open",
+  "fix_now",
+  "ticketed",
+  "accepted_risk",
+  "duplicate",
+  "rejected",
+  "wont_fix",
+]);
+export type KanbanFindingDisposition = typeof KanbanFindingDisposition.Type;
+export const KANBAN_FINDING_DISPOSITIONS = KanbanFindingDisposition.literals;
+
+/** The latest review: who set the disposition, when and why. */
+export const KanbanFindingReview = Schema.Struct({
+  by: KanbanActor,
+  at: IsoDateTime,
+  reason: Schema.String,
+});
+
+/**
+ * A problem an agent found outside its task, kept on the issue it concerns or on the Triage issue
+ * labeled `finding` opened for it. The id is server-made and unique in the project, and stays
+ * the same when the finding moves to another issue.
+ */
+export const KanbanFinding = Schema.Struct({
+  id: KanbanSlug,
+  title: TrimmedNonEmptyString,
+  evidence: Schema.String,
+  truthStatus: KanbanFindingTruth,
+  scopeRelation: KanbanFindingScope,
+  disposition: KanbanFindingDisposition,
+  /** `thread:<threadId>` of the agent that captured it, which may not review it. */
+  proposedBy: KanbanActor,
+  /** When it was captured; a move keeps it. */
+  proposedAt: IsoDateTime,
+  /** The thread it was found in. */
+  threadId: ThreadId,
+  /**
+   * The latest review, null until someone other than the proposer reviews it. The reviewer owns
+   * the finding from then on, so a finding with no review has no owner.
+   */
+  review: Schema.NullOr(KanbanFindingReview),
+});
+export type KanbanFinding = typeof KanbanFinding.Type;
+
 const KanbanIssueFields = {
   id: KanbanSlug,
   title: TrimmedNonEmptyString,
@@ -101,7 +209,7 @@ const KanbanIssueFields = {
   archivedAt: Schema.NullOr(IsoDateTime),
 };
 
-/** What the board needs per card; the body, log and criteria travel only with `getIssue`. */
+/** What the board needs per card; the body, log, criteria and findings travel only with `getIssue`. */
 export const KanbanIssueSummary = Schema.Struct({
   ...KanbanIssueFields,
   criteriaOpen: Schema.Int,
@@ -130,20 +238,47 @@ export type KanbanLogEntry = typeof KanbanLogEntry.Type;
 export const KanbanIssue = Schema.Struct({
   ...KanbanIssueFields,
   criteria: Schema.Array(KanbanCriterion),
+  // A server from before findings sends none; an older client ignores the field.
+  findings: Schema.Array(KanbanFinding).pipe(Schema.withDecodingDefault(Effect.succeed([]))),
   description: Schema.String,
   log: Schema.Array(KanbanLogEntry),
 });
 export type KanbanIssue = typeof KanbanIssue.Type;
 
+/** A decision as `<category>/<id>`; ids are unique only within a category. */
+export const KanbanDecisionRef = TrimmedNonEmptyString.check(
+  Schema.isPattern(/^[a-z0-9][a-z0-9-]{0,79}\/[a-z0-9][a-z0-9-]{0,79}$/),
+);
+export type KanbanDecisionRef = typeof KanbanDecisionRef.Type;
+
+/** One change to a decision, appended by every write that changes it and never removed. */
+export const KanbanDecisionRevision = Schema.Struct({
+  at: IsoDateTime,
+  by: KanbanActor,
+  change: Schema.String,
+});
+export type KanbanDecisionRevision = typeof KanbanDecisionRevision.Type;
+
 export const KanbanDecision = Schema.Struct({
   category: KanbanSlug,
   id: KanbanSlug,
-  stance: KanbanStance,
+  state: KanbanDecisionState,
   title: TrimmedNonEmptyString,
   why: Schema.String,
+  /** The options weighed, the chosen one included, each with why it went that way. */
+  alternatives: Schema.Array(KanbanAlternative),
+  /** What would make this worth deciding again. */
+  reconsiderWhen: Schema.NullOr(Schema.String),
+  supersedes: Schema.Array(KanbanDecisionRef),
+  /** Set with the `superseded` state, and cleared when the decision leaves it. */
+  supersededBy: Schema.NullOr(KanbanDecisionRef),
   issues: Schema.Array(KanbanSlug),
+  /** Threads where the decision was made or applied. */
+  threads: Schema.Array(ThreadId),
+  /** Who recorded it, and when. */
   by: KanbanActor,
   at: IsoDateTime,
+  revisions: Schema.Array(KanbanDecisionRevision),
 });
 export type KanbanDecision = typeof KanbanDecision.Type;
 
@@ -185,6 +320,8 @@ export const KanbanWriteAction = Schema.Literals([
   "criterion.remove",
   "decision.create",
   "decision.update",
+  "decision.setState",
+  "decision.supersede",
   "decision.delete",
 ]);
 export type KanbanWriteAction = typeof KanbanWriteAction.Type;
@@ -215,10 +352,18 @@ export const KanbanWrite = Schema.Struct({
   reason: Schema.optional(Schema.String),
   threadId: Schema.optional(ThreadId),
   category: Schema.optional(KanbanSlug),
-  stance: Schema.optional(KanbanStance),
+  /** A decision's state for `decision.create` and `decision.setState`. */
+  state: Schema.optional(KanbanDecisionState),
   why: Schema.optional(Schema.String),
+  alternatives: Schema.optional(Schema.Array(KanbanAlternative)),
+  /** Empty clears it. */
+  reconsiderWhen: Schema.optional(Schema.String),
   /** Related issue ids for a decision. */
   issues: Schema.optional(Schema.Array(KanbanSlug)),
+  /** Threads a decision was made or applied in. */
+  threads: Schema.optional(Schema.Array(ThreadId)),
+  /** The replacing decision for `decision.supersede`. */
+  by: Schema.optional(KanbanDecisionRef),
 });
 export type KanbanWrite = typeof KanbanWrite.Type;
 
@@ -239,6 +384,12 @@ export const KanbanListDecisionsInput = Schema.Struct({
   projectId: ProjectId,
   category: Schema.optional(KanbanSlug),
   issue: Schema.optional(KanbanSlug),
+  state: Schema.optional(KanbanDecisionState),
+  /**
+   * Words to look for in a decision's text; a decision matching any is kept, and the list is
+   * ordered by how many it matches, then newest first.
+   */
+  query: Schema.optional(Schema.String),
 });
 export type KanbanListDecisionsInput = typeof KanbanListDecisionsInput.Type;
 export const KanbanWriteInput = Schema.Struct({ projectId: ProjectId, ...KanbanWrite.fields });
@@ -249,6 +400,31 @@ export const KanbanSetDirectoryInput = Schema.Struct({
   directory: Schema.NullOr(TrimmedNonEmptyString),
 });
 export type KanbanSetDirectoryInput = typeof KanbanSetDirectoryInput.Type;
+
+/** Sets a finding's disposition; `open` reopens it. Its proposer is refused. */
+export const KanbanFindingReviewInput = Schema.Struct({
+  projectId: ProjectId,
+  id: KanbanSlug,
+  disposition: KanbanFindingDisposition,
+  reason: TrimmedNonEmptyString,
+});
+export type KanbanFindingReviewInput = typeof KanbanFindingReviewInput.Type;
+
+export const KanbanFindingMoveInput = Schema.Struct({
+  projectId: ProjectId,
+  id: KanbanSlug,
+  /** Where it goes; omitted, a Triage issue labeled `finding` is opened for it. */
+  issueId: Schema.optional(KanbanSlug),
+});
+export type KanbanFindingMoveInput = typeof KanbanFindingMoveInput.Type;
+
+/** A finding and the issue holding it, after a capture, review or move. */
+export const KanbanFindingPlacement = Schema.Struct({
+  projectId: ProjectId,
+  issueId: KanbanSlug,
+  finding: KanbanFinding,
+});
+export type KanbanFindingPlacement = typeof KanbanFindingPlacement.Type;
 
 /**
  * The emergency stop while it is set: nothing the supervisor starts may launch a ticket. It
@@ -330,6 +506,8 @@ export const KanbanAttentionKind = Schema.Literals([
   "delivery_drift",
   "promotion_ineffective",
   "promotion_settled",
+  "decision_conflict",
+  "promotion_review",
 ]);
 export type KanbanAttentionKind = typeof KanbanAttentionKind.Type;
 
@@ -349,6 +527,8 @@ export const KANBAN_ATTENTION_KIND_LABELS: Record<KanbanAttentionKind, string> =
   delivery_drift: "Delivery drift",
   promotion_ineffective: "Handover ineffective",
   promotion_settled: "Handover settled",
+  decision_conflict: "Decision conflict",
+  promotion_review: "Handover review",
 };
 
 /**
@@ -499,6 +679,20 @@ export const KANBAN_METHODS = definePluginMethods({
     gateway: "read",
     input: KanbanProjectsInput,
     output: Schema.Array(KanbanBoardFolder),
+    error: KanbanError,
+  },
+  findingReview: {
+    method: "kanban.finding.review",
+    gateway: "operate",
+    input: KanbanFindingReviewInput,
+    output: KanbanFindingPlacement,
+    error: KanbanError,
+  },
+  findingMove: {
+    method: "kanban.finding.move",
+    gateway: "operate",
+    input: KanbanFindingMoveInput,
+    output: KanbanFindingPlacement,
     error: KanbanError,
   },
 });

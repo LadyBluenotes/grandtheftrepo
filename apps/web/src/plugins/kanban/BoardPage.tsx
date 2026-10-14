@@ -530,8 +530,8 @@ export function BoardPage({ search }: { readonly search: BoardSearch }) {
     kanbanWrite.permissionAtom(panelProject?.environmentId ?? null),
   );
   const canWriteView = useAtomValue(kanbanWrite.permissionAtom(viewProject?.environmentId ?? null));
-  const categoriesOf = (ref: ScopedProjectRef | null) =>
-    (ref === null ? undefined : boards.find(sameProject(ref))?.board?.decisionCategories) ?? [];
+  const boardOf = (ref: ScopedProjectRef | null) =>
+    ref === null ? undefined : (boards.find(sameProject(ref))?.board ?? undefined);
 
   const setSearch = useCallback(
     (
@@ -793,7 +793,7 @@ export function BoardPage({ search }: { readonly search: BoardSearch }) {
               environmentId={viewProject.environmentId}
               projectId={viewProject.projectId}
               category={decisionsCategory(search, viewProject)}
-              categories={categoriesOf(viewProject)}
+              categories={boardOf(viewProject)?.decisionCategories ?? []}
               onCategoryChange={(category) =>
                 void setSearch({
                   environmentId: viewProject.environmentId,
@@ -870,7 +870,8 @@ export function BoardPage({ search }: { readonly search: BoardSearch }) {
           environmentId={panelProject.environmentId}
           projectId={panelProject.projectId}
           issueId={search.issue ?? null}
-          categories={categoriesOf(panelProject)}
+          categories={boardOf(panelProject)?.decisionCategories ?? []}
+          issues={boardOf(panelProject)?.issues ?? []}
           canWrite={canWritePanel}
           onClose={closePanel}
         />

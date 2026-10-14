@@ -15,7 +15,7 @@ import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/sql/SqlClient";
 import type * as SqlError from "effect/sql/SqlError";
-import { threadFacts } from "./producers/threads.ts";
+import { rememberThread, threadFacts } from "./producers/threads.ts";
 import { redact } from "./redact.ts";
 
 /** A correction to store. The description is redacted and bounded on the way in. */
@@ -120,6 +120,15 @@ export class CorrectionStore extends Context.Service<
     readonly record: (
       input: Omit<NewCorrection, "projectId"> & { readonly projectId?: ProjectId | undefined },
     ) => Effect.Effect<LearningCorrection, LearningError>;
+    /**
+     * Stores a correction for a caller that has checked the thread's project against the core's
+     * thread shell, as a kanban ticket's reopen does. A thread the reactor has not replayed yet is
+     * remembered under that project rather than refused, so a correction is not lost to projection
+     * lag; the caller's check is what keeps it from landing in another project.
+     */
+    readonly recordForProject: (
+      input: NewCorrection,
+    ) => Effect.Effect<LearningCorrection, LearningError>;
     /** A project's corrections created between `from` and `to`, inclusive, oldest first. */
     readonly list: (
       input: LearningCorrectionsInput,
@@ -165,6 +174,20 @@ const make = Effect.gen(function* () {
       return yield* insert({ ...input, projectId: thread.project_id });
     }).pipe(Effect.provideService(SqlClient.SqlClient, sql), Effect.catchTags({ SqlError: io }));
 
+  const recordForProject: CorrectionStore["Service"]["recordForProject"] = (input) =>
+    Effect.gen(function* () {
+      const thread = yield* threadFacts(input.threadId);
+      if (thread === undefined) {
+        yield* rememberThread({ id: input.threadId, projectId: input.projectId });
+      } else if (thread.project_id !== input.projectId) {
+        return yield* new LearningError({
+          code: "not_found",
+          message: `Thread "${input.threadId}" belongs to project "${thread.project_id}".`,
+        });
+      }
+      return yield* insert(input);
+    }).pipe(Effect.provideService(SqlClient.SqlClient, sql), Effect.catchTags({ SqlError: io }));
+
   const list: CorrectionStore["Service"]["list"] = (input) =>
     sql<Row>`SELECT * FROM corrections
       WHERE project_id = ${input.projectId}
@@ -193,7 +216,7 @@ const make = Effect.gen(function* () {
       Effect.catch(io),
     );
 
-  return CorrectionStore.of({ record, list, get, findBySourceKey });
+  return CorrectionStore.of({ record, recordForProject, list, get, findBySourceKey });
 });
 
 export const layer = Layer.effect(CorrectionStore, make);

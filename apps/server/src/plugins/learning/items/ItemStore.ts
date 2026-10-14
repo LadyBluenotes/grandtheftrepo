@@ -6,6 +6,8 @@ import {
   LearningError,
   type LearningOwnerKind,
   type LearningPromotion,
+  type LearningPromotionReviewInput,
+  type LearningPromotionRollBackInput,
   type ProjectId,
 } from "@t3tools/contracts";
 import * as Context from "effect/Context";
@@ -46,7 +48,7 @@ const toItem = (row: Row): LearningItem => ({
   updatedAt: row.updated_at,
 });
 
-/** When a project first handed a failure mode over: its earliest delivered promotion. */
+/** When a project first handed a failure mode over: its earliest promotion's delivery. */
 export interface ItemDelivery {
   readonly failureMode: string;
   /** An ISO instant. */
@@ -78,17 +80,17 @@ export class ItemStore extends Context.Service<
     /** One item with its evidence and promotions, oldest first. */
     readonly get: (id: number) => Effect.Effect<LearningItemDetail, LearningError>;
     /**
-     * For each failure mode a project has handed over, when its earliest delivered promotion was
+     * For each failure mode a project has handed over, when its earliest promotion's draft was
      * delivered, by failure mode. One query over the promotion records, whatever state the item
-     * is in now: a person closing or moving an item does not undo its handover. Internal: it has
-     * no gateway method.
+     * or its review is in now: a person closing or moving an item does not undo its handover.
+     * Internal: it has no gateway method.
      */
     readonly deliveredAt: (
       projectId: ProjectId,
     ) => Effect.Effect<ReadonlyArray<ItemDelivery>, LearningError>;
     /**
-     * A project's promotions delivered in `[from, to)` to one of `ownerKinds`, oldest first, for
-     * reports. Internal: it has no gateway method.
+     * A project's promotions whose draft was delivered in `[from, to)` to one of `ownerKinds`,
+     * oldest first, for reports. Internal: it has no gateway method.
      */
     readonly deliveredIn: (input: {
       readonly projectId: ProjectId;
@@ -98,11 +100,28 @@ export class ItemStore extends Context.Service<
     }) => Effect.Effect<ReadonlyArray<LearningPromotion>, LearningError>;
     /**
      * A person sets the owner kind or closes and reopens the item. `promoted` comes only from
-     * delivery and `candidate` only from the owner kind, so neither is accepted.
+     * adoption and `candidate` only from the owner kind, so neither is accepted. An owner kind
+     * whose handover review rejected or that was rolled back gets nothing more: the item is open.
      */
     readonly setDisposition: (
       input: LearningItemsSetDispositionInput,
     ) => Effect.Effect<LearningItem, LearningError>;
+    /**
+     * `reviewer`'s verdict on a promotion in review: `user` for a person on a client,
+     * `thread:<id>` for an agent. The promotion's proposer is refused, as is a promotion not in
+     * review. `adopt` adopts it and promotes its item, and is refused while the item is not a
+     * candidate for its owner kind; `reject` rejects it and reopens its item; `revise` keeps it in
+     * review for another verdict.
+     */
+    readonly reviewPromotion: (
+      input: LearningPromotionReviewInput,
+      reviewer: string,
+    ) => Effect.Effect<LearningPromotion, LearningError>;
+    /** `actor` undoes an adopted promotion, which reopens its item. */
+    readonly rollBackPromotion: (
+      input: LearningPromotionRollBackInput,
+      actor: string,
+    ) => Effect.Effect<LearningPromotion, LearningError>;
   }
 >()("t3/plugins/learning/items/ItemStore") {}
 
@@ -136,7 +155,7 @@ const make = Effect.gen(function* () {
           const at = DateTime.formatIso(yield* DateTime.now);
           const rule = route(failureMode);
           // The rules route a new item, and route it again only while they still own its
-          // disposition and nothing has been handed over.
+          // disposition, nothing has been adopted, and no review turned a handover down.
           yield* sql`INSERT INTO learning_items
             (project_id, failure_mode, occurrences, state, owner_kind, disposition_by, reason,
              created_at, updated_at)
@@ -145,7 +164,9 @@ const make = Effect.gen(function* () {
             ON CONFLICT (project_id, failure_mode) DO UPDATE SET
               owner_kind = excluded.owner_kind, state = excluded.state, reason = excluded.reason
             WHERE learning_items.disposition_by = 'rule'
-              AND learning_items.state IN ('open', 'candidate')`;
+              AND learning_items.state IN ('open', 'candidate')
+              AND NOT EXISTS (SELECT 1 FROM learning_promotions p
+                WHERE p.item_id = learning_items.id AND p.state IN ('rejected', 'rolled_back'))`;
           const [item] = yield* sql<Row>`SELECT * FROM learning_items
             WHERE project_id = ${projectId} AND failure_mode = ${failureMode}`;
           const added = yield* sql`INSERT INTO learning_item_evidence
@@ -190,6 +211,8 @@ const make = Effect.gen(function* () {
           createdAt: e.created_at,
         })),
         promotions: yield* PromotionStore.forItem(id),
+        reviews: yield* PromotionStore.reviewsForItem(id),
+        outcomes: yield* PromotionStore.outcomesForItem(id),
       };
     }).pipe(Effect.provideService(SqlClient.SqlClient, sql), Effect.catchTags({ SqlError: io }));
 
@@ -197,8 +220,8 @@ const make = Effect.gen(function* () {
     sql<{
       readonly failure_mode: string;
       readonly delivered_at: string;
-    }>`SELECT failure_mode, MIN(updated_at) AS delivered_at FROM learning_promotions
-      WHERE project_id = ${projectId} AND state = 'delivered'
+    }>`SELECT failure_mode, MIN(delivered_at) AS delivered_at FROM learning_promotions
+      WHERE project_id = ${projectId} AND delivered_at IS NOT NULL
       GROUP BY failure_mode
       ORDER BY failure_mode`.pipe(
       Effect.map((rows) =>
@@ -228,12 +251,22 @@ const make = Effect.gen(function* () {
       if (item === undefined) return yield* notFound(id);
       const owner = ownerKind === undefined ? item.owner_kind : ownerKind;
       const closed = state === undefined ? item.state === "closed" : state === "closed";
+      const turnedDown =
+        owner === null
+          ? false
+          : (yield* sql<{ readonly state: string }>`SELECT state FROM learning_promotions
+              WHERE project_id = ${item.project_id} AND failure_mode = ${item.failure_mode}
+                AND owner_kind = ${owner}`).some(
+              (record) => record.state === "rejected" || record.state === "rolled_back",
+            );
       // A promoted item stays promoted until it is closed or handed to another owner kind.
       const next = closed
         ? "closed"
         : item.state === "promoted" && owner === item.owner_kind
           ? "promoted"
-          : routedState(owner);
+          : turnedDown
+            ? "open"
+            : routedState(owner);
       const at = DateTime.formatIso(yield* DateTime.now);
       const [updated] = yield* sql<Row>`UPDATE learning_items
         SET owner_kind = ${owner}, state = ${next}, disposition_by = 'person',
@@ -243,7 +276,86 @@ const make = Effect.gen(function* () {
       return toItem(updated!);
     }).pipe(Effect.catchTags({ SqlError: io }));
 
-  return ItemStore.of({ strengthen, list, get, deliveredAt, deliveredIn, setDisposition });
+  const promotion = (id: number) =>
+    Effect.flatMap(PromotionStore.byId(id), (found) =>
+      found === undefined
+        ? Effect.fail(new LearningError({ code: "not_found", message: `No promotion ${id}.` }))
+        : Effect.succeed(found),
+    );
+  const notIn = (found: LearningPromotion, wanted: string) =>
+    new LearningError({
+      code: "invalid",
+      message: `Promotion ${found.id} is ${found.state.replaceAll("_", " ")}; only ${wanted}.`,
+    });
+  // The check and the conditional write share a transaction, so this answers only a write that
+  // found the promotion moved anyway.
+  const moved = (id: number) =>
+    new LearningError({ code: "invalid", message: `Promotion ${id} changed meanwhile.` });
+
+  const reviewPromotion: ItemStore["Service"]["reviewPromotion"] = (
+    { promotionId, verdict, note },
+    reviewer,
+  ) =>
+    sql
+      .withTransaction(
+        Effect.gen(function* () {
+          const found = yield* promotion(promotionId);
+          if (found.proposedBy === reviewer) {
+            return yield* new LearningError({
+              code: "invalid",
+              message:
+                reviewer === "user"
+                  ? `A person proposed promotion ${promotionId}, so someone else reviews it, such as an agent with learning_promotion_review.`
+                  : `Promotion ${promotionId} was proposed by ${reviewer}, so someone else reviews it.`,
+            });
+          }
+          if (found.state !== "in_review") {
+            return yield* notIn(found, "one in review takes a verdict");
+          }
+          // An item a person closed or moved meanwhile no longer wants this handover; reopening
+          // it with the same owner kind puts the handover back up for review.
+          const item = yield* row(found.itemId);
+          if (
+            verdict === "adopt" &&
+            (item?.state !== "candidate" || item.owner_kind !== found.ownerKind)
+          ) {
+            return yield* new LearningError({
+              code: "invalid",
+              message: `Promotion ${promotionId}'s item no longer waits for it; reopen the item with that owner kind to adopt it.`,
+            });
+          }
+          const reviewed = yield* PromotionStore.review(
+            found,
+            { verdict, reviewer, note: note === undefined ? null : redact(note) },
+            yield* DateTime.now,
+          );
+          return reviewed ?? (yield* moved(promotionId));
+        }),
+      )
+      .pipe(Effect.provideService(SqlClient.SqlClient, sql), Effect.catchTags({ SqlError: io }));
+
+  const rollBackPromotion: ItemStore["Service"]["rollBackPromotion"] = ({ promotionId }, actor) =>
+    sql
+      .withTransaction(
+        Effect.gen(function* () {
+          const found = yield* promotion(promotionId);
+          if (found.state !== "adopted") return yield* notIn(found, "an adopted one rolls back");
+          const rolledBack = yield* PromotionStore.rollBack(found, actor, yield* DateTime.now);
+          return rolledBack ?? (yield* moved(promotionId));
+        }),
+      )
+      .pipe(Effect.provideService(SqlClient.SqlClient, sql), Effect.catchTags({ SqlError: io }));
+
+  return ItemStore.of({
+    strengthen,
+    list,
+    get,
+    deliveredAt,
+    deliveredIn,
+    setDisposition,
+    reviewPromotion,
+    rollBackPromotion,
+  });
 });
 
 export const layer = Layer.effect(ItemStore, make);

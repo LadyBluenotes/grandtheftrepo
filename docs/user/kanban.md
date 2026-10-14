@@ -38,12 +38,12 @@ you can unarchive or delete an archived card.
 
 A strip above the columns lists what in the board's projects is waiting on you, oldest first:
 questions and permission requests agents are waiting on, and flags other plugins raise, such as
-two agents writing one project at once, a stale review, a budget breach, a policy block or
-knowledge file that was edited or deleted outside T3 Code, or a thread that ran another model than
-routing recommended in the past seven days. A policy for the whole environment affects every
-project, so its flag is listed once, as about every project. Each row names its thread, or the
-project for a budget or a policy or knowledge file, and has a button that takes you there, or to
-the Plugins page for those.
+two agents writing one project at once, a stale review, a budget breach, a conflicted decision, a
+policy block or knowledge file that was edited or deleted outside T3 Code, or a thread that ran
+another model than routing recommended in the past seven days. A policy for the whole environment
+affects every project, so its flag is listed once, as about every project. Each row names its
+thread, or the project for a budget, a decision, or a policy or knowledge file, and has a button
+that takes you there, or to the Plugins page for those.
 Rows cannot be dismissed: a row leaves on its own once its request is answered or its cause clears.
 Requests on settled or archived threads are not listed. A new flag shows up when you come back to
 the window or the board changes, and the strip is hidden while nothing waits.
@@ -51,9 +51,9 @@ the window or the board changes, and the strip is hidden while nothing waits.
 ## Cards
 
 Click a card to open it. The panel holds the title, status, priority (P0 to P5), verification,
-free-form labels, a markdown description, the threads working on it, the decisions about it, and
-a log of every status change, note and block with who made it and when. Add a note at the bottom
-of the log.
+free-form labels, a markdown description, the threads working on it, its [findings](#findings), the
+decisions about it, and a log of every status change, note and block with who made it and when. Add
+a note at the bottom of the log.
 
 **Acceptance criteria** define done. Add one sentence per thing that must be true, check them off
 as they hold, and the card cannot move to Done while one is open, whether you drag it or a thread
@@ -67,13 +67,39 @@ column; cards an agent files start in Triage.
 ## Decisions
 
 **Decisions** at the top switches the board to a project's decisions, with a project picker when
-the board shows more than one: calls made for or against something, with the reason and the
-tickets they concern. They are grouped into categories you name, such as `auth` or `performance`,
-and filterable by category. Record one from the decisions view or
-from a card's panel, and edit or delete it later.
+the board shows more than one: the calls made along the way, with the reason and the tickets they
+concern. They are grouped into categories you name, such as `auth` or `performance`, and filterable
+by category. Record one from the decisions view or from a card's panel, and edit or delete it
+later.
+
+Each decision has a state: proposed, accepted, rejected, deferred, conflicted or superseded. An
+agent recording one also keeps the alternatives it weighed, each with why it was chosen or passed
+over and whether that reason is permanent, holds only for now, or lacks evidence, and what would
+make the call worth revisiting; they are in the decision's file. When one decision replaces
+another, the old one stays, marked superseded and linked to its replacement; giving it another
+state unlinks them, and a linked decision cannot be deleted. A conflicted decision waits in
+[Waiting on you](#waiting-on-you) until its state changes. Every change is kept as a revision
+until you delete the decision; only a person can delete one.
+Decisions recorded as for or against something read as accepted, with that call as their one
+alternative, chosen or rejected.
 
 A new thread started from a card is told which decisions concern its ticket and which categories
 exist, so the agent can look them up instead of relitigating them.
+
+## Findings
+
+A finding is a problem an agent noticed outside its task: a bug, debt or a risk it was not asked
+to fix. Agents record them without being asked. One that concerns an existing card is attached to
+it; otherwise the agent opens a new card in **Triage** labeled `finding`, with the evidence as its
+description. An agent has to search the board before it records one, so it checks first whether
+the problem is already there.
+
+A card's panel lists its findings under **Findings**: what is to be done about each (open until
+someone reviews it), how far it was confirmed, the evidence, and the thread it was found in.
+**Review** sets what happens to it, with a reason: fix now, ticketed, accepted risk, duplicate,
+rejected or won't fix. Picking open again reopens it. The agent that recorded a finding cannot
+review it; you or another agent do. **Move** puts a finding on the right card, or on a new Triage
+card of its own if it has none. The card it leaves stays where it is.
 
 ## On mobile
 
@@ -96,11 +122,15 @@ refused; checking a spec you wrote still works.
 
 ## Agents
 
-Agents reach the board through five MCP tools. `kanban_list` lists issues or decisions, or one of
+Agents reach the board through ten MCP tools. `kanban_list` lists issues or decisions, or one of
 them in full. `kanban_write` files an issue, moves it, adds a note, blocks it when it needs you,
-links the calling thread, or records a decision. Agent-filed issues land in Triage. `kanban_stop`
-sets or clears the emergency stop. Agents are told to record a decision whenever they choose one
-approach over another, without being asked.
+links the calling thread, or records, changes or supersedes a decision; an agent must say why, and
+cannot delete one. Agent-filed issues land in Triage. `kanban_decisions` searches decisions by their
+words. `kanban_stop` sets or clears the emergency stop. `finding_search`, `finding_capture`,
+`finding_review` and `finding_move` work with [findings](#findings); a capture needs a search the
+same thread made in the last 30 minutes, and each search allows one capture. Agents are told to
+record a decision whenever they choose one approach over another, and a finding whenever they find
+a problem outside their task, without being asked.
 
 `kanban_ticket_specify` turns a rough card in Triage or Inbox into a spec. By default it starts a
 drafting thread in plan mode on the routing plugin's cheap model; with `useExisting` it checks a

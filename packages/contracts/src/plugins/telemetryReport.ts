@@ -6,6 +6,7 @@ import {
   LearningFailureKind,
   LearningItemState,
   LearningOwnerKind,
+  ReviewFailureMode,
 } from "./learning.ts";
 import { definePluginMethods } from "./method.ts";
 import { ReviewOutcome } from "./review.ts";
@@ -72,7 +73,7 @@ export const TelemetryReport = Schema.Struct({
       threadId: ThreadId,
       title: ThreadTitle,
       outcome: ReviewOutcome,
-      failureMode: Schema.NullOr(LearningDeclaredMode),
+      failureMode: Schema.NullOr(ReviewFailureMode),
       summary: Schema.String,
       createdAt: IsoDateTime,
     }),

@@ -80,7 +80,7 @@ export interface ReportInput {
         readonly corrections: ReadonlyArray<LearningCorrection>;
         /** Every item of the project. */
         readonly items: ReadonlyArray<LearningItem>;
-        /** Promotions delivered in the range to project knowledge or prompts. */
+        /** Promotions whose draft was delivered in the range to project knowledge or prompts. */
         readonly promotions: ReadonlyArray<LearningPromotion>;
         /** Owner kinds a plugin hands items to. */
         readonly promoters: ReadonlyArray<LearningOwnerKind>;
@@ -219,10 +219,14 @@ export const foldReport = (input: ReportInput): TelemetryReport => {
     }
     return ok(
       learning.promotions
-        .filter((promotion) => promotion.ownerKind === ownerKind && inRange(promotion.updatedAt))
+        .flatMap(({ deliveredAt, ...promotion }) =>
+          promotion.ownerKind === ownerKind && deliveredAt !== null && inRange(deliveredAt)
+            ? [{ ...promotion, deliveredAt }]
+            : [],
+        )
         .toSorted(
           byKeys(
-            (promotion) => promotion.updatedAt,
+            (promotion) => promotion.deliveredAt,
             (promotion) => promotion.id,
           ),
         )
@@ -230,7 +234,7 @@ export const foldReport = (input: ReportInput): TelemetryReport => {
           promotionId: promotion.id,
           itemId: promotion.itemId,
           failureMode: promotion.failureMode,
-          deliveredAt: promotion.updatedAt,
+          deliveredAt: promotion.deliveredAt,
         })),
     );
   };

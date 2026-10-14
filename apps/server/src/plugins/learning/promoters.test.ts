@@ -191,15 +191,16 @@ it.effect(
             "- Named a file in camelCase.",
           ].join("\n"),
         });
+        // The draft waits for review, so its item is not promoted yet.
         assert.deepStrictEqual(yield* world.items, [
-          ["convention", "project_knowledge", "promoted"],
+          ["convention", "project_knowledge", "candidate"],
           ["scope_drift", "policy", "candidate"],
         ]);
         assert.deepStrictEqual(
           (yield* world.promotions).map((p) => [p.owner_kind, p.state, p.attempts, p.last_error]),
           [
-            ["project_knowledge", "delivered", 0, null],
-            ["policy", "pending", 0, null],
+            ["project_knowledge", "in_review", 0, null],
+            ["policy", "proposed", 0, null],
           ],
         );
 
@@ -227,13 +228,13 @@ it.effect(
         ]);
         assert.deepStrictEqual(yield* world.items, [
           ["convention", "project_knowledge", "candidate"],
-          ["scope_drift", "policy", "promoted"],
+          ["scope_drift", "policy", "candidate"],
         ]);
         assert.deepStrictEqual(
           (yield* world.promotions).map((p) => [p.owner_kind, p.state, p.attempts]),
           [
-            ["policy", "delivered", 0],
-            ["project_knowledge", "pending", 0],
+            ["policy", "in_review", 0],
+            ["project_knowledge", "proposed", 0],
           ],
         );
 
@@ -254,14 +255,14 @@ it.effect(
           ],
         );
         assert.deepStrictEqual(yield* world.items, [
-          ["convention", "prompt", "promoted"],
-          ["scope_drift", "policy", "promoted"],
+          ["convention", "prompt", "candidate"],
+          ["scope_drift", "policy", "candidate"],
         ]);
       }),
     ),
 );
 
-it.effect("a promoter that fails leaves its record pending, and the next attempt delivers", () =>
+it.effect("a promoter that fails leaves its record proposed, and the next attempt delivers", () =>
   withPlugins(
     ["learning", "knowledge"],
     Effect.gen(function* () {
@@ -274,7 +275,7 @@ it.effect("a promoter that fails leaves its record pending, and the next attempt
       assert.deepStrictEqual(yield* world.promotions, [
         {
           owner_kind: "project_knowledge",
-          state: "pending",
+          state: "proposed",
           attempts: 1,
           next_attempt_at: "1970-01-01T06:00:00.000Z",
           last_error: "Could not save the page.",
@@ -293,10 +294,12 @@ it.effect("a promoter that fails leaves its record pending, and the next attempt
         (yield* world.pages).map((page) => [page.key, page.state]),
         [["learned-convention-1", "draft"]],
       );
-      assert.deepStrictEqual(yield* world.items, [["convention", "project_knowledge", "promoted"]]);
+      assert.deepStrictEqual(yield* world.items, [
+        ["convention", "project_knowledge", "candidate"],
+      ]);
       assert.deepStrictEqual(
         (yield* world.promotions).map((p) => [p.state, p.attempts]),
-        [["delivered", 1]],
+        [["in_review", 1]],
       );
     }),
   ),

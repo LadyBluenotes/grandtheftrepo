@@ -258,7 +258,7 @@ it.effect(
         assert.deepInclude(correction, {
           threadId: reviewed,
           failureKind: "security",
-          declaredMode: null,
+          declaredMode: "security",
           description: "secret.token at src/config.ts:2",
           // The finding's own key, never its row id, which a rebuilt database would hand out again.
           sourceKey: `security:${encodeURIComponent(reviewed)}:${encodeURIComponent(

@@ -119,7 +119,10 @@ them half-evaluated. The host hands `toolkitRegistration` to `ServerPlugin.mcp` 
   Its own database, `plugins/kanban.sqlite`, holds the emergency stop (`StopGate`, which anything
   that starts a thread must ask first; the spec drafting thread is the one launch that asks so far)
   and spec attempts. The `writers` sweep raises an attention flag when two agents write one
-  project. `kanban.attention.list` feeds the strip above the board from the project's open host
+  project, and the `decisions` sweep one per conflicted decision, keyed
+  `decision:<projectId>:<category>/<id>`; it sees only projects the store has loaded, so a flag on
+  one not loaded since the server started stays until the store next loads it.
+  `kanban.attention.list` feeds the strip above the board from the project's open host
   flags, its threads' pending questions and permission requests, and, while routing runs, its
   routing mismatches; `kanban.attention.listProjects` does the same for several projects with one
   read of the flags and lists a `policy:*` flag, which every project matches, once.
@@ -132,8 +135,12 @@ them half-evaluated. The host hands `toolkitRegistration` to `ServerPlugin.mcp` 
   the board and active-plugin atoms, the attention atoms' re-read signal and the strip's row model
   in `packages/client-runtime/src/plugins/kanban.ts`, and the contract's
   `KANBAN_ATTENTION_KIND_LABELS` names each kind, so a new kind needs a label there and nothing per
-  client. While kanban runs, the host appends the capture rule (`plugins/CaptureRule.ts`), when to
-  record a decision, a correction or a knowledge page, to the orchestration instructions, which
+  client. A finding, a problem an agent found outside its task, lives in its issue's frontmatter,
+  on the issue it concerns or on a Triage issue labeled `finding` opened for it
+  (`kanban/findings/`); `finding_capture` needs a `finding_search` the same thread made in the last
+  30 minutes, kept in memory, so after a restart an agent searches again. While kanban runs, the
+  host appends the capture rule (`plugins/CaptureRule.ts`), when to record a decision, a finding, a
+  correction or a knowledge page, to the orchestration instructions, which
   every adapter sends only to a turn with the `t3-code` MCP server. Each line is dropped while its
   plugin is off. Pi bakes that text into its extension at import, before the host starts, and Muse
   gets none, so neither sees the rule. Server: `apps/server/src/plugins/kanban/`. Contracts:
@@ -205,11 +212,27 @@ them half-evaluated. The host hands `toolkitRegistration` to `ServerPlugin.mcp` 
   `packages/contracts/src/plugins/routing.ts`. Web: `apps/web/src/plugins/routing/`.
 - **learning**: a record of corrections, visible instances of work going wrong, taken from
   events the server already emits: failed or interrupted provider turns, pull request wakes
-  while changes are requested, and threads reopened after settlement. Agents read and add
-  them over MCP. Two sweeps turn corrections with a declared failure mode into learning items, one
+  while changes are requested, and threads reopened after settlement. `KanbanStore.write` also
+  records a done ticket it reopens, on the thread linked to it last, through
+  `producers/ticketReopens.ts` and `Effect.serviceOption`, so a reopen while learning is off
+  records nothing. A ticket can link any thread id, so the reopen is recorded only when the core's
+  thread shell places that thread in the ticket's project. Agents read and add them over MCP. A correction declares a failure mode only
+  when its source names the cause: a review verdict, a person, the security scan (`security`) or a
+  reopened ticket (`defect` for a defect, `unclear_spec` for a scope change); a provider failure
+  never does. Two sweeps turn corrections with a declared failure mode into learning items, one
   per mode per project, routed by fixed rules on the mode to an owner kind, and hand each item
   over through one promotion record, at least once, keyed by the record's id so a promoter can
-  drop a repeat. The plugin registers the promoters for `project_knowledge`, `policy` and `prompt`
+  drop a repeat. A written draft is `in_review` until someone other than its proposer adopts or
+  rejects it (`ItemStore.reviewPromotion`): the proposer is `supervisor` when the rules picked the
+  owner kind and `user` when a person did, a client's verdict through `learning.promotionReview`
+  is `user`'s, and an agent's through the `learning_promotion_review` MCP tool is
+  `thread:<id>`'s, so a person cannot adopt a handover a person routed. Only adoption promotes the
+  item. A rejection, or `learning.promotionRollBack` (MCP `learning_promotion_rollback`) of an
+  adopted record, reopens the item, and from then on the rules leave it and nothing more goes to
+  that owner kind. The `reviews` sweep keeps a `promotion_review` flag,
+  `promotion:<projectId>:<promotionId>`, for each record in review whose item still wants it, with
+  a `plugin` action that opens the item. Migration 8 adopts records delivered before reviews at
+  their delivery time. The plugin registers the promoters for `project_knowledge`, `policy` and `prompt`
   itself, from `knowledge/promoter.ts` and `policy/promoter.ts`, because a plugin's layer cannot
   see the registry of one it does not depend on. Each reaches its plugin's service with
   `Effect.serviceOption` when the sweep runs and hands over a draft: a knowledge page keyed
@@ -217,22 +240,23 @@ them half-evaluated. The host hands `toolkitRegistration` to `ServerPlugin.mcp` 
   for a prompt, until briefs read prompt policies. A promoter has an `available` check, false while
   its plugin is off, and the registry's `ownerKinds` leaves such a kind out, so its records wait
   without counting an attempt, as a kind with no promoter does; the report's `promoters` is the
-  same list. A third sweep compares each
+  same list. The `regressions` sweep compares each
   project's telemetry measures over the last seven whole UTC days with the seven before, once a
   day, and opens or strengthens an `efficiency_regression:<measure>` item, with no owner kind, for
   each measure worse by its threshold in `regressions/thresholds.ts`, except a volume measure
   such as `tool_output_total`, which that file lists as not compared; with telemetry off it does
-  nothing. A fourth sweep, `outcomes`, checks each bet once its 28 days after delivery are
+  nothing. The `outcomes` sweep checks each adopted bet once its 28 days after adoption are
   complete: it counts the project's corrections declaring the item's mode in the 28 days before
-  and after the promotion's `updated_at`, writes one `promotion_outcome` row, and raises a
+  and after the promotion's `adopted_at`, writes one `promotion_outcome` row, and raises a
   `promotion_ineffective` flag when three or more recurred after and more than half as many as
   before, or a `promotion_settled` flag when none did, keyed
   `promotion:<projectId>:<promotionId>` (the rule is `judge` in `compare.ts`). Below three before
   there is nothing to compare. A verdict is permanent, so the sweep is built with the learning
   reactor's `drain` and judges nothing, counting what it held back, until the reactor holds every
   committed event and `host_reactor_failure` is empty. A person setting the item's disposition
-  after the delivery answers the flag, so none is raised, and the next tick clears one that is
-  open; the sweep never closes or reroutes an item, and never judges `local_only`. Server:
+  after the adoption answers the flag, so none is raised, and the next tick clears one that is
+  open, as it does once the record is rolled back; the sweep never closes or reroutes an item, and
+  never judges `local_only`. Server:
   `apps/server/src/plugins/learning/`. Contracts:
   `packages/contracts/src/plugins/learning.ts`. Web: `apps/web/src/plugins/learning/`, the Learning screen at `/plugins/learning` with the items, corrections and reviews of a project; `recordId` opens an item.
 - **policy**: reviewed working rules per project (`*` is the whole environment), versioned in the
@@ -276,8 +300,8 @@ them half-evaluated. The host hands `toolkitRegistration` to `ServerPlugin.mcp` 
   is the completion gate a ticket asks before it finishes; nothing calls it yet. The plugin's
   reactor tests the lines each root-run turn adds against six fixed patterns unless the project's
   security mode is `off`, and the `review/security` sweep records each finding as a `security`
-  correction, because a reactor sees only its own plugin's services; in `block` a finding refuses
-  `review.request`, verdicts and `ReviewGate.check`, holds back the invalidation sweep's
+  correction declaring the `security` mode, because a reactor sees only its own plugin's
+  services; in `block` a finding refuses `review.request`, verdicts and `ReviewGate.check`, holds back the invalidation sweep's
   replacement request and keeps a `security_hold` flag until `review.security.ack`. The same sweep calls the reactor's
   `retryFailed` each tick and settles an event the reactor gave up on as a scan row, with a
   `scan_failed` finding in `block`; in `block` a turn the scan cannot read, a stopped or failed
