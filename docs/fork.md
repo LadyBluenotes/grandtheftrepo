@@ -211,7 +211,17 @@ them half-evaluated. The host hands `toolkitRegistration` to `ServerPlugin.mcp` 
   never does. Two sweeps turn corrections with a declared failure mode into learning items, one
   per mode per project, routed by fixed rules on the mode to an owner kind, and hand each item
   over through one promotion record, at least once, keyed by the record's id so a promoter can
-  drop a repeat. The plugin registers the promoters for `project_knowledge`, `policy` and `prompt`
+  drop a repeat. A written draft is `in_review` until someone other than its proposer adopts or
+  rejects it (`ItemStore.reviewPromotion`): the proposer is `supervisor` when the rules picked the
+  owner kind and `user` when a person did, a client's verdict through `learning.promotionReview`
+  is `user`'s, and an agent's through the `learning_promotion_review` MCP tool is
+  `thread:<id>`'s, so a person cannot adopt a handover a person routed. Only adoption promotes the
+  item. A rejection, or `learning.promotionRollBack` (MCP `learning_promotion_rollback`) of an
+  adopted record, reopens the item, and from then on the rules leave it and nothing more goes to
+  that owner kind. The `reviews` sweep keeps a `promotion_review` flag,
+  `promotion:<projectId>:<promotionId>`, for each record in review whose item still wants it, with
+  a `plugin` action that opens the item. Migration 8 adopts records delivered before reviews at
+  their delivery time. The plugin registers the promoters for `project_knowledge`, `policy` and `prompt`
   itself, from `knowledge/promoter.ts` and `policy/promoter.ts`, because a plugin's layer cannot
   see the registry of one it does not depend on. Each reaches its plugin's service with
   `Effect.serviceOption` when the sweep runs and hands over a draft: a knowledge page keyed
@@ -219,22 +229,23 @@ them half-evaluated. The host hands `toolkitRegistration` to `ServerPlugin.mcp` 
   for a prompt, until briefs read prompt policies. A promoter has an `available` check, false while
   its plugin is off, and the registry's `ownerKinds` leaves such a kind out, so its records wait
   without counting an attempt, as a kind with no promoter does; the report's `promoters` is the
-  same list. A third sweep compares each
+  same list. The `regressions` sweep compares each
   project's telemetry measures over the last seven whole UTC days with the seven before, once a
   day, and opens or strengthens an `efficiency_regression:<measure>` item, with no owner kind, for
   each measure worse by its threshold in `regressions/thresholds.ts`, except a volume measure
   such as `tool_output_total`, which that file lists as not compared; with telemetry off it does
-  nothing. A fourth sweep, `outcomes`, checks each bet once its 28 days after delivery are
+  nothing. The `outcomes` sweep checks each adopted bet once its 28 days after adoption are
   complete: it counts the project's corrections declaring the item's mode in the 28 days before
-  and after the promotion's `updated_at`, writes one `promotion_outcome` row, and raises a
+  and after the promotion's `adopted_at`, writes one `promotion_outcome` row, and raises a
   `promotion_ineffective` flag when three or more recurred after and more than half as many as
   before, or a `promotion_settled` flag when none did, keyed
   `promotion:<projectId>:<promotionId>` (the rule is `judge` in `compare.ts`). Below three before
   there is nothing to compare. A verdict is permanent, so the sweep is built with the learning
   reactor's `drain` and judges nothing, counting what it held back, until the reactor holds every
   committed event and `host_reactor_failure` is empty. A person setting the item's disposition
-  after the delivery answers the flag, so none is raised, and the next tick clears one that is
-  open; the sweep never closes or reroutes an item, and never judges `local_only`. Server:
+  after the adoption answers the flag, so none is raised, and the next tick clears one that is
+  open, as it does once the record is rolled back; the sweep never closes or reroutes an item, and
+  never judges `local_only`. Server:
   `apps/server/src/plugins/learning/`. Contracts:
   `packages/contracts/src/plugins/learning.ts`. Web: `apps/web/src/plugins/learning/`, the Learning screen at `/plugins/learning` with the items, corrections and reviews of a project; `recordId` opens an item.
 - **policy**: reviewed working rules per project (`*` is the whole environment), versioned in the

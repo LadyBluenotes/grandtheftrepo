@@ -41,6 +41,8 @@ const detail = (
     createdAt: at,
   })),
   promotions: [],
+  reviews: [],
+  outcomes: [],
 });
 
 const keyFor = (
