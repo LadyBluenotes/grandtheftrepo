@@ -1,7 +1,7 @@
 import type { LearningOwnerKind } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
 
-/** How long a handover is watched on each side of its delivery. */
+/** How long a handover is watched on each side of its adoption. */
 const WINDOW_DAYS = 28;
 
 /** The fewest recurrences the before window needs to be a pattern, and the after window to still be one. */
@@ -21,7 +21,7 @@ export const flagKind = (verdict: Verdict) =>
 
 /**
  * What a handover did to its failure mode, from the corrections with that mode in the 28 days
- * before its delivery and in the 28 days after. The first rule that fits decides:
+ * before its adoption and in the 28 days after. The first rule that fits decides:
  *
  * 1. Under three before, there is nothing to compare: `inconclusive`, whatever came after.
  * 2. None after: `settled`.
@@ -47,34 +47,34 @@ export const judge = ({ before, after }: { readonly before: number; readonly aft
           : "inconclusive";
 
 /**
- * The two windows around a delivery, as half-open ISO ranges: the before window ends where the
- * after window starts, so a correction made at the instant of delivery counts as after.
+ * The two windows around an adoption, as half-open ISO ranges: the before window ends where the
+ * after window starts, so a correction made at the instant of adoption counts as after.
  */
-export const windows = (deliveredAt: string) => {
-  const at = DateTime.makeUnsafe(deliveredAt);
+export const windows = (adoptedAt: string) => {
+  const at = DateTime.makeUnsafe(adoptedAt);
   return {
     before: {
       from: DateTime.formatIso(DateTime.subtract(at, { days: WINDOW_DAYS })),
-      to: deliveredAt,
+      to: adoptedAt,
     },
-    after: { from: deliveredAt, to: DateTime.formatIso(DateTime.add(at, { days: WINDOW_DAYS })) },
+    after: { from: adoptedAt, to: DateTime.formatIso(DateTime.add(at, { days: WINDOW_DAYS })) },
   };
 };
 
 /**
- * The latest delivery, as an ISO instant, whose after window is complete at `now`: a handover
- * delivered at or before it has had its whole four weeks.
+ * The latest adoption, as an ISO instant, whose after window is complete at `now`: a handover
+ * adopted at or before it has had its whole four weeks.
  */
 export const latestComplete = (now: DateTime.Utc) =>
   DateTime.formatIso(DateTime.subtract(now, { days: WINDOW_DAYS }));
 
 /**
- * Whether a person set the item's disposition after the handover: they closed it or sent it
+ * Whether a person set the item's disposition after the adoption: they closed it or sent it
  * elsewhere, so there is nothing left to point out. Both are ISO instants; the item's is null
  * while the rules own it.
  */
-export const respondedTo = (deliveredAt: string, dispositionAt: string | null) =>
-  dispositionAt !== null && dispositionAt > deliveredAt;
+export const respondedTo = (adoptedAt: string, dispositionAt: string | null) =>
+  dispositionAt !== null && dispositionAt > adoptedAt;
 
 const spaced = (name: string) => name.replaceAll("_", " ");
 

@@ -11,12 +11,13 @@ import * as PromotionStore from "./PromotionStore.ts";
 export const BATCH_SIZE = 100;
 
 /**
- * Hands candidate items to their owner kind. Each candidate gets one pending record for its owner
- * kind; one whose record was already delivered is promoted without a second. Each due pending
- * record for a kind with a promoter then goes to that promoter, earliest due first: success
- * delivers it, a failure waits six hours, and the fifth failure gives up and is flagged. A kind
- * with no promoter waits without counting an attempt. A tick takes at most one batch of each,
- * and the rest wait for the next. A dry run counts, calls no promoter and writes nothing.
+ * Hands candidate items to their owner kind. Each candidate gets one proposed record for its owner
+ * kind; one whose record was already adopted is promoted without a second. Each due proposed
+ * record for a kind with a promoter then goes to that promoter, earliest due first: success puts
+ * the draft in review, where someone other than its proposer adopts or rejects it, a failure waits
+ * six hours, and the fifth failure gives up and is flagged. A kind with no promoter waits without
+ * counting an attempt. A tick takes at most one batch of each, and the rest wait for the next. A
+ * dry run counts, calls no promoter and writes nothing.
  */
 export const sweep = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
@@ -59,7 +60,7 @@ export const sweep = Effect.gen(function* () {
             const outcome = yield* Effect.result(restore(promoter.value.promote(item, key)));
             if (Result.isSuccess(outcome)) {
               // Stamped when the promoter returns, not when the tick began: a slow promoter would
-              // otherwise leave a delivery time before the lesson was handed over.
+              // otherwise leave a review start before the draft was written.
               yield* PromotionStore.deliver(promotion, yield* DateTime.now);
               return false;
             }
