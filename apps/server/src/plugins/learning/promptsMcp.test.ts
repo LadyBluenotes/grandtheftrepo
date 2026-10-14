@@ -142,7 +142,9 @@ it.effect("an agent's save is refused without a search, and proposed with one", 
       const again = decodeSearch(
         (yield* call("prompt_search", { query: "SHIP fix" })).structuredContent,
       );
-      expect(again.prompts).toEqual([proposed]);
+      // A search carries the start of each body; prompt_get reads all of it.
+      const { body, ...rest } = proposed;
+      expect(again.prompts).toEqual([{ ...rest, preview: body }]);
       expect(again.searchId).not.toBe(searchId);
     }),
   ).pipe(Effect.provide(layerTest)),

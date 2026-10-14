@@ -117,8 +117,9 @@ const promotionOutcome: PluginMigration[2] = Effect.gen(function* () {
 
 // The prompt library. `prompts` holds the latest version's text, so a list reads one table;
 // `prompt_versions` is append-only. `source_key` names what proposed a prompt, such as a learning
-// promotion, so a repeat of that proposal finds it. `accepted_at` is set once a person accepted or
-// saved it, and decides whether unarchiving makes it active again or proposed.
+// promotion, so a repeat of that proposal finds it; a key is unique within its project, since a
+// source such as repeated work can name the same key in two. `accepted_at` is set once a person
+// accepted or saved it, and decides whether unarchiving makes it active again or proposed.
 const prompts: PluginMigration[2] = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
   yield* sql`CREATE TABLE prompts (
@@ -132,12 +133,13 @@ const prompts: PluginMigration[2] = Effect.gen(function* () {
     version INTEGER NOT NULL,
     use_count INTEGER NOT NULL DEFAULT 0,
     last_used_at TEXT,
-    source_key TEXT UNIQUE,
+    source_key TEXT,
     accepted_at TEXT,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
   )`;
   yield* sql`CREATE INDEX prompts_project ON prompts (project_id, updated_at)`;
+  yield* sql`CREATE UNIQUE INDEX prompts_source ON prompts (project_id, source_key)`;
   yield* sql`CREATE TABLE prompt_versions (
     prompt_id INTEGER NOT NULL REFERENCES prompts (id),
     version INTEGER NOT NULL,

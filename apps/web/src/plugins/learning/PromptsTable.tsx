@@ -1,6 +1,6 @@
-import type { PromptState } from "@t3tools/contracts";
+import { PROMPTS_LIST_LIMIT, type PromptState } from "@t3tools/contracts";
 import { PlusIcon } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useState } from "react";
 
 import { Badge } from "~/components/ui/badge";
 import { Button, InlineButton } from "~/components/ui/button";
@@ -21,6 +21,7 @@ import {
   TableHeader,
   TableRow,
 } from "~/components/ui/table";
+import { useDebouncedValue } from "~/state/queries";
 import { PromptDrawer } from "./PromptDrawer";
 import {
   PROMPT_KIND_LABEL,
@@ -29,7 +30,6 @@ import {
   PROMPT_STATE_VARIANT,
   PROMPT_STATES,
   isPromptState,
-  promptRows,
   usePromptCommands,
   usePrompts,
 } from "./promptState";
@@ -37,19 +37,19 @@ import type { LearningScope } from "./state";
 import { When } from "./When";
 
 /**
- * A project's prompt library, narrowed by state and by the words of a search. A row's title opens
- * the drawer, as does New prompt; whatever the drawer changes refetches the list.
+ * A project's prompt library, narrowed by state and by the words of a search, both on the server;
+ * the search waits for typing to pause. A row's title opens the drawer, as does New prompt;
+ * whatever the drawer changes refetches the list.
  */
 export function PromptsTable({ environmentId, projectId }: LearningScope) {
   const [state, setState] = useState<PromptState | null>(null);
   const [query, setQuery] = useState("");
   const [open, setOpen] = useState<number | "new" | null>(null);
-  const prompts = usePrompts({ environmentId, projectId });
+  const search = useDebouncedValue(query, 250);
+  const prompts = usePrompts({ environmentId, projectId }, { state, query: search });
   const { canWrite } = usePromptCommands(environmentId);
-  const rows = useMemo(
-    () => promptRows(prompts.data ?? [], { state, query }),
-    [prompts.data, state, query],
-  );
+  const rows = prompts.data ?? [];
+  const filtered = state !== null || search.trim() !== "";
 
   return (
     <div className="flex flex-col gap-3">
@@ -83,7 +83,11 @@ export function PromptsTable({ environmentId, projectId }: LearningScope) {
           </Select>
         </div>
         <span className="text-xs text-muted-foreground">
-          {rows.length === 1 ? "1 prompt" : `${rows.length} prompts`}
+          {rows.length === PROMPTS_LIST_LIMIT
+            ? `The ${PROMPTS_LIST_LIMIT} most recently updated; search to narrow`
+            : rows.length === 1
+              ? "1 prompt"
+              : `${rows.length} prompts`}
         </span>
         <div className="ml-auto">
           <Button size="sm" disabled={!canWrite} onClick={() => setOpen("new")}>
@@ -99,7 +103,7 @@ export function PromptsTable({ environmentId, projectId }: LearningScope) {
           <EmptyHeader>
             <EmptyTitle>No prompts</EmptyTitle>
             <EmptyDescription>
-              {prompts.data.length === 0
+              {!filtered
                 ? "Save a prompt or workflow you reuse. Agents propose them with the prompt_save tool, and a learning item for a prompt arrives here as a proposal."
                 : "Nothing matches the search and state."}
             </EmptyDescription>

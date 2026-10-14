@@ -9,7 +9,6 @@ import {
   PromptBody,
   PromptTitle,
   type EnvironmentId,
-  type Prompt,
   type PromptKind,
   type PromptOrigin,
   type PromptState,
@@ -64,9 +63,25 @@ const promptUnarchive = createPluginRpcCommand(connectionAtomRuntime, {
   method: PROMPT_METHODS.unarchive,
 });
 
-/** A project's prompts in every state; `promptRows` narrows them on the client. */
-export function usePrompts({ environmentId, projectId }: LearningScope) {
-  return useEnvironmentQuery(promptList({ environmentId, input: { projectId } }));
+/**
+ * A project's prompts as summaries, narrowed by state and by the words of `query` on the server,
+ * the most recently updated first, at most `PROMPTS_LIST_LIMIT`. A blank query asks for no words.
+ */
+export function usePrompts(
+  { environmentId, projectId }: LearningScope,
+  { state, query }: { readonly state: PromptState | null; readonly query: string },
+) {
+  const trimmed = query.trim();
+  return useEnvironmentQuery(
+    promptList({
+      environmentId,
+      input: {
+        projectId,
+        ...(state === null ? {} : { state }),
+        ...(trimmed === "" ? {} : { query: trimmed }),
+      },
+    }),
+  );
 }
 
 /** One prompt with its versions; nothing while `id` is null. */
@@ -125,34 +140,6 @@ export const PROMPT_ORIGIN_LABEL: Record<PromptOrigin, string> = {
   repeated_work: "Repeated work",
   learning: "Learning",
 };
-
-interface PromptFilter {
-  readonly state: PromptState | null;
-  readonly query: string;
-}
-
-/**
- * The prompts table's rows: those in `state`, or all, whose title or body holds every word of
- * `query` in any case, the most recently updated first. The same match an agent's search uses.
- */
-export function promptRows(
-  prompts: ReadonlyArray<Prompt>,
-  { state, query }: PromptFilter,
-): ReadonlyArray<Prompt> {
-  const words = query
-    .toLowerCase()
-    .split(/\s+/)
-    .filter((word) => word !== "");
-  return prompts
-    .filter((prompt) => {
-      if (state !== null && prompt.state !== state) return false;
-      const text = `${prompt.title}\n${prompt.body}`.toLowerCase();
-      return words.every((word) => text.includes(word));
-    })
-    .toSorted((a, b) =>
-      a.updatedAt === b.updatedAt ? b.id - a.id : a.updatedAt < b.updatedAt ? 1 : -1,
-    );
-}
 
 const isTitle = Schema.is(PromptTitle);
 const isBody = Schema.is(PromptBody);

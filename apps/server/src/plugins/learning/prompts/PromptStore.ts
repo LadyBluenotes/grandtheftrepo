@@ -1,5 +1,7 @@
 import {
   LearningError,
+  PROMPT_PREVIEW_LENGTH,
+  PROMPTS_LIST_LIMIT,
   PromptBody,
   PromptTitle,
   type ProjectId,
@@ -9,6 +11,7 @@ import {
   type PromptOrigin,
   type PromptSearchResult,
   type PromptState,
+  type PromptSummary,
   type PromptsCreateInput,
   type PromptsEditInput,
   type PromptsListInput,
@@ -44,14 +47,16 @@ interface Row {
   readonly updated_at: string;
 }
 
-const toPrompt = (row: Row): Prompt => ({
+/** A row as lists and searches read it: the start of the body, never all of it. */
+type SummaryRow = Omit<Row, "body" | "accepted_at"> & { readonly preview: string };
+
+const fields = (row: Omit<SummaryRow, "preview">) => ({
   id: row.id,
   projectId: row.project_id,
   kind: row.kind,
   state: row.state,
   origin: row.origin,
   title: row.title,
-  body: row.body,
   version: row.version,
   useCount: row.use_count,
   lastUsedAt: row.last_used_at,
@@ -59,8 +64,9 @@ const toPrompt = (row: Row): Prompt => ({
   updatedAt: row.updated_at,
 });
 
-/** Active first, then proposed, then archived: the order a search answers in. */
-const STATE_RANK: Record<PromptState, number> = { active: 0, proposed: 1, archived: 2 };
+const toPrompt = (row: Row): Prompt => ({ ...fields(row), body: row.body });
+
+const toSummary = (row: SummaryRow): PromptSummary => ({ ...fields(row), preview: row.preview });
 
 /** The text of a new prompt, before the store gives it a state and an origin. */
 interface PromptText {
@@ -90,15 +96,21 @@ const checkText = (title: string, body: string) =>
 export class PromptStore extends Context.Service<
   PromptStore,
   {
-    /** A project's prompts, most recently updated first. */
-    readonly list: (input: PromptsListInput) => Effect.Effect<ReadonlyArray<Prompt>, LearningError>;
+    /**
+     * A project's prompts as summaries, the most recently updated first, at most
+     * `PROMPTS_LIST_LIMIT`, narrowed by state and by the words of `query` as `search` matches them.
+     */
+    readonly list: (
+      input: PromptsListInput,
+    ) => Effect.Effect<ReadonlyArray<PromptSummary>, LearningError>;
     /** One prompt with its versions, oldest first. */
     readonly get: (id: number) => Effect.Effect<PromptDetail, LearningError>;
     /**
-     * The project's prompts in every state whose title or body holds each word of `query`, any
-     * case; a blank query matches all. Active first, then proposed, then archived, the most used
-     * first within each, at most ten. The search id it answers with lets a `propose` save in that
-     * project for the next 15 minutes. Searches are kept in memory, so a restart forgets them.
+     * The project's prompts in every state, as summaries, whose title or body holds each word of
+     * `query`, in any case for ASCII letters; a blank query matches all. Active first, then
+     * proposed, then archived, the most used first within each, at most ten. The search id it
+     * answers with lets a `propose` save in that project for the next 15 minutes. Searches are
+     * kept in memory, so a restart forgets them.
      */
     readonly search: (input: {
       readonly projectId: ProjectId;
@@ -117,9 +129,9 @@ export class PromptStore extends Context.Service<
       readonly body: string;
     }) => Effect.Effect<Prompt, LearningError>;
     /**
-     * A proposal from a sweep, once per `sourceKey`, such as `promotion:<id>`. Looking for the key
-     * and saving are one transaction, so overlapping calls save one prompt, and a repeat answers
-     * with the prompt the key saved, whatever became of it since.
+     * A proposal from a sweep, once per project and `sourceKey`, such as `promotion:<id>`. Looking
+     * for the key and saving are one transaction, so overlapping calls save one prompt, and a
+     * repeat answers with the prompt the key saved in that project, whatever became of it since.
      */
     readonly proposeFrom: (
       input: PromptText & {
@@ -172,6 +184,20 @@ const make = Effect.gen(function* () {
       ),
     );
 
+  /** The columns of a summary row. */
+  const summaryColumns = sql`id, project_id, kind, state, origin, title,
+    substr(body, 1, ${PROMPT_PREVIEW_LENGTH}) AS preview, version, use_count, last_used_at,
+    created_at, updated_at`;
+  /**
+   * One condition per word of `query`: the title or body holds it. SQLite's `lower` folds ASCII
+   * letters only, and it folds both sides, so other letters match as typed.
+   */
+  const matching = (query: string) =>
+    query
+      .split(/\s+/)
+      .filter((word) => word !== "")
+      .map((word) => sql`instr(lower(title || char(10) || body), lower(${word})) > 0`);
+
   /** Inserts a prompt and its first version; with a source key, the prompt it saved before instead. */
   const insert = (
     text: PromptText,
@@ -185,7 +211,8 @@ const make = Effect.gen(function* () {
       return yield* sql.withTransaction(
         Effect.gen(function* () {
           if (sourceKey !== null) {
-            const [saved] = yield* sql<Row>`SELECT * FROM prompts WHERE source_key = ${sourceKey}`;
+            const [saved] = yield* sql<Row>`SELECT * FROM prompts
+              WHERE project_id = ${text.projectId} AND source_key = ${sourceKey}`;
             if (saved !== undefined) return toPrompt(saved);
           }
           const [row] = yield* sql<Row>`INSERT INTO prompts ${sql.insert({
@@ -254,11 +281,16 @@ const make = Effect.gen(function* () {
       return yield* invalid(`Prompt ${id} is ${current.state}; only ${only}.`);
     }).pipe(Effect.catchTags({ SqlError: io }));
 
-  const list: PromptStore["Service"]["list"] = ({ projectId, state }) =>
-    sql<Row>`SELECT * FROM prompts
-      WHERE project_id = ${projectId} ${state === undefined ? sql`` : sql`AND state = ${state}`}
-      ORDER BY updated_at DESC, id DESC`.pipe(
-      Effect.map((rows) => rows.map(toPrompt)),
+  const list: PromptStore["Service"]["list"] = ({ projectId, state, query }) =>
+    sql<SummaryRow>`SELECT ${summaryColumns} FROM prompts
+      WHERE ${sql.and([
+        sql`project_id = ${projectId}`,
+        ...(state === undefined ? [] : [sql`state = ${state}`]),
+        ...matching(query ?? ""),
+      ])}
+      ORDER BY updated_at DESC, id DESC
+      LIMIT ${PROMPTS_LIST_LIMIT}`.pipe(
+      Effect.map((rows) => rows.map(toSummary)),
       Effect.catchTags({ SqlError: io }),
     );
 
@@ -285,28 +317,16 @@ const make = Effect.gen(function* () {
 
   const search: PromptStore["Service"]["search"] = ({ projectId, query }) =>
     Effect.gen(function* () {
-      const words = query
-        .toLowerCase()
-        .split(/\s+/)
-        .filter((word) => word !== "");
-      const rows = yield* sql<Row>`SELECT * FROM prompts WHERE project_id = ${projectId}`;
-      const matches = rows
-        .filter((row) => {
-          const text = `${row.title}\n${row.body}`.toLowerCase();
-          return words.every((word) => text.includes(word));
-        })
-        .toSorted(
-          (a, b) =>
-            STATE_RANK[a.state] - STATE_RANK[b.state] ||
-            b.use_count - a.use_count ||
-            (a.updated_at === b.updated_at ? b.id - a.id : a.updated_at < b.updated_at ? 1 : -1),
-        )
-        .slice(0, SEARCH_LIMIT);
+      const rows = yield* sql<SummaryRow>`SELECT ${summaryColumns} FROM prompts
+        WHERE ${sql.and([sql`project_id = ${projectId}`, ...matching(query)])}
+        ORDER BY CASE state WHEN 'active' THEN 0 WHEN 'proposed' THEN 1 ELSE 2 END,
+          use_count DESC, updated_at DESC, id DESC
+        LIMIT ${SEARCH_LIMIT}`;
       const searchId = yield* crypto.randomUUIDv4();
       const now = DateTime.toEpochMillis(yield* DateTime.now);
       for (const [id, entry] of searches) if (entry.until <= now) searches.delete(id);
       searches.set(searchId, { projectId, until: now + SEARCH_WINDOW_MINUTES * 60_000 });
-      return { searchId, prompts: matches.map(toPrompt) };
+      return { searchId, prompts: rows.map(toSummary) };
     }).pipe(
       Effect.catchTags({
         SqlError: io,

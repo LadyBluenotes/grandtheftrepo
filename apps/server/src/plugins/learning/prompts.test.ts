@@ -1,6 +1,11 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
-import { ProjectId } from "@t3tools/contracts";
+import {
+  PROMPT_BODY_MAX_LENGTH,
+  PROMPT_PREVIEW_LENGTH,
+  PROMPTS_LIST_LIMIT,
+  ProjectId,
+} from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as SqlClient from "effect/sql/SqlClient";
@@ -232,6 +237,65 @@ it.effect("a sweep's proposal is saved once per source", () =>
       const repeat = yield* prompts.proposeFrom({ ...proposal, title: "Another title" });
       assert.deepInclude(repeat, { id: first.id, state: "archived", title: text.title });
       assert.strictEqual((yield* prompts.list({ projectId })).length, 1);
+    }),
+  ),
+);
+
+it.effect("the same source in two projects proposes one prompt in each", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const prompts = yield* setup;
+      const proposal = { ...text, origin: "repeated_work", sourceKey: "candidate:abc" } as const;
+      const here = yield* prompts.proposeFrom({ projectId, ...proposal });
+      const there = yield* prompts.proposeFrom({ projectId: otherProject, ...proposal });
+      assert.notStrictEqual(here.id, there.id);
+      assert.strictEqual(there.projectId, otherProject);
+      assert.strictEqual((yield* prompts.proposeFrom({ projectId, ...proposal })).id, here.id);
+    }),
+  ),
+);
+
+it.effect("a list is bounded summaries, narrowed by state and words in the database", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const prompts = yield* setup;
+      const long = yield* prompts.create({
+        projectId,
+        kind: "workflow",
+        title: "Release",
+        body: `Tag the release. ${"x".repeat(PROMPT_BODY_MAX_LENGTH - 17)}`,
+      });
+      const [summary] = yield* prompts.list({ projectId });
+      assert.strictEqual(summary?.id, long.id);
+      assert.strictEqual(summary?.preview, long.body.slice(0, PROMPT_PREVIEW_LENGTH));
+      assert.notProperty(summary, "body");
+
+      for (let index = 0; index < PROMPTS_LIST_LIMIT; index += 1) {
+        yield* TestClock.adjust("1 second");
+        yield* prompts.create({ projectId, ...text, title: `Review ${index}` });
+      }
+      const listed = yield* prompts.list({ projectId });
+      assert.strictEqual(listed.length, PROMPTS_LIST_LIMIT);
+      // The newest first, so the oldest, the release, is the one left out.
+      assert.strictEqual(listed[0]?.title, `Review ${PROMPTS_LIST_LIMIT - 1}`);
+      assert.notInclude(
+        listed.map((p) => p.id),
+        long.id,
+      );
+      assert.deepStrictEqual(
+        (yield* prompts.list({ projectId, query: "TAG release" })).map((p) => p.id),
+        [long.id],
+      );
+      yield* prompts.archive(long.id);
+      assert.deepStrictEqual(
+        (yield* prompts.list({ projectId, state: "archived" })).map((p) => p.id),
+        [long.id],
+      );
+      assert.deepStrictEqual(yield* prompts.list({ projectId, state: "proposed" }), []);
+      assert.strictEqual(
+        (yield* prompts.search({ projectId, query: "review" })).prompts.length,
+        10,
+      );
     }),
   ),
 );

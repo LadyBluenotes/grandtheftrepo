@@ -7,8 +7,8 @@ import {
   LearningItem,
   PLUGIN_GATEWAY_WS_METHODS,
   ProjectId,
-  Prompt,
   PROMPT_METHODS,
+  PromptSummary,
   ThreadId,
   type Project,
 } from "@t3tools/contracts";
@@ -105,7 +105,7 @@ const operateCall = (method: string, input: unknown) =>
 
 const decodeItems = Schema.decodeUnknownEffect(Schema.Array(LearningItem));
 const decodePages = Schema.decodeUnknownEffect(Schema.Array(KnowledgeEntry));
-const decodePrompts = Schema.decodeUnknownEffect(Schema.Array(Prompt));
+const decodePrompts = Schema.decodeUnknownEffect(Schema.Array(PromptSummary));
 
 /** The running host: a tick, the learning database, and the reads a test makes. */
 const running = Effect.gen(function* () {
@@ -258,7 +258,7 @@ it.effect(
           Effect.flatMap(decodePrompts),
         );
         assert.deepStrictEqual(
-          prompts.map((p) => [p.kind, p.state, p.origin, p.title, p.body, p.version]),
+          prompts.map((p) => [p.kind, p.state, p.origin, p.title, p.preview, p.version]),
           [
             [
               "prompt",

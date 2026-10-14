@@ -201,7 +201,9 @@ them half-evaluated. The host hands `toolkitRegistration` to `ServerPlugin.mcp` 
   report's `promoters` is the same list. The `prompt` kind goes to the plugin's own prompt library
   (`prompts/`): saved prompts and workflows per project, `active`, `proposed` or `archived`, with
   append-only versions and a use count. `PromptStore.proposeFrom` saves a sweep's proposal once per
-  source key (`promotion:<id>` for a promotion), in the transaction that looks for it. Agents
+  project and source key (`promotion:<id>` for a promotion), in the transaction that looks for it.
+  Lists and searches filter in SQLite and answer with bounded summaries carrying a 200-character
+  preview, so a library's bodies never cross the socket together; the body comes with one prompt. Agents
   reach the library with `prompt_search`, `prompt_save` and `prompt_get`; a save is proposed and
   needs a search id from the last 15 minutes, kept in memory, so it checked for a duplicate first.
   People save, edit, revert, accept, archive and unarchive through the `learning.prompt*` gateway

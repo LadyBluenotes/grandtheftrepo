@@ -31,15 +31,14 @@ export const PROMPT_BODY_MAX_LENGTH = 10_000;
 /** The text sent, or the steps followed, as markdown. */
 export const PromptBody = TrimmedNonEmptyString.check(Schema.isMaxLength(PROMPT_BODY_MAX_LENGTH));
 
-/** A saved prompt or workflow in one project's library, with its latest version's text. */
-export const Prompt = Schema.Struct({
+const promptFields = {
   id: Schema.Int,
   projectId: ProjectId,
   kind: PromptKind,
   state: PromptState,
   origin: PromptOrigin,
+  /** The latest version's. */
   title: Schema.String,
-  body: Schema.String,
   /** The latest version's number, from 1. */
   version: Schema.Int,
   useCount: Schema.Int,
@@ -47,8 +46,21 @@ export const Prompt = Schema.Struct({
   createdAt: IsoDateTime,
   /** When its text or state last changed; a use does not move it. */
   updatedAt: IsoDateTime,
-});
+};
+
+/** A saved prompt or workflow in one project's library, with its latest version's body. */
+export const Prompt = Schema.Struct({ ...promptFields, body: Schema.String });
 export type Prompt = typeof Prompt.Type;
+
+/** How much of a body a summary carries. */
+export const PROMPT_PREVIEW_LENGTH = 200;
+
+/**
+ * A prompt as lists and searches show it: the start of its body instead of all of it. The body
+ * comes with the prompt itself.
+ */
+export const PromptSummary = Schema.Struct({ ...promptFields, preview: Schema.String });
+export type PromptSummary = typeof PromptSummary.Type;
 
 /** One version of a prompt. Versions are append-only; reverting adds a copy of an earlier one. */
 export const PromptVersion = Schema.Struct({
@@ -69,14 +81,22 @@ export type PromptDetail = typeof PromptDetail.Type;
 /** What an agent's search found, and the id a save from that search names. */
 export const PromptSearchResult = Schema.Struct({
   searchId: Schema.String,
-  prompts: Schema.Array(Prompt),
+  prompts: Schema.Array(PromptSummary),
 });
 export type PromptSearchResult = typeof PromptSearchResult.Type;
 
-/** A project's prompts, most recently updated first, narrowed to one state when given. */
+/** The most prompts a list answers with. */
+export const PROMPTS_LIST_LIMIT = 100;
+
+/**
+ * A project's prompts, the most recently updated first, at most `PROMPTS_LIST_LIMIT`. `state`
+ * narrows to one state; `query` to those whose title or body holds each of its words, in any case
+ * for ASCII letters.
+ */
 export const PromptsListInput = Schema.Struct({
   projectId: ProjectId,
   state: Schema.optional(PromptState),
+  query: Schema.optional(Schema.String),
 });
 export type PromptsListInput = typeof PromptsListInput.Type;
 
@@ -114,7 +134,7 @@ export const PROMPT_METHODS = definePluginMethods({
     method: "learning.prompts",
     gateway: "read",
     input: PromptsListInput,
-    output: Schema.Array(Prompt),
+    output: Schema.Array(PromptSummary),
     error: LearningError,
   },
   get: {
