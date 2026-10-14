@@ -741,10 +741,16 @@ export function BoardPage({ search }: { readonly search: BoardSearch }) {
     },
     [boardsChanged, remember, shown, write],
   );
+  // A card from another project drops the decisions view's category and decision, which name the
+  // project the URL held before.
   const openIssue = useCallback(
     ({ environmentId, projectId }: ScopedProjectRef, id: string) =>
-      void setSearch({ environmentId, projectId, issue: id }),
-    [setSearch],
+      void setSearch(
+        search.environmentId === environmentId && search.projectId === projectId
+          ? { issue: id }
+          : { environmentId, projectId, issue: id, category: undefined, decision: undefined },
+      ),
+    [search.environmentId, search.projectId, setSearch],
   );
 
   // Cards say which project they are in once the scope covers more than one.
