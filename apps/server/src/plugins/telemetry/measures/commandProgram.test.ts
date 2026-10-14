@@ -172,6 +172,9 @@ it("finds an interpreter running a script written into the command line", () => 
       "sh -s <<'EOF'\necho hi\nEOF",
       "/bin/zsh -lc \"python3 -c 'print(1)'\"",
       "cd app && bash -c \"node -e 'console.log(1)'\"",
+      "bash -c 'for f in *.ts; do wc -l \"$f\"; done'",
+      "sh -c 'if [ -f out.json ]; then cat out.json; fi'",
+      "bash -lc 'git status\ngit diff --stat'",
     ],
     true,
   );
@@ -183,6 +186,8 @@ it("finds an interpreter running a script written into the command line", () => 
       "bash run.sh",
       "bash -lc 'git status'",
       "cd app && bash -c 'git status'",
+      "bash -lc 'cd app && pnpm test'",
+      "bash -lc 'echo config; git config --list'",
       "zsh <<EOF\necho hi\nEOF",
       "cat <<EOF > notes.md\nhello\nEOF",
       "grep -e node -c src",

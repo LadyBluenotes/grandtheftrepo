@@ -269,6 +269,19 @@ const readsHeredocScript = (tokens: ReadonlyArray<string>, at: number): boolean 
   return false;
 };
 
+/** A loop, a branch, a function or several lines: what no single command runs. */
+const SHELL_PROGRAM = /(?:^|[\s;&|(])(?:for|while|until|if|case|function)\s|\n/;
+
+/**
+ * Whether a shell's `-c` body is a program of its own, such as `bash -c 'for f in *; do …; done'`,
+ * rather than a wrapper around commands, such as `bash -lc 'cd app && pnpm test'`.
+ */
+const shellRunsProgram = (tokens: ReadonlyArray<string>, at: number): boolean => {
+  if (!SHELLS.has(programOf(tokens[at]!) ?? "")) return false;
+  const script = tokens[scriptIndex(tokens, at)];
+  return script !== undefined && SHELL_PROGRAM.test(script);
+};
+
 /**
  * Whether the program `programName` names is an interpreter running a script written into the
  * command line: `node -e`, `python3 -c`, `ruby -e`, `bun --eval` or `deno eval` before its first
@@ -280,6 +293,7 @@ export const runsInlineScript = (command: string, depth = 0): boolean => {
   for (const tokens of segmentsOf(command)) {
     const found = segmentProgram(tokens, depth);
     if (found === undefined) continue;
+    if (shellRunsProgram(tokens, found.at)) return true;
     if (found.program === null || !INTERPRETERS.has(found.program)) return false;
     const { at } = found;
     if (readsHeredocScript(tokens, at)) return true;
