@@ -111,6 +111,12 @@ it.layer(NodeServices.layer)("discoverCopilotSession", (it) => {
       const discovery = yield* discoverCopilotSession({ binaryPath }, process.env, dir);
       expect(discovery.models.map((model) => model.slug)).toEqual(["gpt-5.4", "claude-sonnet-4.6"]);
       expect(discovery.capabilities.optionDescriptors?.[0]?.id).toBe("reasoning_effort");
+      const launchedDiscovery = yield* discoverCopilotSession(
+        { binaryPath: "/not/used/copilot", sessionBinaryPath: binaryPath },
+        process.env,
+        dir,
+      );
+      expect(launchedDiscovery).toEqual(discovery);
     }).pipe(Effect.scoped),
   );
 });

@@ -18,6 +18,19 @@ CLI 0.0.397 or newer is required and 1.0 or newer is recommended.
 Provider status reports whether the CLI is signed in. While signed out, Copilot
 shows a sign-in error until you run `copilot login` on the host and refresh.
 
+### Custom session launchers
+
+To start sessions through a wrapper, set **Session launcher** to its executable
+or script in **Settings → Providers**. T3 passes `--acp` and the permission-mode
+flags to it. The launcher must forward these arguments and standard input/output
+to Copilot without writing other text to standard output.
+
+**Binary path** still selects the regular Copilot CLI for version checks, skill
+discovery, and updates. The session launcher handles ACP authentication checks,
+conversations, model refreshes, and generated titles or commit messages. Clear
+**Session launcher** to return to direct Copilot sessions. To keep both choices
+available, add a separate Copilot instance and set the launcher only there.
+
 ## Sign-in and tokens
 
 To use a token instead of the saved login, add a **GitHub token** to the Copilot

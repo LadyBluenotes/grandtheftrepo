@@ -186,7 +186,12 @@ it.layer(NodeServices.layer)("checkCopilotProviderStatus", (it) => {
             source: ACP_AGENT_SOURCE,
           });
           return yield* checkCopilotProviderStatus(
-            decodeCopilotSettings({ enabled: true, binaryPath, customModels: ["gpt-5.3-codex"] }),
+            decodeCopilotSettings({
+              enabled: true,
+              binaryPath,
+              sessionBinaryPath: "",
+              customModels: ["gpt-5.3-codex"],
+            }),
             { ...process.env, T3_COPILOT_SIGNED_OUT: "" },
           );
         }),
@@ -245,6 +250,58 @@ it.layer(NodeServices.layer)("checkCopilotProviderStatus", (it) => {
       expect(snapshot.status).toBe("error");
       expect(snapshot.auth).toEqual({ status: "unauthenticated" });
       expect(snapshot.message).toContain("copilot login");
+    }),
+  );
+
+  it.effect("uses a session launcher for ACP and the regular binary for CLI probes", () =>
+    Effect.gen(function* () {
+      const snapshot = yield* Effect.scoped(
+        Effect.gen(function* () {
+          const fs = yield* FileSystem.FileSystem;
+          const dir = yield* fs.makeTempDirectoryScoped({ prefix: "t3code-copilot-launcher-" });
+          const binaryPath = writeFakeCli({
+            directory: dir,
+            name: "copilot",
+            source: 'if (process.argv[2] === "--acp") process.exit(1);\n' + ACP_AGENT_SOURCE,
+          });
+          const sessionBinaryPath = writeFakeCli({
+            directory: dir,
+            name: "session launcher",
+            source: 'if (process.argv[2] !== "--acp") process.exit(1);\n' + ACP_AGENT_SOURCE,
+          });
+          return yield* checkCopilotProviderStatus(
+            decodeCopilotSettings({ binaryPath, sessionBinaryPath }),
+            { ...process.env, T3_COPILOT_SIGNED_OUT: "" },
+          );
+        }),
+      );
+      expect(snapshot.status).toBe("ready");
+      expect(snapshot.version).toBe("1.0.95");
+      expect(snapshot.auth.status).toBe("authenticated");
+      expect(snapshot.skills.map((skill) => skill.name)).toEqual(["deploy"]);
+    }),
+  );
+
+  it.effect("reports a broken session launcher without falling back to regular Copilot", () =>
+    Effect.gen(function* () {
+      const snapshot = yield* Effect.scoped(
+        Effect.gen(function* () {
+          const fs = yield* FileSystem.FileSystem;
+          const dir = yield* fs.makeTempDirectoryScoped({ prefix: "t3code-copilot-launcher-" });
+          const binaryPath = writeFakeCli({
+            directory: dir,
+            name: "copilot",
+            source: ACP_AGENT_SOURCE,
+          });
+          return yield* checkCopilotProviderStatus(
+            decodeCopilotSettings({ binaryPath, sessionBinaryPath: `${binaryPath}.missing` }),
+            { ...process.env, T3_COPILOT_SIGNED_OUT: "" },
+          );
+        }),
+      );
+      expect(snapshot.status).toBe("error");
+      expect(snapshot.version).toBe("1.0.95");
+      expect(snapshot.message).toContain("ACP server failed to initialize");
     }),
   );
 

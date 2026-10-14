@@ -60,7 +60,11 @@ it.layer(layerTest)("CopilotDriver", (it) => {
         displayName: "Copilot test",
         enabled: false,
         environment: [{ name: "COPILOT_HOME", value: copilotHome, sensitive: false }],
-        config: { ...CopilotDriver.defaultConfig(), binaryPath },
+        config: {
+          ...CopilotDriver.defaultConfig(),
+          binaryPath,
+          sessionBinaryPath: path.join(tempDir, "session-launcher"),
+        },
       });
 
       const capabilities = yield* instance.snapshot.resolveMaintenance();

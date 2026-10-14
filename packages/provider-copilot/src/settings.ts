@@ -6,6 +6,7 @@
  */
 import {
   CustomModelSetting,
+  TrimmedString,
   makeBinaryPathSetting,
   makeProviderSettingsSchema,
 } from "@t3tools/contracts";
@@ -26,13 +27,21 @@ export const CopilotSettings = makeProviderSettingsSchema(
         providerSettingsForm: { placeholder: "copilot", clearWhenEmpty: "omit" },
       }),
     ),
+    sessionBinaryPath: Schema.optionalKey(TrimmedString).pipe(
+      Schema.annotateKey({
+        title: "Session launcher",
+        description:
+          "Optional executable or script for Copilot ACP sessions. Version checks, skills, and updates still use Binary path.",
+        providerSettingsForm: { placeholder: "Use Binary path", clearWhenEmpty: "omit" },
+      }),
+    ),
     customModels: Schema.Array(CustomModelSetting).pipe(
       Schema.withDecodingDefault(Effect.succeed([])),
       Schema.annotateKey({ providerSettingsForm: { hidden: true } }),
     ),
   },
   {
-    order: ["binaryPath"],
+    order: ["binaryPath", "sessionBinaryPath"],
   },
 );
 export type CopilotSettings = typeof CopilotSettings.Type;

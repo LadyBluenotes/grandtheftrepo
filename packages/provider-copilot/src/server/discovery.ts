@@ -71,7 +71,7 @@ export function copilotDiscoveryFromSession(
  * explicit model refresh, never from a background health check.
  */
 export const discoverCopilotSession = Effect.fn("discoverCopilotSession")(function* (
-  copilotSettings: Pick<CopilotSettings, "binaryPath">,
+  copilotSettings: Pick<CopilotSettings, "binaryPath" | "sessionBinaryPath">,
   environment: NodeJS.ProcessEnv,
   cwd: string,
 ) {

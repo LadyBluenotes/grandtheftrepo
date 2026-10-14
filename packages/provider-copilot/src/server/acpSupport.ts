@@ -32,7 +32,7 @@ export const COPILOT_SUPPORTED_RUNTIME_MODES = [
   "full-access",
 ] as const satisfies ReadonlyArray<RuntimeMode>;
 
-type CopilotAcpRuntimeCopilotSettings = Pick<CopilotSettings, "binaryPath">;
+type CopilotAcpRuntimeCopilotSettings = Pick<CopilotSettings, "binaryPath" | "sessionBinaryPath">;
 
 interface CopilotAcpRuntimeInput extends Omit<
   AcpSessionRuntime.AcpSessionRuntimeOptions,
@@ -73,7 +73,7 @@ function buildCopilotAcpSpawnInput(
   runtimeMode?: RuntimeMode,
 ): AcpSessionRuntime.AcpSpawnInput {
   return {
-    command: copilotSettings?.binaryPath || "copilot",
+    command: copilotSettings?.sessionBinaryPath || copilotSettings?.binaryPath || "copilot",
     args: [...copilotAcpSpawnArgs(runtimeMode)],
     cwd,
     ...(environment === undefined ? {} : { env: environment }),

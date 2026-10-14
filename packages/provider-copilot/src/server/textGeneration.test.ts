@@ -121,7 +121,7 @@ describe("declineCopilotPermission", () => {
 });
 
 it.layer(NodeServices.layer)("makeCopilotTextGeneration", (it) => {
-  it.effect("generates over ACP, declines tool permissions, and sets a named model", () =>
+  it.effect("generates through a session launcher, declines tools, and sets a named model", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const dir = yield* fs.makeTempDirectoryScoped({ prefix: "t3code-copilot-text-" });
@@ -140,7 +140,11 @@ it.layer(NodeServices.layer)("makeCopilotTextGeneration", (it) => {
         },
       });
       const textGeneration = yield* makeCopilotTextGeneration(
-        decodeCopilotSettings({ enabled: true, binaryPath }),
+        decodeCopilotSettings({
+          enabled: true,
+          binaryPath: "/not/used/copilot",
+          sessionBinaryPath: binaryPath,
+        }),
         { ...process.env, COPILOT_AUTO_UPDATE: "" },
       );
 
