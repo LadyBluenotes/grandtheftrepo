@@ -73,7 +73,8 @@ over and whether that reason is permanent, holds only for now, or lacks evidence
 make the call worth revisiting; they are in the decision's file. When one decision replaces
 another, the old one stays, marked superseded and linked to its replacement; giving it another
 state unlinks them, and a linked decision cannot be deleted. A conflicted decision waits in
-[Waiting on you](#waiting-on-you) until its state changes. Every change is kept as a revision.
+[Waiting on you](#waiting-on-you) until its state changes. Every change is kept as a revision
+until you delete the decision; only a person can delete one.
 Decisions recorded as for or against something read as accepted, with that call as their one
 alternative, chosen or rejected.
 

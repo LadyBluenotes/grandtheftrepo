@@ -64,7 +64,7 @@ const KanbanWriteTool = Tool.make("kanban_write", {
 const KanbanDecisionsTool = Tool.make("kanban_decisions", {
   ...shared,
   description:
-    "Search the project's kanban decisions by their words: any word of query matches a decision's title, why, alternatives, reconsider-when, category or id, and those matching most come first, then the newest; at most ten, in full. Narrow with state (proposed, accepted, rejected, deferred, conflicted, superseded) or category.",
+    "Search the project's kanban decisions by their words: any word of query matches a decision's title, why, alternatives, reconsider-when, category or id, and those matching most come first, then the newest; at most ten, each in full but without its revisions (kanban_list with the id shows them). Narrow with state (proposed, accepted, rejected, deferred, conflicted, superseded) or category.",
   parameters: Schema.Struct({
     projectId: Schema.optional(ProjectId),
     query: Schema.String,
