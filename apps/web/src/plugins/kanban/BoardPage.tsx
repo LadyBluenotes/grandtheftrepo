@@ -589,6 +589,7 @@ export function BoardPage({ search }: { readonly search: BoardSearch }) {
           projectId={projectId}
           issueId={search.issue ?? null}
           categories={board.data?.decisionCategories ?? []}
+          issues={board.data?.issues ?? []}
           canWrite={canWrite}
           onClose={closePanel}
         />
