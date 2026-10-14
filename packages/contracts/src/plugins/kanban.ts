@@ -1,3 +1,4 @@
+import * as Effect from "effect/Effect";
 import * as Rpc from "effect/rpc/Rpc";
 import * as Schema from "effect/Schema";
 import { AuthOrchestrationReadScope, EnvironmentAuthorizationError } from "../auth.ts";
@@ -231,8 +232,6 @@ export const KanbanLogKind = Schema.Literals([
   "unblocked",
   "reopened",
   "criterion",
-  "finding",
-  "no_decision",
 ]);
 export type KanbanLogKind = typeof KanbanLogKind.Type;
 
@@ -247,13 +246,17 @@ export type KanbanLogEntry = typeof KanbanLogEntry.Type;
 export const KanbanIssue = Schema.Struct({
   ...KanbanIssueFields,
   criteria: Schema.Array(KanbanCriterion),
-  findings: Schema.Array(KanbanFinding),
+  // A server from before findings sends none; an older client ignores the field.
+  findings: Schema.Array(KanbanFinding).pipe(Schema.withDecodingDefault(Effect.succeed([]))),
   /**
    * Whether Done also needs a decision listing this issue or a `noDecision`, and no open finding.
-   * Every issue filed since that check began has it; an older issue file does not, and is exempt.
+   * Every issue filed since that check began has it; an older issue file does not, and is exempt,
+   * as is every issue a server from before the check sends.
    */
-  closureCheck: Schema.Boolean,
-  noDecision: Schema.NullOr(KanbanNoDecision),
+  closureCheck: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
+  noDecision: Schema.NullOr(KanbanNoDecision).pipe(
+    Schema.withDecodingDefault(Effect.succeed(null)),
+  ),
   description: Schema.String,
   log: Schema.Array(KanbanLogEntry),
 });

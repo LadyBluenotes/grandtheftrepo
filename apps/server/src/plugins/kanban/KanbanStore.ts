@@ -763,9 +763,20 @@ const make = Effect.gen(function* () {
         if (reason === (current.noDecision?.reason ?? "")) return { id: current.id };
         yield* saveIssue(
           state,
-          touch(logged(current, "no_decision", reason), {
-            noDecision: reason.length === 0 ? null : { reason, at, by: actor },
-          }),
+          // A `note`, which every client can read: a log kind an older client does not know fails
+          // the whole issue there.
+          touch(
+            logged(
+              current,
+              "note",
+              reason.length === 0
+                ? "cleared the no-decision reason"
+                : `no decision needed: ${reason}`,
+            ),
+            {
+              noDecision: reason.length === 0 ? null : { reason, at, by: actor },
+            },
+          ),
         );
         return { id: current.id };
       }

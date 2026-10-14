@@ -67,8 +67,8 @@ describe("KanbanFiles", () => {
         {
           at: "2026-10-12T13:55:00.000Z",
           by: "user",
-          kind: "finding" as const,
-          text: "cookie-path-too-broad rejected: Path=/ is intended.",
+          kind: "note" as const,
+          text: "finding cookie-path-too-broad rejected: Path=/ is intended.",
         },
         {
           at: "2026-10-12T14:03:00.000Z",

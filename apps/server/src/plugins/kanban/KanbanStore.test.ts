@@ -418,7 +418,7 @@ it.layer(layerTest)("KanbanStore", (it) => {
           issue.log.map((e) => e.kind),
           [
             "status",
-            "no_decision",
+            "note",
             "criterion",
             "criterion",
             "criterion",
@@ -472,8 +472,14 @@ it.layer(layerTest)("KanbanStore", (it) => {
         issue = yield* store.getIssue({ projectId, id });
         assert.isNull(issue.noDecision);
         assert.deepStrictEqual(
-          issue.log.filter((entry) => entry.kind === "no_decision").map((entry) => entry.text),
-          ["A config value.", "Only a config value.", ""],
+          issue.log
+            .filter((entry) => entry.kind === "note" && /no.decision/.test(entry.text))
+            .map((entry) => entry.text),
+          [
+            "no decision needed: A config value.",
+            "no decision needed: Only a config value.",
+            "cleared the no-decision reason",
+          ],
         );
         assert.strictEqual(yield* failureCode(toDone(id)), "invalid");
         yield* store.write(projectId, "user", {
