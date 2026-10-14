@@ -101,16 +101,23 @@ const NEEDS_CODE: Partial<Record<TelemetryExtractionForm, string>> = {
 /** The label a Triage card for work that needs code carries. */
 export const CARD_LABEL = "deterministic";
 
-/** A Triage card for a form that needs code written. */
+/**
+ * A Triage card for a form that needs code written. Its description ends with `marker`, which
+ * names the proposal, so a retry finds the card it filed.
+ */
 export const cardDraft = (
   candidate: TelemetryExtractionCandidate,
   week: string,
   proposalId: number,
-) => ({
-  title: clip(`Could be deterministic: ${summary(candidate.steps, 100)}`, 120),
-  description: [
-    `${evidence(candidate, week)} It could be ${NEEDS_CODE[candidate.form] ?? "code"}.`,
-    stepsBlock(candidate.steps),
-    `${lookAt(candidate)} Proposal ${proposalId} on the Learning screen's Deterministic tab.`,
-  ].join("\n\n"),
-});
+) => {
+  const marker = `Proposal ${proposalId} on the Learning screen's Deterministic tab.`;
+  return {
+    title: clip(`Could be deterministic: ${summary(candidate.steps, 100)}`, 120),
+    description: [
+      `${evidence(candidate, week)} It could be ${NEEDS_CODE[candidate.form] ?? "code"}.`,
+      stepsBlock(candidate.steps),
+      `${lookAt(candidate)} ${marker}`,
+    ].join("\n\n"),
+    marker,
+  };
+};

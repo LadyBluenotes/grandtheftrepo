@@ -27,7 +27,7 @@ import {
 } from "./drafts.ts";
 
 /** A proposal as its form's target sees it. */
-export interface Proposed {
+interface Proposed {
   readonly id: number;
   readonly projectId: ProjectId;
   readonly candidate: TelemetryExtractionCandidate;
@@ -35,7 +35,7 @@ export interface Proposed {
 }
 
 /** A draft saved in its target, or why there is none yet. */
-export type Drafted =
+type Drafted =
   | { readonly _tag: "drafted"; readonly draft: DeterministicDraft }
   | { readonly _tag: "waiting"; readonly reason: string };
 
@@ -147,12 +147,15 @@ export const make = Effect.gen(function* () {
           const store = yield* kanban;
           if (Option.isNone(store)) return waiting("The kanban plugin is off.");
           const card = cardDraft(candidate, windowFrom, proposal.id);
-          const board = yield* store.value.board(projectId);
-          const saved = board.issues.find(
-            (issue) => issue.title === card.title && issue.labels.includes(CARD_LABEL),
-          );
+          // A card an earlier try filed has this title and label, and names the proposal.
+          let saved: string | undefined;
+          for (const issue of (yield* store.value.board(projectId)).issues) {
+            if (issue.title !== card.title || !issue.labels.includes(CARD_LABEL)) continue;
+            const full = yield* store.value.getIssue({ projectId, id: issue.id });
+            if (full.description.includes(card.marker)) saved = issue.id;
+          }
           const issueId =
-            saved?.id ??
+            saved ??
             (yield* store.value.write(projectId, "system", {
               action: "issue.create",
               title: card.title,

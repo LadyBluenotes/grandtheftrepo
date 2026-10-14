@@ -317,8 +317,11 @@ const make = Effect.gen(function* () {
       });
       const at = yield* nowIso;
       if (result._tag === "waiting") {
-        yield* sql`UPDATE deterministic_proposals
-          SET waiting_reason = ${result.reason}, updated_at = ${at} WHERE id = ${id}`;
+        // Every tick tries again; only a new reason is written.
+        if (result.reason !== row.waiting_reason) {
+          yield* sql`UPDATE deterministic_proposals
+            SET waiting_reason = ${result.reason}, updated_at = ${at} WHERE id = ${id}`;
+        }
         return false;
       }
       yield* sql`UPDATE deterministic_proposals
