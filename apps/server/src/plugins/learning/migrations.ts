@@ -115,6 +115,16 @@ const promotionOutcome: PluginMigration[2] = Effect.gen(function* () {
   )`;
 });
 
+// Security corrections recorded before the security scan declared its mode stayed `unclassified`;
+// declaring it now and clearing the mark hands them to the classify sweep like new ones.
+const securityDeclaredMode: PluginMigration[2] = Effect.gen(function* () {
+  const sql = yield* SqlClient.SqlClient;
+  yield* sql`UPDATE corrections
+    SET declared_mode = 'security', cause_class = 'unclassified', classified_at = NULL,
+      classification_reason = NULL
+    WHERE failure_kind = 'security' AND declared_mode IS NULL`;
+});
+
 // The prompt library. `prompts` holds the latest version's text, so a list reads one table;
 // `prompt_versions` is append-only. `source_key` names what proposed a prompt, such as a learning
 // promotion, so a repeat of that proposal finds it; a key is unique within its project, since a
@@ -157,5 +167,6 @@ export const migrations = [
   [4, "RegressionRuns", regressionRuns],
   [5, "DispositionAt", dispositionAt],
   [6, "PromotionOutcome", promotionOutcome],
-  [7, "Prompts", prompts],
+  [7, "SecurityDeclaredMode", securityDeclaredMode],
+  [8, "Prompts", prompts],
 ] as const satisfies ReadonlyArray<PluginMigration>;
