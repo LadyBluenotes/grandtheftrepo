@@ -67,17 +67,13 @@ const topCandidates = (measure: TelemetryMeasure) => {
     : `<table><thead><tr><th>Repeated steps</th><th>Threads</th><th>Tokens</th><th>Form</th></tr></thead><tbody>${rows.join("")}</tbody></table>`;
 };
 
-/** How many listed proposals each decision has, with their estimated tokens a week. */
-const proposalTotals = (items: TelemetryReport["deterministic"]["items"]) => {
-  const tally = (states: ReadonlyArray<string>) => {
-    const listed = items.filter((item) => states.includes(item.state));
-    return [listed.length, listed.reduce((total, item) => total + item.estimatedTokens, 0)];
-  };
-  const [accepted, saved] = tally(["accepted"]);
-  const [undecided, open] = tally(["pending", "waiting"]);
-  const [dismissed, left] = tally(["dismissed"]);
-  return `<p class="muted">Accepted: ${accepted}, saving about ${saved} estimated tokens a week. Undecided: ${undecided}, about ${open}. Dismissed: ${dismissed}, about ${left}.</p>`;
-};
+/** How many proposals each decision has, all of them, with their estimated tokens a week. */
+const proposalTotals = ({
+  accepted,
+  undecided,
+  dismissed,
+}: TelemetryReport["deterministic"]["totals"]) =>
+  `<p class="muted">Accepted: ${accepted.count}, saving about ${accepted.estimatedTokens} estimated tokens a week. Undecided: ${undecided.count}, about ${undecided.estimatedTokens}. Dismissed: ${dismissed.count}, about ${dismissed.estimatedTokens}.</p>`;
 
 const STYLE = [
   "body{color:var(--foreground);font-family:var(--font-sans)}",
@@ -215,7 +211,7 @@ export const renderHtml = (report: TelemetryReport) =>
         escape(item.dismissReason === null ? item.state : `${item.state}: ${item.dismissReason}`),
         `~${item.estimatedTokens}`,
       ],
-      proposalTotals(report.deterministic.items),
+      proposalTotals(report.deterministic.totals),
     ),
     "</body></html>",
   ].join("");

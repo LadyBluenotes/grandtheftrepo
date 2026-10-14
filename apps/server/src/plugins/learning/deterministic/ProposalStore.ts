@@ -91,7 +91,11 @@ const choose = (
 export class ProposalStore extends Context.Service<
   ProposalStore,
   {
-    /** A project's proposals, newest first, at most `DETERMINISTIC_PROPOSALS_LIMIT`. */
+    /**
+     * A project's proposals: every undecided one, newest first, then the newest decided ones while
+     * the list holds fewer than `DETERMINISTIC_PROPOSALS_LIMIT`, so whatever the flag counts is
+     * listed however many were decided before it.
+     */
     readonly list: (
       input: DeterministicProposalsInput,
     ) => Effect.Effect<ReadonlyArray<DeterministicProposal>, LearningError>;
@@ -198,16 +202,31 @@ const make = Effect.gen(function* () {
     );
 
   const list: ProposalStore["Service"]["list"] = ({ projectId, state }) =>
-    sql<Row>`SELECT * FROM deterministic_proposals
-      WHERE ${sql.and([
-        sql`project_id = ${projectId}`,
-        ...(state === undefined ? [] : [sql`state = ${state}`]),
-      ])}
-      ORDER BY id DESC
-      LIMIT ${DETERMINISTIC_PROPOSALS_LIMIT}`.pipe(
-      Effect.flatMap((rows) => Effect.forEach(rows, toProposal)),
-      Effect.catchTags({ SqlError: failed, SchemaError: failed }),
-    );
+    Effect.gen(function* () {
+      const undecided =
+        state === "accepted" || state === "dismissed"
+          ? []
+          : yield* sql<Row>`SELECT * FROM deterministic_proposals
+              WHERE ${sql.and([
+                sql`project_id = ${projectId}`,
+                state === undefined ? sql`state IN ('waiting', 'pending')` : sql`state = ${state}`,
+              ])}
+              ORDER BY id DESC`;
+      const room = DETERMINISTIC_PROPOSALS_LIMIT - undecided.length;
+      const decided =
+        state === "waiting" || state === "pending" || room <= 0
+          ? []
+          : yield* sql<Row>`SELECT * FROM deterministic_proposals
+              WHERE ${sql.and([
+                sql`project_id = ${projectId}`,
+                state === undefined
+                  ? sql`state IN ('accepted', 'dismissed')`
+                  : sql`state = ${state}`,
+              ])}
+              ORDER BY id DESC
+              LIMIT ${room}`;
+      return yield* Effect.forEach([...undecided, ...decided], toProposal);
+    }).pipe(Effect.catchTags({ SqlError: failed, SchemaError: failed }));
 
   const inRange: ProposalStore["Service"]["inRange"] = ({ projectId, from, to }) =>
     sql<Row>`SELECT * FROM deterministic_proposals

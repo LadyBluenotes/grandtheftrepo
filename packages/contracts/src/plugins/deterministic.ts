@@ -76,10 +76,16 @@ export const DeterministicProposal = Schema.Struct({
 });
 export type DeterministicProposal = typeof DeterministicProposal.Type;
 
-/** The most proposals a list answers with. */
+/**
+ * How many proposals a list fills up to with decided ones. Undecided proposals are always listed,
+ * even past it.
+ */
 export const DETERMINISTIC_PROPOSALS_LIMIT = 100;
 
-/** A project's proposals, newest first, at most `DETERMINISTIC_PROPOSALS_LIMIT`; `state` narrows. */
+/**
+ * A project's proposals: every undecided one, newest first, then the newest decided ones up to
+ * `DETERMINISTIC_PROPOSALS_LIMIT` in all; `state` narrows.
+ */
 export const DeterministicProposalsInput = Schema.Struct({
   projectId: ProjectId,
   state: Schema.optional(DeterministicProposalState),

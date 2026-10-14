@@ -53,6 +53,10 @@ const Promotion = Schema.Struct({
   deliveredAt: IsoDateTime,
 });
 
+/** How many proposals in one state a report counts, and their estimated tokens a week. */
+const ProposalTally = Schema.Struct({ count: NonNegativeInt, estimatedTokens: NonNegativeInt });
+const NO_PROPOSALS = { count: 0, estimatedTokens: 0 };
+
 /** What happened in one project over one range, from data the server already holds. */
 export const TelemetryReport = Schema.Struct({
   projectId: ProjectId,
@@ -141,25 +145,34 @@ export const TelemetryReport = Schema.Struct({
   /**
    * Proposals to do repeated work without a model: those accepted or dismissed in the range, and
    * those still undecided, with the estimated tokens each saves in a week like the one it was
-   * found in. A report from a server without this section reads it as unavailable.
+   * found in. `totals` counts every one of them, not only the items listed. A report from a server
+   * without this section reads it as unavailable.
    */
-  deterministic: section(
-    Schema.Struct({
-      proposalId: Schema.Int,
-      form: TelemetryExtractionForm,
-      title: Schema.String,
-      state: DeterministicProposalState,
-      estimatedTokens: NonNegativeInt,
-      decidedAt: Schema.NullOr(IsoDateTime),
-      dismissReason: Schema.NullOr(Schema.String),
+  deterministic: Schema.Struct({
+    ...section(
+      Schema.Struct({
+        proposalId: Schema.Int,
+        form: TelemetryExtractionForm,
+        title: Schema.String,
+        state: DeterministicProposalState,
+        estimatedTokens: NonNegativeInt,
+        decidedAt: Schema.NullOr(IsoDateTime),
+        dismissReason: Schema.NullOr(Schema.String),
+      }),
+    ).fields,
+    totals: Schema.Struct({
+      accepted: ProposalTally,
+      undecided: ProposalTally,
+      dismissed: ProposalTally,
     }),
-  ).pipe(
+  }).pipe(
     Schema.withDecodingDefault(
       Effect.succeed({
         state: "unavailable" as const,
         missingReason: "The server did not report this section.",
         count: 0,
         items: [],
+        totals: { accepted: NO_PROPOSALS, undecided: NO_PROPOSALS, dismissed: NO_PROPOSALS },
       }),
     ),
   ),

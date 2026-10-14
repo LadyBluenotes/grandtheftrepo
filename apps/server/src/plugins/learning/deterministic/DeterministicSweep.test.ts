@@ -127,6 +127,7 @@ const setup = (projects: ReadonlyArray<OrchestrationProjectShell> = [projectA]) 
     });
     const store = Context.get(context, ProposalStore.ProposalStore);
     return {
+      sql,
       weeks,
       requests,
       store,
@@ -541,6 +542,55 @@ it.effect("accepting a draft script adds it to the project's scripts, once", () 
       );
       assert.strictEqual(again.code, "invalid");
       assert.deepEqual(yield* world.tick(), { examined: 0, acted: 1, flags: 0 });
+    }),
+  ),
+);
+
+it.effect("every undecided proposal is listed first, however many were decided after it", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const world = yield* setup();
+      world.weeks.set(WEEK_1, [candidate("01d0000000000001")]);
+      yield* world.tick();
+      // 120 proposals decided since, each newer than the one still pending.
+      for (let index = 0; index < 120; index += 1) {
+        yield* world.sql`INSERT INTO deterministic_proposals ${world.sql.insert({
+          project_id: projectA.id,
+          candidate_id: `decided-${index}`,
+          form: "script",
+          candidate: JSON.stringify(candidate(`decided-${index}`)),
+          estimated_tokens: 1000,
+          window_from: WEEK_1,
+          state: "dismissed",
+          draft: null,
+          waiting_reason: null,
+          decided_by: "user",
+          decided_at: WEEK_2,
+          dismiss_reason: "Noise.",
+          created_at: WEEK_2,
+          updated_at: WEEK_2,
+        })}`;
+      }
+
+      const listed = yield* world.store.list({ projectId: projectA.id });
+      assert.strictEqual(listed.length, 100);
+      assert.deepEqual(
+        listed.slice(0, 2).map((proposal) => [proposal.candidateId, proposal.state]),
+        [
+          ["01d0000000000001", "pending"],
+          ["decided-119", "dismissed"],
+        ],
+      );
+      assert.deepEqual(
+        (yield* world.store.list({ projectId: projectA.id, state: "pending" })).map(
+          (proposal) => proposal.candidateId,
+        ),
+        ["01d0000000000001"],
+      );
+      assert.strictEqual(
+        (yield* world.store.list({ projectId: projectA.id, state: "dismissed" })).length,
+        100,
+      );
     }),
   ),
 );

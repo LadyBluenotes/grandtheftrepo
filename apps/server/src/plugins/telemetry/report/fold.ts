@@ -142,6 +142,27 @@ const PROPOSAL_ORDER: Record<DeterministicProposalState, number> = {
   dismissed: 3,
 };
 
+/** Every listed proposal by decision, counted before the section keeps only its first items. */
+const tallyProposals = (
+  proposals: ReadonlyArray<{
+    readonly state: DeterministicProposalState;
+    readonly estimatedTokens: number;
+  }>,
+): TelemetryReport["deterministic"]["totals"] => {
+  const tally = (states: ReadonlyArray<DeterministicProposalState>) => {
+    const counted = proposals.filter((proposal) => states.includes(proposal.state));
+    return {
+      count: counted.length,
+      estimatedTokens: counted.reduce((total, proposal) => total + proposal.estimatedTokens, 0),
+    };
+  };
+  return {
+    accepted: tally(["accepted"]),
+    undecided: tally(["pending", "waiting"]),
+    dismissed: tally(["dismissed"]),
+  };
+};
+
 /**
  * The range a report covers, as normalized ISO instants: the one given, or with neither bound
  * given, the last seven whole UTC days before `now`.
@@ -271,6 +292,27 @@ export const foldReport = (input: ReportInput): TelemetryReport => {
             occurrences: item.occurrences,
             updatedAt: item.updatedAt,
           }));
+
+  const proposals: Section<"deterministic">["items"] = (learning?.proposals ?? [])
+    .filter((proposal) =>
+      proposal.decidedAt === null ? proposal.windowFrom < input.to : inRange(proposal.decidedAt),
+    )
+    .toSorted(
+      byKeys(
+        (proposal) => PROPOSAL_ORDER[proposal.state],
+        (proposal) => -proposal.estimatedTokens,
+        (proposal) => proposal.id,
+      ),
+    )
+    .map((proposal) => ({
+      proposalId: proposal.id,
+      form: proposal.form,
+      title: proposal.title,
+      state: proposal.state,
+      estimatedTokens: proposal.estimatedTokens,
+      decidedAt: proposal.decidedAt,
+      dismissReason: proposal.dismissReason,
+    }));
 
   return {
     projectId: input.projectId,
@@ -421,30 +463,7 @@ export const foldReport = (input: ReportInput): TelemetryReport => {
     efficiency: ok(input.measures),
     deterministic:
       learning === undefined
-        ? unavailable(notRunning("learning"))
-        : ok(
-            learning.proposals
-              .filter((proposal) =>
-                proposal.decidedAt === null
-                  ? proposal.windowFrom < input.to
-                  : inRange(proposal.decidedAt),
-              )
-              .toSorted(
-                byKeys(
-                  (proposal) => PROPOSAL_ORDER[proposal.state],
-                  (proposal) => -proposal.estimatedTokens,
-                  (proposal) => proposal.id,
-                ),
-              )
-              .map((proposal) => ({
-                proposalId: proposal.id,
-                form: proposal.form,
-                title: proposal.title,
-                state: proposal.state,
-                estimatedTokens: proposal.estimatedTokens,
-                decidedAt: proposal.decidedAt,
-                dismissReason: proposal.dismissReason,
-              })),
-          ),
+        ? { ...unavailable(notRunning("learning")), totals: tallyProposals([]) }
+        : { ...ok(proposals), totals: tallyProposals(proposals) },
   };
 };

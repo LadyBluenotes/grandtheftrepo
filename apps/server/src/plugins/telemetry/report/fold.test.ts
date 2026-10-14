@@ -446,6 +446,31 @@ it("a section lists at most 20 items and counts all of them", () => {
   assert.include(renderHtml(report), "Showing 20 of 25.");
 });
 
+it("could be deterministic: the totals count every proposal, not only the 20 listed", () => {
+  const input = fullInput();
+  const accepted = Array.from({ length: 25 }, (_, index) =>
+    proposal(index + 10, { state: "accepted", decidedBy: "user", decidedAt: INSIDE }),
+  );
+  const report = foldReport({
+    ...input,
+    learning: input.learning && { ...input.learning, proposals: accepted },
+  });
+  const tokens = accepted.reduce((total, row) => total + row.estimatedTokens, 0);
+  assert.deepEqual(
+    [report.deterministic.count, report.deterministic.items.length],
+    [25, MAX_SECTION_ITEMS],
+  );
+  assert.deepEqual(report.deterministic.totals, {
+    accepted: { count: 25, estimatedTokens: tokens },
+    undecided: { count: 0, estimatedTokens: 0 },
+    dismissed: { count: 0, estimatedTokens: 0 },
+  });
+  assert.include(
+    renderHtml(report),
+    `Accepted: 25, saving about ${tokens} estimated tokens a week.`,
+  );
+});
+
 it("a range is half-open, defaults to the last seven whole UTC days, and must run forward", () => {
   const now = DateTime.makeUnsafe("2026-10-12T09:30:00.000Z");
   assert.deepEqual(reportRange({}, now), Result.succeed({ from: FROM, to: TO }));

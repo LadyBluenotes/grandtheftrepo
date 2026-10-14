@@ -48,8 +48,9 @@ import { actorLabel, type LearningScope } from "./state";
 import { When } from "./When";
 
 /**
- * A project's proposals to do repeated work without a model, newest first, from the weekly
- * review. A row's title opens the drawer, where a person accepts or dismisses it.
+ * A project's proposals to do repeated work without a model, from the weekly review: the undecided
+ * ones first, then the decided, newest first in each. A row's title opens the drawer, where a
+ * person accepts or dismisses it.
  */
 export function DeterministicTable({ environmentId, projectId }: LearningScope) {
   const proposals = useDeterministicProposals({ environmentId, projectId });
@@ -60,8 +61,8 @@ export function DeterministicTable({ environmentId, projectId }: LearningScope) 
   return (
     <div className="flex flex-col gap-3">
       <span className="text-xs text-muted-foreground">
-        {rows.length === DETERMINISTIC_PROPOSALS_LIMIT
-          ? `The ${DETERMINISTIC_PROPOSALS_LIMIT} newest proposals`
+        {rows.length >= DETERMINISTIC_PROPOSALS_LIMIT
+          ? "Every undecided proposal, then the newest decided ones"
           : rows.length === 1
             ? "1 proposal"
             : `${rows.length} proposals`}
