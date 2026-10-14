@@ -1106,19 +1106,29 @@ const make = Effect.gen(function* () {
       ),
     );
 
-  const updateOverrides = (change: (overrides: typeof Overrides.Type) => typeof Overrides.Type) =>
+  /** `saved` runs under the same lock once the write lands, so memory follows writes in order. */
+  const updateOverrides = (
+    change: (overrides: typeof Overrides.Type) => typeof Overrides.Type,
+    saved: Effect.Effect<void> = Effect.void,
+  ) =>
     overridesLock.withPermits(1)(
-      Effect.flatMap(readOverrides, (overrides) => writeOverrides(change(overrides))),
+      Effect.flatMap(readOverrides, (overrides) => writeOverrides(change(overrides))).pipe(
+        Effect.andThen(saved),
+      ),
     );
 
   const setCapture: KanbanStore["Service"]["setCapture"] = Effect.fn("KanbanStore.setCapture")(
     function* ({ projectId, enabled }) {
-      yield* updateOverrides((overrides) => {
-        const others = (overrides.capture ?? []).filter((id) => id !== projectId);
-        return { ...overrides, capture: enabled ? [...others, projectId] : others };
-      });
-      const state = loaded.get(projectId);
-      if (state !== undefined) state.capture = enabled;
+      yield* updateOverrides(
+        (overrides) => {
+          const others = (overrides.capture ?? []).filter((id) => id !== projectId);
+          return { ...overrides, capture: enabled ? [...others, projectId] : others };
+        },
+        Effect.sync(() => {
+          const state = loaded.get(projectId);
+          if (state !== undefined) state.capture = enabled;
+        }),
+      );
       yield* publish(projectId);
     },
   );

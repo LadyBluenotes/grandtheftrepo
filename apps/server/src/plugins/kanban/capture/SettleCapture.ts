@@ -148,8 +148,8 @@ export class SettleCapture extends Context.Service<
      */
     readonly settled: (threadId: ThreadId) => Effect.Effect<void, KanbanError>;
     /**
-     * Files the drafts of the capture whose thread `run` belongs to, once that run has completed,
-     * then settles that thread. Drafts already recorded in the thread by then are left out, so a
+     * Once the run of a capture's thread ends, files its drafts if it completed, and settles that
+     * thread however it ended. Drafts already recorded in the thread by then are left out, so a
      * retry after a failed write files only what is still missing. Any other thread's run that
      * ends is a `settled` for that thread.
      */
@@ -321,18 +321,9 @@ const make = Effect.gen(function* () {
     },
   );
 
-  const finish: SettleCapture["Service"]["finish"] = Effect.fn("SettleCapture.finish")(
-    function* (run) {
-      if (!ThreadManagementService.isTerminalRunStatus(run.status)) return;
-      const rows = yield* sql<CaptureRow>`UPDATE settle_capture
-          SET status = ${run.status === "completed" ? "done" : "failed"}
-          WHERE child_thread_id = ${run.threadId} AND status = 'running'
-          RETURNING child_thread_id, project_id, thread_id`.pipe(
-        Effect.catchTags({ SqlError: io }),
-      );
-      const capture = rows[0];
-      if (capture === undefined) return yield* settled(run.threadId);
-      if (run.status !== "completed") return;
+  /** Files the drafts the capture thread's completed `run` answered with. */
+  const fileDrafts = (capture: CaptureRow, run: OrchestrationV2Run) =>
+    Effect.gen(function* () {
       const { turnItems } = yield* threads
         .getThreadRecords(run.threadId, ["turnItems"], {
           turnItemRunId: run.id,
@@ -382,9 +373,23 @@ const make = Effect.gen(function* () {
           by,
         );
       }
-      // Off the active list: its drafts are on the board, and the thread stays readable. A settle
-      // that fails rolls the capture back to running, and the reactor retries the event at its
-      // next start, filing nothing twice.
+    });
+
+  const finish: SettleCapture["Service"]["finish"] = Effect.fn("SettleCapture.finish")(
+    function* (run) {
+      if (!ThreadManagementService.isTerminalRunStatus(run.status)) return;
+      const rows = yield* sql<CaptureRow>`UPDATE settle_capture
+          SET status = ${run.status === "completed" ? "done" : "failed"}
+          WHERE child_thread_id = ${run.threadId} AND status = 'running'
+          RETURNING child_thread_id, project_id, thread_id`.pipe(
+        Effect.catchTags({ SqlError: io }),
+      );
+      const capture = rows[0];
+      if (capture === undefined) return yield* settled(run.threadId);
+      if (run.status === "completed") yield* fileDrafts(capture, run);
+      // Off the active list however its turn ended, with any drafts on the board; the thread stays
+      // readable. A settle that fails rolls the capture back to running, and the reactor retries
+      // the event at its next start, filing nothing twice.
       yield* threads
         .settleThread({
           threadId: capture.child_thread_id,

@@ -531,7 +531,7 @@ describe("SettleCapture", () => {
       ).pipe(Effect.provide(layerTest)),
   );
 
-  it.effect("a capture run rolled back closes the capture as failed, filing nothing", () =>
+  it.effect("a capture run rolled back closes the capture as failed and settles its thread", () =>
     Effect.scoped(
       Effect.gen(function* () {
         const { sql, store, launched, settledThreads, react } = yield* start;
@@ -557,8 +557,9 @@ describe("SettleCapture", () => {
           rows.map((row) => row.status),
           ["failed"],
         );
-        assert.deepEqual(settledThreads, []);
+        // Nothing is filed, and the capture thread still leaves the active list.
         assert.deepEqual(yield* store.listDecisions({ projectId }), []);
+        assert.deepEqual(settledThreads, [child]);
       }),
     ).pipe(Effect.provide(layerTest)),
   );
