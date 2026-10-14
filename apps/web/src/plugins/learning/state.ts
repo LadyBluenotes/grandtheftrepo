@@ -9,6 +9,7 @@ import {
   REVIEW_METHODS,
   type EnvironmentId,
   type LearningCorrection,
+  type LearningCorrectionDeclareInput,
   type LearningDeclaredMode,
   type LearningFailureKind,
   type LearningItem,
@@ -75,6 +76,11 @@ const learningSetDisposition = createPluginRpcCommand(connectionAtomRuntime, {
   method: LEARNING_METHODS.itemsSetDisposition,
 });
 
+const learningCorrectionDeclare = createPluginRpcCommand(connectionAtomRuntime, {
+  label: "learning:correction-declare",
+  method: LEARNING_METHODS.correctionDeclare,
+});
+
 /** A project's items in every state; `itemRows` applies the state filter on the client. */
 export function useLearningItems({ environmentId, projectId }: LearningScope) {
   return useEnvironmentQuery(learningItems({ environmentId, input: { projectId } }));
@@ -114,6 +120,16 @@ export function useLearningSetDisposition(environmentId: EnvironmentId) {
   return {
     canWrite,
     set: (input: LearningItemsSetDispositionInput) => run({ environmentId, input }),
+  };
+}
+
+/** Declares a correction's mode on `environmentId`; `canWrite` follows its grant. */
+export function useLearningCorrectionDeclare(environmentId: EnvironmentId) {
+  const run = useAtomCommand(learningCorrectionDeclare, { reportFailure: false });
+  const canWrite = useAtomValue(learningCorrectionDeclare.permissionAtom(environmentId));
+  return {
+    canWrite,
+    declare: (input: LearningCorrectionDeclareInput) => run({ environmentId, input }),
   };
 }
 

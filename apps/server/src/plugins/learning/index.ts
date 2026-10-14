@@ -20,6 +20,7 @@ import * as PromoteSweep from "./PromoteSweep.ts";
 import * as Promoter from "./Promoter.ts";
 import * as Checks from "./readiness.ts";
 import * as RegressionSweep from "./regressions/RegressionSweep.ts";
+import * as UnclassifiedSweep from "./UnclassifiedSweep.ts";
 
 /** Every producer's handlers, run by one reactor from the first event the server ever committed. */
 export const handlers = {
@@ -45,6 +46,8 @@ const start = Effect.gen(function* () {
   yield* supervisor.register(yield* RegressionSweep.sweep);
   // A verdict is permanent, so the outcome sweep waits for the reactor that records corrections.
   yield* supervisor.register(yield* OutcomeSweep.sweep(reactor.drain));
+  // After classify, so a mode declared since the last tick is classified before it is counted.
+  yield* supervisor.register(yield* UnclassifiedSweep.sweep);
 }).pipe(Effect.orDie);
 
 /**
@@ -54,9 +57,10 @@ const start = Effect.gen(function* () {
  * Two sweeps turn them into learning items, one per recurring failure mode per
  * project, and hand each item once to the owner kind the rules or a person
  * picked; a third opens an item for each efficiency measure that worsened from
- * one week to the next, and a fourth flags a handover whose failure mode kept
- * recurring, or went quiet, in the four weeks after it. MCP tools expose
- * corrections and items to agents.
+ * one week to the next, a fourth flags a handover whose failure mode kept
+ * recurring, or went quiet, in the four weeks after it, and a fifth flags
+ * corrections left without a mode for a week. MCP tools expose corrections and
+ * items to agents.
  */
 export const plugin = {
   id: "learning",

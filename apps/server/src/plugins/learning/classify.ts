@@ -1,15 +1,9 @@
-import type {
-  LearningCorrection,
-  LearningDeclaredMode,
-  LearningFailureKind,
-  LearningOwnerKind,
+import {
+  LEARNING_PROVIDER_FAILURE_KINDS,
+  type LearningCorrection,
+  type LearningDeclaredMode,
+  type LearningOwnerKind,
 } from "@t3tools/contracts";
-
-/** Kinds a provider's runtime reports; a failed turn says nothing about how the work was judged. */
-const PROVIDER_FAILURE_KINDS: ReadonlySet<LearningFailureKind> = new Set([
-  "provider_turn_failed",
-  "provider_turn_interrupted",
-]);
 
 /**
  * A correction's failure mode, or null when it stays `unclassified`, and why. Only the failure
@@ -19,7 +13,7 @@ export const classify = ({
   failureKind,
   declaredMode,
 }: Pick<LearningCorrection, "failureKind" | "declaredMode">) =>
-  PROVIDER_FAILURE_KINDS.has(failureKind)
+  LEARNING_PROVIDER_FAILURE_KINDS.has(failureKind)
     ? { failureMode: null, reason: "provider failure" }
     : declaredMode === null
       ? { failureMode: null, reason: "no declared mode" }

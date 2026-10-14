@@ -25,4 +25,5 @@ export const table = PluginRpc.defineHandlers(LEARNING_METHODS)({
   items: (input) => Effect.flatMap(items, (s) => s.list(input)),
   item: ({ id }) => Effect.flatMap(items, (s) => s.get(id)),
   itemsSetDisposition: (input) => Effect.flatMap(items, (s) => s.setDisposition(input)),
+  correctionDeclare: (input) => Effect.flatMap(corrections, (s) => s.declare(input)),
 });

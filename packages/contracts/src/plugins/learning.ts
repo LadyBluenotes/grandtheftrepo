@@ -8,6 +8,7 @@ const LEARNING_WS_METHODS = {
   items: "learning.items",
   item: "learning.item",
   itemsSetDisposition: "learning.itemsSetDisposition",
+  correctionDeclare: "learning.correctionDeclare",
 } as const;
 
 /** Which kind of event produced a correction. */
@@ -21,6 +22,15 @@ export const LearningFailureKind = Schema.Literals([
   "manual",
 ]);
 export type LearningFailureKind = typeof LearningFailureKind.Type;
+
+/**
+ * Kinds a provider's runtime reports. A failed turn says nothing about how the work was judged, so
+ * it stays unclassified and no mode can be declared for it.
+ */
+export const LEARNING_PROVIDER_FAILURE_KINDS: ReadonlySet<LearningFailureKind> = new Set([
+  "provider_turn_failed",
+  "provider_turn_interrupted",
+]);
 
 /** The review failure modes a reviewer or person can declare, the six the review verdict uses. */
 export const LearningDeclaredMode = Schema.Literals([
@@ -146,6 +156,16 @@ export type LearningCorrectionsInput = typeof LearningCorrectionsInput.Type;
 export const LearningCorrectionInput = Schema.Struct({ id: Schema.Int });
 export type LearningCorrectionInput = typeof LearningCorrectionInput.Type;
 
+/**
+ * Declares the mode of a correction that has none, so the next classify sweep makes it evidence on
+ * that mode's item. A provider failure, or a correction that already declares one, is refused.
+ */
+export const LearningCorrectionDeclareInput = Schema.Struct({
+  id: Schema.Int,
+  declaredMode: LearningDeclaredMode,
+});
+export type LearningCorrectionDeclareInput = typeof LearningCorrectionDeclareInput.Type;
+
 /** A project's items, most recently updated first, narrowed to one state when given. */
 export const LearningItemsInput = Schema.Struct({
   projectId: ProjectId,
@@ -213,6 +233,13 @@ export const LEARNING_METHODS = definePluginMethods({
     gateway: "operate",
     input: LearningItemsSetDispositionInput,
     output: LearningItem,
+    error: LearningError,
+  },
+  correctionDeclare: {
+    method: LEARNING_WS_METHODS.correctionDeclare,
+    gateway: "operate",
+    input: LearningCorrectionDeclareInput,
+    output: LearningCorrection,
     error: LearningError,
   },
 });

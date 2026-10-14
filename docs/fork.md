@@ -33,11 +33,13 @@ the `supervisor.json` interval, in registry order, and records each tick in `plu
 `supervisor.status` reads the latest.
 
 A sweep that finds something waiting on a person raises a flag with `Attention.raise` and clears it
-with `Attention.clear` once the cause is gone. Flags live in the host's `attention` table in that
-same file, so any plugin can raise one without depending on the plugin that shows them. The strip
-above the kanban board and a project's weekly report list a flag whose key is not a thread when the
-key ends in `:<projectId>`, has the project id between colons, or starts with `policy:*:`
-(`plugins/attentionKeys.ts`); a flag keyed by none of these is on no board and in no report.
+with `Attention.clear` once the cause is gone; `Attention.reconcile` does both for a plugin's flags
+of one kind and skips a flag whose text is unchanged, so a tick that finds nothing new writes
+nothing. Flags live in the host's `attention` table in that same file, so any plugin can raise one
+without depending on the plugin that shows them. The strip above the kanban board and a project's
+weekly report list a flag whose key is not a thread when the key ends in `:<projectId>`, has the
+project id between colons, or starts with `policy:*:` (`plugins/attentionKeys.ts`); a flag keyed by
+none of these is on no board and in no report.
 
 A plugin says what it needs to do its work through `ServerPlugin.readiness`: checks, each `ready`,
 `attention` or `off`, with one sentence and where a person fixes it. `PluginHost.readiness` runs
@@ -110,9 +112,13 @@ them half-evaluated. The host hands `toolkitRegistration` to `ServerPlugin.mcp` 
   Its own database, `plugins/kanban.sqlite`, holds the emergency stop (`StopGate`, which anything
   that starts a thread must ask first; the spec drafting thread is the one launch that asks so far)
   and spec attempts. The `writers` sweep raises an attention flag when two agents write one
-  project. `kanban.attention.list` feeds the strip above the board from the project's open host
-  flags, its threads' pending questions and permission requests, and, while routing runs, its
-  routing mismatches. `kanban.ticket.specify` (MCP `kanban_ticket_specify`) checks a Triage or
+  project. The `findings` sweep keeps one `unowned_finding` flag per project, keyed
+  `findings:<projectId>`, counting the findings with no review on its unarchived Triage cards
+  captured three or more days ago: a finding's reviewer owns it, so any review, `open` included,
+  takes it off the count. It reads every project through `KanbanStore.issues`, which gives a
+  project with no board folder none and creates no folder. `kanban.attention.list` feeds the strip
+  above the board from the project's open host flags, its threads' pending questions and permission
+  requests, and, while routing runs, its routing mismatches. `kanban.ticket.specify` (MCP `kanban_ticket_specify`) checks a Triage or
   Inbox issue's description against the Goal, Approach and Acceptance format, or starts a plan-mode
   drafting thread on routing's cheap tier whose final message the plugin's reactor checks when the
   run ends; a valid spec becomes the issue's criteria and admits it as `spec`, and the description
@@ -223,7 +229,12 @@ them half-evaluated. The host hands `toolkitRegistration` to `ServerPlugin.mcp` 
   reactor's `drain` and judges nothing, counting what it held back, until the reactor holds every
   committed event and `host_reactor_failure` is empty. A person setting the item's disposition
   after the delivery answers the flag, so none is raised, and the next tick clears one that is
-  open; the sweep never closes or reroutes an item, and never judges `local_only`. Server:
+  open; the sweep never closes or reroutes an item, and never judges `local_only`. A fifth sweep,
+  `unclassified`, runs after classify and keeps one `unowned_finding` flag per project, keyed
+  `corrections:<projectId>`, counting the corrections classify left `unclassified`, provider
+  failures aside, that are seven or more days old. `learning.correctionDeclare` (MCP
+  `learning_correction_declare`, and the Corrections tab) declares a mode for one that has none and
+  clears its classified mark, so the next tick classifies it before the count. Server:
   `apps/server/src/plugins/learning/`. Contracts:
   `packages/contracts/src/plugins/learning.ts`. Web: `apps/web/src/plugins/learning/`, the Learning screen at `/plugins/learning` with the items, corrections and reviews of a project.
 - **policy**: reviewed working rules per project (`*` is the whole environment), versioned in the

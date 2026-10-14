@@ -54,6 +54,12 @@ The **Corrections** tab lists the project's corrections over the last 7, 30 or 9
 kind of event that recorded each one and the failure mode a reviewer declared, if any. Narrow the
 list by kind or mode, and open a correction's thread from its row.
 
+Only a correction with a failure mode counts toward an item. For one without, other than a failed
+or interrupted turn, which says nothing about the work, pick its mode under **Declare mode** in its
+row; the next sweep adds it to that mode's item. A mode cannot be changed once declared. Corrections
+left without a mode for seven days are flagged on the project's board under
+[Waiting on you](./kanban.md#waiting-on-you), one row with the count, until each has a mode.
+
 ## Reviews
 
 With the review plugin on, the **Reviews** tab shows one thread's verdicts and review requests. See
