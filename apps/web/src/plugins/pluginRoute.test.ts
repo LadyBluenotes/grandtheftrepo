@@ -1,9 +1,9 @@
-import type { PluginStatus } from "@t3tools/contracts";
+import { EnvironmentId, type PluginStatus } from "@t3tools/contracts";
 import { PlugIcon } from "lucide-react";
 import { lazy } from "react";
 import { describe, expect, it } from "vite-plus/test";
 
-import { pluginBadge, pluginScreenView, sidebarPlugins } from "./pluginRoute";
+import { pluginBadge, pluginScreenLink, pluginScreenView, sidebarPlugins } from "./pluginRoute";
 import type { PluginEntry } from "./registry";
 
 const Screen = lazy(async () => ({ default: () => null }));
@@ -77,5 +77,17 @@ describe("sidebarPlugins", () => {
     expect(sidebarPlugins([status({ active: false })], registry)).toEqual([]);
     // Switched off but still running until a restart: the entry stays.
     expect(sidebarPlugins([status({ enabled: false })], registry)).toHaveLength(1);
+  });
+});
+
+describe("pluginScreenLink", () => {
+  it("opens a plugin's screen on the environment the Plugins page shows", () => {
+    expect(pluginScreenLink("learning", EnvironmentId.make("remote"))).toEqual({
+      to: "/plugins/$pluginId",
+      params: { pluginId: "learning" },
+      search: { machine: "remote" },
+    });
+    // No environment yet: the screen shows the primary one, as the page does.
+    expect(pluginScreenLink("learning", null).search).toEqual({});
   });
 });

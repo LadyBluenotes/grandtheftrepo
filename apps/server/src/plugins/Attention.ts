@@ -1,3 +1,4 @@
+import { AttentionResumeAction } from "@t3tools/contracts";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -7,12 +8,8 @@ import type * as SqlError from "effect/sql/SqlError";
 import * as SqlSchema from "effect/sql/SqlSchema";
 import * as HostDatabase from "./HostDatabase.ts";
 
-/** What the person should do about a flag: a label and the screen it leads to (issue #30). */
-const ResumeAction = Schema.Struct({
-  label: Schema.String,
-  target: Schema.Literals(["thread", "board", "settings"]),
-});
-const encodeResumeAction = Schema.encodeSync(Schema.fromJsonString(ResumeAction));
+/** A flag's resume action is stored as JSON; one stored before `plugin` targets decodes as it was. */
+const encodeResumeAction = Schema.encodeSync(Schema.fromJsonString(AttentionResumeAction));
 
 const AttentionKind = Schema.Literals([
   "budget_breach",
@@ -35,7 +32,7 @@ const OpenFlag = Schema.Struct({
   threadId: Schema.String,
   kind: AttentionKind,
   text: Schema.String,
-  resumeAction: Schema.fromJsonString(ResumeAction),
+  resumeAction: Schema.fromJsonString(AttentionResumeAction),
   raisedAt: Schema.String,
 });
 export type OpenFlag = typeof OpenFlag.Type;
@@ -58,7 +55,7 @@ export class Attention extends Context.Service<
     readonly raise: (
       flag: FlagKey & {
         readonly text: string;
-        readonly resumeAction: typeof ResumeAction.Type;
+        readonly resumeAction: AttentionResumeAction;
       },
     ) => Effect.Effect<void, SqlError.SqlError>;
     /** Clears the open flag for the key; succeeds when none is open. */

@@ -11,9 +11,10 @@ directories and never edit an upstream file. Upstream is merged nightly by
 - `packages/contracts/src/plugins/` holds each plugin's schemas and method definitions.
 - `apps/web/src/plugins/` holds each plugin's screens.
   A plugin with a screen is registered in `apps/web/src/plugins/registry.ts` and reached at
-  `/plugins/<id>`; every plugin is listed, with an on/off switch, at `/plugins`. That page shows
-  the primary environment, or the one its `machine` search names; settings panels read
-  `usePluginEnvironmentId` so they follow it.
+  `/plugins/<id>`; every plugin is listed, with an on/off switch, at `/plugins`. Both show the
+  primary environment, or the one their `machine` search names; screens and settings panels read
+  `usePluginEnvironmentId` so they follow it. A screen keeps its tab and open record in the URL
+  (`tab` and `recordId`, through `usePluginScreenSearch`), so a link can open the thing it is about.
 
 Enabled state is `plugins.json` under the server state directory. A missing entry means enabled.
 Changes apply on the next server start.
@@ -37,7 +38,10 @@ with `Attention.clear` once the cause is gone. Flags live in the host's `attenti
 same file, so any plugin can raise one without depending on the plugin that shows them. The strip
 above the kanban board and a project's weekly report list a flag whose key is not a thread when the
 key ends in `:<projectId>`, has the project id between colons, or starts with `policy:*:`
-(`plugins/attentionKeys.ts`); a flag keyed by none of these is on no board and in no report.
+(`plugins/attentionKeys.ts`); a flag keyed by none of these is on no board and in no report. A
+flag's resume action leads to its thread, the board, the Plugins page, or a plugin's screen with an
+optional tab and record (`AttentionResumeAction`); mobile has no plugin screens, so there a row
+with a plugin target stays on the board.
 
 A plugin says what it needs to do its work through `ServerPlugin.readiness`: checks, each `ready`,
 `attention` or `off`, with one sentence and where a person fixes it. `PluginHost.readiness` runs
@@ -76,6 +80,7 @@ resolved by keeping the line.
 | `apps/server/src/orchestration-v2/toolOutputImageBytes.ts`   | `export function carriesImage`, the one exported function: does a record hold image bytes or the size stripping left, so the estimate matches what ingestion stores |
 | `third-party-licenses.config.json`                           | the `Caveman reply rules` and `Ponytail ladder` entries at the end of `customNotices`, so the adapted policy text is credited in the app's license list             |
 | `scripts/build-desktop-artifact.ts`                          | in `createBuildConfig`, unsigned Mac builds get `identity: "-"`, `hardenedRuntime: false` and no GitHub update feed, plus their tests                               |
+| `packages/provider-core/.../orchestrationInstructions.ts`    | `export let` on `T3_CODE_ORCHESTRATION_INSTRUCTIONS` and `setPluginOrchestrationInstructions` at the end, which the host calls with the capture rule                |
 
 ## Plugin services and the type system
 
@@ -123,7 +128,11 @@ them half-evaluated. The host hands `toolkitRegistration` to `ServerPlugin.mcp` 
   active-plugin atoms, the attention atom and the strip's row model in
   `packages/client-runtime/src/plugins/kanban.ts`, and the contract's
   `KANBAN_ATTENTION_KIND_LABELS` names each kind, so a new kind needs a label there and nothing per
-  client. Server: `apps/server/src/plugins/kanban/`. Contracts:
+  client. While kanban runs, the host appends the capture rule (`plugins/CaptureRule.ts`), when to
+  record a decision, a correction or a knowledge page, to the orchestration instructions, which
+  every adapter sends only to a turn with the `t3-code` MCP server. Each line is dropped while its
+  plugin is off. Pi bakes that text into its extension at import, before the host starts, and Muse
+  gets none, so neither sees the rule. Server: `apps/server/src/plugins/kanban/`. Contracts:
   `packages/contracts/src/plugins/kanban.ts`. Web: `apps/web/src/plugins/kanban/`. Mobile:
   `apps/mobile/src/features/kanban/`. User guide: [Kanban board](./user/kanban.md).
 - **telemetry**: the eighteen efficiency measures of #1, #35 and #36 over a project's window, from the
@@ -161,11 +170,13 @@ them half-evaluated. The host hands `toolkitRegistration` to `ServerPlugin.mcp` 
   and the report five; nothing writes to the repo. A shape needs more than the earlier columns, so
   migration 5 adds each call's provider turn, which groups a subagent's calls with no run, its
   search pattern, a dynamic tool's input keys, and the input's size and sha256, never the input,
-  and replays the log; a call a compaction removed before then has no shape, and neither does a
-  command line as long as the 512 characters kept of it. Absolute paths that resolve under the
-  project's directory, which `MeasureService` reads from `ProjectService` when it is built, are
-  made relative to it. Neither measure reads a tier; the share is a rate the regression sweep
-  compares, the count a volume it does not.
+  and replays the log; a call a compaction removed before then has no shape. A command's shape
+  puts quoted strings as `<str>`, and only 512 characters of a command line are kept, so an
+  interpreter's inline script (`node -e`, `python3 -c`, a heredoc) and any command line that long
+  are shaped by that sha256 instead, `script:<program>:<digest prefix>`, and a candidate's example names the stored calls, never their text. Absolute paths that resolve under the project's
+  directory, which `MeasureService` reads from `ProjectService` when it is built, are made relative
+  to it. Neither measure reads a tier; the share is a rate the regression sweep compares, the count
+  a volume it does not.
   `telemetry.report` and the `telemetry_report` MCP tool fold a project's range
   into ten sections, from the thread records, the learning and review plugins and the host's
   attention flags, with the same report as one self-contained HTML page; at start the plugin gives
@@ -219,7 +230,7 @@ them half-evaluated. The host hands `toolkitRegistration` to `ServerPlugin.mcp` 
   after the delivery answers the flag, so none is raised, and the next tick clears one that is
   open; the sweep never closes or reroutes an item, and never judges `local_only`. Server:
   `apps/server/src/plugins/learning/`. Contracts:
-  `packages/contracts/src/plugins/learning.ts`. Web: `apps/web/src/plugins/learning/`, the Learning screen at `/plugins/learning` with the items, corrections and reviews of a project.
+  `packages/contracts/src/plugins/learning.ts`. Web: `apps/web/src/plugins/learning/`, the Learning screen at `/plugins/learning` with the items, corrections and reviews of a project; `recordId` opens an item.
 - **policy**: reviewed working rules per project (`*` is the whole environment), versioned in the
   plugin's database and rendered as one marked block each, with `<state dir>/RULES.md` ahead of
   the body, into the instruction file each agent reads from the user's home. Verify re-reads the

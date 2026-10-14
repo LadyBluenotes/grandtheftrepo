@@ -9,6 +9,7 @@ import {
   type OrchestrationV2ThreadShell,
   type Project,
 } from "@t3tools/contracts";
+import { t3OrchestrationSystemPrompt } from "@t3tools/provider-core/server/orchestrationInstructions";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
@@ -125,6 +126,11 @@ it.effect(
           const host = yield* PluginHost.PluginHost;
           assert.deepEqual([...host.activeIds], ["kanban"]);
           assert.isTrue(yield* kanbanFileExists);
+          // A turn with the MCP server is told to record decisions, and not to use tools of
+          // plugins that are off.
+          const instructions = t3OrchestrationSystemPrompt(true);
+          assert.include(instructions, "`kanban_write` action `decision.create`");
+          assert.notInclude(instructions, "learning_correction_add");
           const sql = host.databases.get("kanban")!;
           const tables = yield* sql<{ readonly name: string }>`
             SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name`;
@@ -246,6 +252,7 @@ it.effect("disabled: no file, no sweep, and its methods say the plugin is not ac
         const host = yield* PluginHost.PluginHost;
         assert.deepEqual([...host.activeIds], []);
         assert.isFalse(yield* kanbanFileExists);
+        assert.notInclude(t3OrchestrationSystemPrompt(true), "kanban_write");
         assert.deepEqual((yield* (yield* PluginSupervisor.PluginSupervisor).status).sweeps, []);
 
         for (const call of [
