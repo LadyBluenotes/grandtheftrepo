@@ -1,7 +1,13 @@
 import { EnvironmentId, ProjectId, ThreadId } from "@t3tools/contracts";
+import { defaultParseSearch, defaultStringifySearch } from "@tanstack/react-router";
 import { describe, expect, it } from "vite-plus/test";
 
-import { attentionResumeTarget, buildIssuePrompt, findDecisionSearch } from "./state";
+import {
+  attentionResumeTarget,
+  buildIssuePrompt,
+  findDecisionSearch,
+  validateBoardSearch,
+} from "./state";
 
 const issue = {
   id: "fix-login-redirect",
@@ -127,7 +133,7 @@ describe("attentionResumeTarget", () => {
     expect(attentionResumeTarget(row("thread"), board)).toBeNull();
   });
 
-  it("opens a plugin's screen on the board's environment, with the tab and record named", () => {
+  it("opens a plugin's screen on the board's environment and project, with the tab and record named", () => {
     const plugin = (patch: { readonly tab?: string; readonly recordId?: string }) =>
       ({
         kind: "budget_breach",
@@ -137,13 +143,13 @@ describe("attentionResumeTarget", () => {
     expect(attentionResumeTarget(plugin({ tab: "items", recordId: "12" }), board)).toEqual({
       to: "/plugins/$pluginId",
       params: { pluginId: "learning" },
-      search: { machine: "remote", tab: "items", recordId: "12" },
+      search: { machine: "remote", projectId: "project-1", tab: "items", recordId: "12" },
     });
-    // Without a tab or record the screen opens as it would from the sidebar.
+    // Without a tab or record the screen opens on its default tab, on the board's project.
     expect(attentionResumeTarget(plugin({}), board)).toStrictEqual({
       to: "/plugins/$pluginId",
       params: { pluginId: "learning" },
-      search: { machine: "remote" },
+      search: { machine: "remote", projectId: "project-1" },
     });
   });
 });
@@ -168,5 +174,25 @@ describe("findDecisionSearch", () => {
       projectId: board.projectId,
     });
     expect(findDecisionSearch({ diff: "1" }, undefined)).toEqual({ view: "decisions" });
+  });
+});
+
+describe("validateBoardSearch", () => {
+  /** What the board reads after a link wrote `search` into the URL and the router read it back. */
+  const throughUrl = (search: Record<string, unknown>) =>
+    validateBoardSearch(defaultParseSearch(defaultStringifySearch(search)));
+
+  it("brings back the decision a link opens, by its category and id", () => {
+    expect(
+      throughUrl({ projectId: "p-1", view: "decisions", decision: "storage/use-sqlite" }),
+    ).toStrictEqual({ projectId: "p-1", view: "decisions", decision: "storage/use-sqlite" });
+  });
+
+  it("drops a decision that is not a category and id, and keys the board does not read", () => {
+    for (const decision of ["use-sqlite", "Storage/Use SQLite", "a/b/c", "", 12]) {
+      expect(validateBoardSearch({ view: "decisions", decision, other: "x" })).toStrictEqual({
+        view: "decisions",
+      });
+    }
   });
 });

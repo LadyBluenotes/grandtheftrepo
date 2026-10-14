@@ -31,14 +31,17 @@ import {
 import { decisionRef } from "./decisionList";
 import { kanbanBoard, kanbanDecisions } from "./state";
 
-/** Opens an issue's panel on the board, keeping the rest of the board's view as it is. */
+/**
+ * Opens an issue's panel on the board, keeping the rest of the board's view as it is but the open
+ * decision, whose drawer gives way to the panel.
+ */
 export function useOpenBoardIssue() {
   const navigate = useNavigate();
   return useCallback(
     (id: string) =>
       void navigate({
         to: "/board",
-        search: (previous: BoardSearch) => ({ ...previous, issue: id }),
+        search: ({ decision: _decision, ...previous }: BoardSearch) => ({ ...previous, issue: id }),
       }),
     [navigate],
   );

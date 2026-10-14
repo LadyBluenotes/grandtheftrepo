@@ -14,7 +14,8 @@ directories and never edit an upstream file. Upstream is merged nightly by
   `/plugins/<id>`; every plugin is listed, with an on/off switch, at `/plugins`. Both show the
   primary environment, or the one their `machine` search names; screens and settings panels read
   `usePluginEnvironmentId` so they follow it. A screen keeps its tab and open record in the URL
-  (`tab` and `recordId`, through `usePluginScreenSearch`), so a link can open the thing it is about.
+  (`tab` and `recordId`, through `usePluginScreenSearch`), and a screen with a project picker
+  starts on the URL's `projectId`, so a link can open the thing it is about.
 
 Enabled state is `plugins.json` under the server state directory. A missing entry means enabled.
 Changes apply on the next server start.
@@ -39,9 +40,9 @@ same file, so any plugin can raise one without depending on the plugin that show
 above the kanban board and a project's weekly report list a flag whose key is not a thread when the
 key ends in `:<projectId>`, has the project id between colons, or starts with `policy:*:`
 (`plugins/attentionKeys.ts`); a flag keyed by none of these is on no board and in no report. A
-flag's resume action leads to its thread, the board, the Plugins page, or a plugin's screen with an
-optional tab and record (`AttentionResumeAction`); mobile has no plugin screens, so there a row
-with a plugin target stays on the board.
+flag's resume action leads to its thread, the board, the Plugins page, or a plugin's screen on the
+board's project with an optional tab and record (`AttentionResumeAction`); mobile has no plugin
+screens, so there a row with a plugin target stays on the board.
 
 A plugin says what it needs to do its work through `ServerPlugin.readiness`: checks, each `ready`,
 `attention` or `off`, with one sentence and where a person fixes it. `PluginHost.readiness` runs
@@ -73,7 +74,7 @@ resolved by keeping the line.
 | `packages/client-runtime/package.json`                       | the `./plugins/rpc` and `./plugins/kanban` entries at the end of `exports`                                                                                          |
 | `apps/mobile/src/Stack.tsx`                                  | `SettingsKanbanBoard` at the end of `SettingsContentStack`'s screens, plus its import                                                                               |
 | `apps/mobile/.../SettingsProjectOverviewRouteScreen.tsx`     | in `features/settings/`: `<KanbanBoardEntries />` between the Project and Checkouts sections, plus its import                                                       |
-| `apps/web/src/routes/_chat.board.tsx`                        | the kanban board's own route; a new plugin screen uses `/plugins/<id>` through the registry instead                                                                 |
+| `apps/web/src/routes/_chat.board.tsx`                        | the kanban board's own route, its search read by `validateBoardSearch` in `plugins/kanban/`; a new plugin screen uses `/plugins/<id>` instead                       |
 | `apps/web/src/components/sidebar/mainAppLocation.ts`         | `/board` and the `/plugins` paths in `isSidebarUtilityPage`                                                                                                         |
 | `apps/web/src/components/sidebar/SidebarChrome.tsx`          | the board's `SidebarUtilityItem`, gated on `kanbanSupportedAtom`, and `<PluginSidebarEntries />` after the Usage entry, plus imports                                |
 | `apps/web/src/components/CommandPalette.tsx`                 | the board's `actionItems.push` block (Open board, Find decision), gated the same way, plus imports                                                                  |
@@ -86,6 +87,9 @@ resolved by keeping the line.
 | `apps/web/src/components/chat/ChatComposer.tsx`              | `composerMenuItems = useSavedPromptMenuItems(...)` after the menu items' `useMemo`, renamed `builtInComposerMenuItems`, plus its import                             |
 | `apps/web/src/components/chat/ChatComposer.tsx`              | the `saved-prompt` branch in `onSelectComposerItem`: `pickSavedPrompt(...)`, whose callback inserts the body as the skill branch does                               |
 | `apps/web/src/components/chat/ChatComposer.tsx`              | in `submitComposer`, `const sentPrompt = promptRef.current;` and, once `didDispatch`, `countSavedPromptUses(...)`                                                   |
+| `apps/server/src/orchestration-v2/WireProjection.ts`         | `withCapturedRecord(item, ...)` around a dynamic tool's compact output, plus its import                                                                             |
+| `apps/web/.../chat/MessagesTimeline.logic.ts`                | the message row's `capturedRecords`: its field, the `capturedRecordsByRun` call, its value and its equality line, plus imports                                      |
+| `apps/web/.../chat/MessagesTimeline.tsx`                     | `<RecordedThisTurnCard />` after `AssistantChangedFilesSection`, plus its import                                                                                    |
 
 ## Plugin services and the type system
 
@@ -144,9 +148,16 @@ them half-evaluated. The host hands `toolkitRegistration` to `ServerPlugin.mcp` 
   correction or a knowledge page, to the orchestration instructions, which
   every adapter sends only to a turn with the `t3-code` MCP server. Each line is dropped while its
   plugin is off. Pi bakes that text into its extension at import, before the host starts, and Muse
-  gets none, so neither sees the rule. Server: `apps/server/src/plugins/kanban/`. Contracts:
-  `packages/contracts/src/plugins/kanban.ts`. Web: `apps/web/src/plugins/kanban/`. Mobile:
-  `apps/mobile/src/features/kanban/`. User guide: [Kanban board](./user/kanban.md).
+  gets none, so neither sees the rule. The wire projection reads the record each completed capture
+  call made, a decision from `kanban_write`, `finding_capture`, `learning_correction_add`,
+  `knowledge_propose` or `prompt_save`, from the call's own input and output and adds it to the
+  call's compact output as `capturedRecord` (`plugins/capturedRecords.ts`), because that output
+  otherwise keeps only ids the core knows. The web's **Recorded this turn** card under a run's last
+  reply lists them from the tool items it already has (`apps/web/src/plugins/recorded/`); a record
+  shows the state it was made in. Mobile does not show it, having no screen to open most records.
+  Server: `apps/server/src/plugins/kanban/`. Contracts: `packages/contracts/src/plugins/kanban.ts`.
+  Web: `apps/web/src/plugins/kanban/`. Mobile: `apps/mobile/src/features/kanban/`. User guide:
+  [Kanban board](./user/kanban.md).
 - **telemetry**: the eighteen efficiency measures of #1, #35 and #36 over a project's window, from the
   `telemetry.measures` gateway method and the `telemetry_measures` MCP tool. Its reactor keeps
   runs, tool calls, threads and provider turn token usage from the event log in the plugin's own
@@ -273,7 +284,7 @@ them half-evaluated. The host hands `toolkitRegistration` to `ServerPlugin.mcp` 
   open, as it does once the record is rolled back; the sweep never closes or reroutes an item, and
   never judges `local_only`. Server:
   `apps/server/src/plugins/learning/`. Contracts:
-  `packages/contracts/src/plugins/learning.ts` and `prompts.ts`. Web: `apps/web/src/plugins/learning/`, the Learning screen at `/plugins/learning` with the items, corrections, prompts and reviews of a project; `recordId` opens an item. No mobile screen, and the mobile composer does not list prompts. User guide: [Learning](./user/learning.md).
+  `packages/contracts/src/plugins/learning.ts` and `prompts.ts`. Web: `apps/web/src/plugins/learning/`, the Learning screen at `/plugins/learning` with the items, corrections, prompts and reviews of a project; `recordId` opens an item, or a prompt on the prompts tab. No mobile screen, and the mobile composer does not list prompts. User guide: [Learning](./user/learning.md).
 - **policy**: reviewed working rules per project (`*` is the whole environment), versioned in the
   plugin's database and rendered as one marked block each, with `<state dir>/RULES.md` ahead of
   the body, into the instruction file each agent reads from the user's home. Verify re-reads the

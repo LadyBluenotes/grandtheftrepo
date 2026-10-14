@@ -1,12 +1,15 @@
 import { useNavigate, useSearch } from "@tanstack/react-router";
+import { ProjectId } from "@t3tools/contracts";
 
 /**
  * What a `/plugins/<id>` URL names besides the plugin: the environment (`machine`, as on the
- * Plugins page), the screen's tab, and the record open on it. A link such as an attention flag's
- * sets them; a screen reads and changes the tab and record with `usePluginScreenSearch`.
+ * Plugins page), the project a screen with a project picker starts on, the screen's tab, and the
+ * record open on it. A link such as an attention flag's sets them; a screen reads and changes the
+ * tab and record with `usePluginScreenSearch`.
  */
 interface PluginScreenSearch {
   readonly machine?: string;
+  readonly projectId?: ProjectId;
   readonly tab?: string;
   readonly recordId?: string;
 }
@@ -22,14 +25,16 @@ const searchText = (value: unknown) => {
   return text !== undefined && text.trim().length > 0 ? text : undefined;
 };
 
-/** Keeps the three keys a screen reads, as strings, and drops the rest. */
+/** Keeps the four keys a screen reads, as strings, and drops the rest. */
 export function validatePluginScreenSearch(raw: Record<string, unknown>): PluginScreenSearch {
-  // An environment id is trimmed; tabs and record ids keep their exact text.
+  // Environment and project ids are trimmed; tabs and record ids keep their exact text.
   const machine = searchText(raw.machine)?.trim();
+  const projectId = searchText(raw.projectId)?.trim();
   const tab = searchText(raw.tab);
   const recordId = searchText(raw.recordId);
   return {
     ...(machine === undefined ? {} : { machine }),
+    ...(projectId === undefined ? {} : { projectId: ProjectId.make(projectId) }),
     ...(tab === undefined ? {} : { tab }),
     ...(recordId === undefined ? {} : { recordId }),
   };
@@ -48,6 +53,7 @@ export function usePluginScreenSearch() {
       search: (previous) => validatePluginScreenSearch({ ...previous, ...patch }),
     });
   return {
+    projectId: search.projectId,
     tab: search.tab,
     recordId: search.recordId,
     setTab: (tab: string) => update({ tab, recordId: undefined }),
