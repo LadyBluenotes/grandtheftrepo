@@ -153,7 +153,9 @@ const holding = (
     ? issue.findings.map((f) => (f.id === finding.id ? finding : f))
     : [...issue.findings, finding],
   updatedAt: at,
-  log: [...issue.log, { at, by, kind: "finding", text }],
+  // A `note`, which every client can read: a log kind an older client does not know fails the whole
+  // issue there.
+  log: [...issue.log, { at, by, kind: "note", text: `finding ${text}` }],
 });
 
 /**
@@ -338,7 +340,7 @@ const make = Effect.gen(function* () {
           ...issue,
           findings: issue.findings.filter((f) => f.id !== id),
           updatedAt: at,
-          log: [...issue.log, { at, by, kind: "finding", text: `${id} moved to ${to.id}` }],
+          log: [...issue.log, { at, by, kind: "note", text: `finding ${id} moved to ${to.id}` }],
         }));
         // Added before it is removed: a failed later write leaves it on two issues, not on none.
         return {

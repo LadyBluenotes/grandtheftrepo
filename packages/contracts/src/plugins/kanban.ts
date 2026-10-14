@@ -224,7 +224,6 @@ export const KanbanLogKind = Schema.Literals([
   "unblocked",
   "reopened",
   "criterion",
-  "finding",
 ]);
 export type KanbanLogKind = typeof KanbanLogKind.Type;
 
@@ -239,7 +238,8 @@ export type KanbanLogEntry = typeof KanbanLogEntry.Type;
 export const KanbanIssue = Schema.Struct({
   ...KanbanIssueFields,
   criteria: Schema.Array(KanbanCriterion),
-  findings: Schema.Array(KanbanFinding),
+  // A server from before findings sends none; an older client ignores the field.
+  findings: Schema.Array(KanbanFinding).pipe(Schema.withDecodingDefault(Effect.succeed([]))),
   description: Schema.String,
   log: Schema.Array(KanbanLogEntry),
 });
