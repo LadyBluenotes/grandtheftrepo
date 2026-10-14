@@ -14,6 +14,12 @@ import {
   LearningPromotionRollBackInput,
   OrchestratorMcpFailure,
   ProjectId,
+  Prompt,
+  PromptBody,
+  PromptKind,
+  PromptQuery,
+  PromptSearchResult,
+  PromptTitle,
   ThreadId,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
@@ -27,6 +33,7 @@ import { readCaller, resolveProjectId } from "../../mcp/threadAccess.ts";
 import * as ThreadManagementService from "../../orchestration-v2/ThreadManagementService.ts";
 import * as CorrectionStore from "./CorrectionStore.ts";
 import * as ItemStore from "./items/ItemStore.ts";
+import * as PromptStore from "./prompts/PromptStore.ts";
 
 const shared = {
   failure: OrchestratorMcpFailure,
@@ -113,6 +120,35 @@ const ItemTool = Tool.make("learning_item", {
   .annotate(Tool.Readonly, true)
   .annotate(Tool.Destructive, false);
 
+const PromptSearchTool = Tool.make("prompt_search", {
+  ...shared,
+  description: `Search the project's prompt library: saved prompts and workflows people reuse. Every word of query must appear in a prompt's title or body, in any case; only its first 8 distinct words count, and an empty query lists them all. Answers with up to ten matches, each with the first 200 characters of its body (prompt_get reads all of it), active first, then proposed (waiting for a person), then archived (a person put it away: do not propose it again), the most used first within each, and a searchId. Search before prompt_save, which needs a searchId from the last ${PromptStore.SEARCH_WINDOW_MINUTES} minutes, and save only what no match already covers. Omit projectId for the calling thread's project.`,
+  parameters: Schema.Struct({
+    projectId: Schema.optional(ProjectId),
+    query: PromptQuery,
+  }),
+  success: PromptSearchResult,
+})
+  .annotate(Tool.Readonly, true)
+  .annotate(Tool.Destructive, false);
+
+const PromptSaveTool = Tool.make("prompt_save", {
+  ...shared,
+  description: `Save a prompt or workflow worth reusing to the project's prompt library, in the project prompt_search looked in. Pass the searchId prompt_search answered with in the last ${PromptStore.SEARCH_WINDOW_MINUTES} minutes; a save without one is refused, so duplicates are checked first. kind is prompt (one message to send) or workflow (steps to follow in order); title is one line; body is markdown of at most 10,000 characters. The prompt is proposed until a person accepts it. Answers with the saved prompt, including its id.`,
+  parameters: Schema.Struct({
+    searchId: Schema.String,
+    kind: PromptKind,
+    title: PromptTitle,
+    body: PromptBody,
+  }),
+  success: Prompt,
+})
+  .annotate(Tool.Title, "Save a prompt")
+  .annotate(Tool.Readonly, false)
+  .annotate(Tool.Destructive, false)
+  .annotate(Tool.Idempotent, false)
+  .annotate(Tool.OpenWorld, false);
+
 const PromotionReviewTool = Tool.make("learning_promotion_review", {
   ...shared,
   description:
@@ -125,6 +161,16 @@ const PromotionReviewTool = Tool.make("learning_promotion_review", {
   .annotate(Tool.Destructive, false)
   .annotate(Tool.Idempotent, false)
   .annotate(Tool.OpenWorld, false);
+
+const PromptGetTool = Tool.make("prompt_get", {
+  ...shared,
+  description:
+    "One prompt from the library by id, as prompt_search lists it, with its latest version's title and body.",
+  parameters: Schema.Struct({ id: Schema.Int }),
+  success: Prompt,
+})
+  .annotate(Tool.Readonly, true)
+  .annotate(Tool.Destructive, false);
 
 const PromotionRollBackTool = Tool.make("learning_promotion_rollback", {
   ...shared,
@@ -146,6 +192,9 @@ export const LearningToolkit = Toolkit.make(
   CorrectionDeclareTool,
   ItemsTool,
   ItemTool,
+  PromptSearchTool,
+  PromptSaveTool,
+  PromptGetTool,
   PromotionReviewTool,
   PromotionRollBackTool,
 );
@@ -192,6 +241,7 @@ export const handlers = McpToolAccess.toLayer(
   Effect.gen(function* () {
     const store = running(yield* Effect.serviceOption(CorrectionStore.CorrectionStore));
     const itemStore = running(yield* Effect.serviceOption(ItemStore.ItemStore));
+    const promptStore = running(yield* Effect.serviceOption(PromptStore.PromptStore));
     return {
       learning_corrections: McpToolAccess.reads(({ projectId: given, ...input }) =>
         Effect.gen(function* () {
@@ -251,6 +301,27 @@ export const handlers = McpToolAccess.toLayer(
           yield* readCaller();
           const items = yield* itemStore;
           return yield* items.get(id);
+        }).pipe(Effect.catchTags({ LearningError: (error) => Effect.fail(failure(error)) })),
+      ),
+      prompt_search: McpToolAccess.reads(({ projectId: given, query }) =>
+        Effect.gen(function* () {
+          const context = yield* readCaller();
+          const projectId = yield* resolveProjectId(context, given);
+          const prompts = yield* promptStore;
+          return yield* prompts.search({ projectId, query });
+        }).pipe(Effect.catchTags({ LearningError: (error) => Effect.fail(failure(error)) })),
+      ),
+      prompt_save: McpToolAccess.writes((input) =>
+        Effect.gen(function* () {
+          const prompts = yield* promptStore;
+          return yield* prompts.propose(input);
+        }).pipe(Effect.catchTags({ LearningError: (error) => Effect.fail(failure(error)) })),
+      ),
+      prompt_get: McpToolAccess.reads(({ id }) =>
+        Effect.gen(function* () {
+          yield* readCaller();
+          const prompts = yield* promptStore;
+          return (yield* prompts.get(id)).prompt;
         }).pipe(Effect.catchTags({ LearningError: (error) => Effect.fail(failure(error)) })),
       ),
       // An agent acts as its thread, so the proposer check can tell two agents apart.
