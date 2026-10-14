@@ -35,12 +35,41 @@ import { When } from "./When";
 
 /**
  * A project's items, the most recently updated first, narrowed to one state. A row's failure mode
- * opens the drawer, and a disposition set there refetches the list.
+ * opens the drawer on `openId`, and a disposition set there refetches the list. Another project
+ * starts the list over with no state filter, but the drawer stays open across the change, so an
+ * item that selects its own project once loaded does not open twice.
  */
-export function ItemsTable({ environmentId, projectId }: LearningScope) {
-  const [state, setState] = useState<LearningItemState | null>(null);
-  const [openId, setOpenId] = useState<number | null>(null);
+export function ItemsTable({
+  environmentId,
+  projectId,
+  openId,
+  onOpen,
+}: LearningScope & {
+  readonly openId: number | null;
+  readonly onOpen: (id: number | null) => void;
+}) {
   const items = useLearningItems({ environmentId, projectId });
+  return (
+    <>
+      <ItemRows key={`${environmentId}:${projectId}`} items={items} onOpen={onOpen} />
+      <ItemDrawer
+        environmentId={environmentId}
+        itemId={openId}
+        onClose={() => onOpen(null)}
+        onChanged={items.refresh}
+      />
+    </>
+  );
+}
+
+function ItemRows({
+  items,
+  onOpen,
+}: {
+  readonly items: ReturnType<typeof useLearningItems>;
+  readonly onOpen: (id: number) => void;
+}) {
+  const [state, setState] = useState<LearningItemState | null>(null);
   const rows = useMemo(() => itemRows(items.data ?? [], state), [items.data, state]);
 
   return (
@@ -98,7 +127,7 @@ export function ItemsTable({ environmentId, projectId }: LearningScope) {
             {rows.map((row) => (
               <TableRow key={row.id}>
                 <TableCell>
-                  <InlineButton onClick={() => setOpenId(row.id)}>
+                  <InlineButton onClick={() => onOpen(row.id)}>
                     {failureModeLabel(row.failureMode)}
                   </InlineButton>
                 </TableCell>
@@ -127,12 +156,6 @@ export function ItemsTable({ environmentId, projectId }: LearningScope) {
           </TableBody>
         </Table>
       )}
-      <ItemDrawer
-        environmentId={environmentId}
-        itemId={openId}
-        onClose={() => setOpenId(null)}
-        onChanged={items.refresh}
-      />
     </div>
   );
 }
