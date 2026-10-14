@@ -13,6 +13,7 @@ import { Atom } from "effect/reactivity";
 
 import { connectionAtomRuntime } from "~/connection/runtime";
 import { useEnvironmentQuery } from "~/state/query";
+import { pluginScreenLink } from "../pluginRoute";
 
 /** Bumped after a command on the Plugins page, such as a saved tier, so the checklist re-reads. */
 const changed = Atom.make(0).pipe(Atom.keepAlive);
@@ -90,12 +91,7 @@ export const GROUP_BADGE: Record<
 /** Where a check's link goes: a plugin's row on this page, or another screen. */
 export type ReadinessLink =
   | { readonly kind: "row"; readonly plugin: string; readonly label: string }
-  | {
-      readonly kind: "screen";
-      readonly to: "/plugins/$pluginId";
-      readonly params: { readonly pluginId: string };
-      readonly label: string;
-    }
+  | ({ readonly kind: "screen"; readonly label: string } & ReturnType<typeof pluginScreenLink>)
   | {
       readonly kind: "board";
       readonly to: "/board";
@@ -114,10 +110,8 @@ export type ReadinessLink =
 export const pluginRowId = (plugin: string) => `plugin-${plugin}`;
 
 /**
- * A check's link. `plugin` opens the plugin's own screen when it has one and the checklist shows
- * the primary environment: the link names no `machine`, so for another environment it would open
- * the primary one's. Otherwise it is the plugin's row on this page, as `plugins` always is, which
- * keeps the page's environment.
+ * A check's link. `plugin` opens the plugin's own screen, on the checklist's environment, when it
+ * has one; otherwise it is the plugin's row on this page, as `plugins` always is.
  */
 export function readinessLink(
   target: ReadinessTarget | null,
@@ -125,8 +119,6 @@ export function readinessLink(
     readonly plugin: string;
     readonly title: string;
     readonly hasScreen: boolean;
-    /** The checklist's environment is the primary one, the one plugin screens show. */
-    readonly primary: boolean;
     readonly environmentId: EnvironmentId;
     readonly projectId: ProjectId | null;
   },
@@ -138,12 +130,11 @@ export function readinessLink(
     case "plugins":
       return row;
     case "plugin":
-      return context.hasScreen && context.primary
+      return context.hasScreen
         ? {
             kind: "screen",
-            to: "/plugins/$pluginId",
-            params: { pluginId: context.plugin },
             label: `Open ${context.title}`,
+            ...pluginScreenLink(context.plugin, context.environmentId),
           }
         : row;
     case "board":
