@@ -266,8 +266,9 @@ them half-evaluated. The host hands `toolkitRegistration` to `ServerPlugin.mcp` 
   open, as it does once the record is rolled back; the sweep never closes or reroutes an item, and
   never judges `local_only`. The `unclassified` sweep runs after classify and keeps one
   `unowned_finding` flag per project, keyed `corrections:<projectId>`, counting the corrections
-  classify left `unclassified`, provider failures aside, that are seven to 90 days old; the
-  Corrections tab shows 90 days at most, so a counted one can always be declared there.
+  classify left `unclassified`, provider failures aside, that are seven days old and still in the
+  Corrections tab's 90-day window, which ends at the next hour, so a counted one can always be
+  declared there.
   `learning.correctionDeclare` (MCP `learning_correction_declare`, and the Corrections tab)
   declares a review failure mode, never `security`, for one that has none and clears its
   classified mark, so the next tick classifies it before the count. Server:

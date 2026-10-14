@@ -7,6 +7,7 @@ import {
   ThreadId,
 } from "@t3tools/contracts";
 import * as Context from "effect/Context";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as SqlClient from "effect/sql/SqlClient";
@@ -183,18 +184,19 @@ it.effect(
     ),
 );
 
-it.effect("a correction older than the Corrections tab's 90 days is no longer counted", () =>
+it.effect("only corrections the Corrections tab's 90-day window shows are counted", () =>
   Effect.scoped(
     Effect.gen(function* () {
       const learning = yield* setup;
+      yield* TestClock.adjust("30 minutes");
       yield* learning.correct(projectA, "manual");
-      yield* TestClock.adjust("89 days");
-      assert.deepEqual(yield* learning.tick, { examined: 1, acted: 1, flags: 1 });
-
+      yield* TestClock.adjust("30 minutes");
       yield* learning.correct(projectB, "changes_requested");
-      yield* TestClock.adjust("11 days");
-      // Project A's correction is 100 days old, out of the tab's reach, so its flag clears.
-      assert.deepEqual(yield* learning.tick, { examined: 1, acted: 2, flags: 1 });
+      // Now is 90 days and 15 minutes after the start. The tab's window ends at the next hour,
+      // 90 days and one hour in, so it starts one hour in: project B's correction is its first,
+      // and project A's, under 90 days old, falls just before it.
+      yield* TestClock.adjust(Duration.sum(Duration.days(89), Duration.minutes(23 * 60 + 15)));
+      assert.deepEqual(yield* learning.tick, { examined: 1, acted: 1, flags: 1 });
       assert.deepEqual(
         (yield* learning.open).map((flag) => flag.thread_id),
         ["corrections:project-b"],
