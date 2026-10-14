@@ -1757,3 +1757,213 @@ describe("watcher refresh", () => {
     ),
   );
 });
+
+describe("boardFolders", () => {
+  /** The projects with a board, from `boardFolders`. */
+  const withBoard = (store: KanbanStore.KanbanStore["Service"], ids: ReadonlyArray<ProjectId>) =>
+    Effect.map(store.boardFolders(ids), (folders) =>
+      folders.filter((folder) => folder.board).map((folder) => folder.projectId),
+    );
+  const otherId = ProjectId.make("project-2");
+  // A second checkout under the same title, so the same default folder; its id sorts first.
+  const twinId = ProjectId.make("project-0");
+  // Projects the test deletes; `getById` stops finding them, as it does a deleted project.
+  const deleted = new Set<ProjectId>();
+  const layerTwoProjects = (store: typeof KanbanStore.layer) =>
+    Layer.empty.pipe(
+      Layer.provideMerge(store),
+      Layer.provideMerge(
+        Layer.mock(ProjectService.ProjectService)({
+          getById: (id) =>
+            Effect.succeed(
+              deleted.has(id)
+                ? Option.none()
+                : id === projectId
+                  ? Option.some(project)
+                  : id === otherId
+                    ? Option.some({ ...project, id: otherId, title: "Other Repo" })
+                    : id === twinId
+                      ? Option.some({ ...project, id: twinId, workspaceRoot: "/elsewhere" })
+                      : Option.none(),
+            ),
+        }),
+      ),
+      Layer.provideMerge(
+        Layer.fresh(ServerConfig.layerTest(process.cwd(), { prefix: "t3code-kanban-test-" })),
+      ),
+      Layer.provideMerge(NodeServices.layer),
+    );
+  /** The real file system, except that the other project's folder cannot be inspected. */
+  const deniedFileSystem = Layer.effect(
+    FileSystem.FileSystem,
+    Effect.map(FileSystem.FileSystem, (real): FileSystem.FileSystem => ({
+      ...real,
+      exists: (path) =>
+        path.includes("other-repo")
+          ? Effect.fail(
+              PlatformError.systemError({
+                _tag: "PermissionDenied",
+                module: "FileSystem",
+                method: "access",
+                pathOrDescriptor: path,
+              }),
+            )
+          : real.exists(path),
+    })),
+  );
+
+  it.effect("lists the projects with a board and creates nothing for the rest", () =>
+    Effect.gen(function* () {
+      const store = yield* KanbanStore.KanbanStore;
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const { baseDir } = yield* ServerConfig.ServerConfig;
+      const gone = ProjectId.make("project-gone");
+
+      // A project that is gone has no folder; the others name theirs, board or not.
+      assert.deepEqual(yield* store.boardFolders([projectId, otherId, gone]), [
+        { projectId, directory: path.join(baseDir, "wiki", "grand-theft-repo"), board: false },
+        { projectId: otherId, directory: path.join(baseDir, "wiki", "other-repo"), board: false },
+      ]);
+      // The project folder alone is no board; an `issues/` folder another client or the user made
+      // is one before anything loads it.
+      yield* fs.makeDirectory(path.join(baseDir, "wiki", "other-repo"), { recursive: true });
+      assert.deepEqual(yield* withBoard(store, [otherId]), []);
+      yield* fs.makeDirectory(path.join(baseDir, "wiki", "other-repo", "issues"));
+      assert.deepEqual(yield* withBoard(store, [projectId, otherId, gone]), [otherId]);
+      assert.isFalse(yield* fs.exists(path.join(baseDir, "wiki", "grand-theft-repo")));
+
+      // Filing the first card starts the project's board.
+      yield* store.write(projectId, "user", { action: "issue.create", title: "First" });
+      assert.deepEqual(yield* withBoard(store, [otherId, projectId]), [otherId, projectId]);
+      // A project asked for twice is named once, and keeps its board.
+      assert.deepEqual(
+        (yield* store.boardFolders([projectId, otherId, projectId])).map((folder) => [
+          folder.projectId,
+          folder.board,
+        ]),
+        [
+          [projectId, true],
+          [otherId, true],
+        ],
+      );
+    }).pipe(Effect.provide(layerTwoProjects(KanbanStore.layer))),
+  );
+
+  it.effect(
+    "keeps a board a board when its folder moves, and starts none for a project without",
+    () =>
+      Effect.gen(function* () {
+        const store = yield* KanbanStore.KanbanStore;
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const { baseDir } = yield* ServerConfig.ServerConfig;
+        yield* store.write(projectId, "user", { action: "issue.create", title: "First" });
+
+        // The new folder does not exist yet; it does once the move returns.
+        const moved = path.join(baseDir, "elsewhere", "board");
+        yield* store.setDirectory({ projectId, directory: moved });
+        assert.deepEqual(yield* withBoard(store, [projectId, otherId]), [projectId]);
+        assert.isTrue(yield* fs.exists(path.join(moved, "issues")));
+
+        const unused = path.join(baseDir, "elsewhere", "other");
+        yield* store.setDirectory({ projectId: otherId, directory: unused });
+        // Its chosen folder reads back without a board being started there.
+        assert.deepEqual(yield* store.boardFolders([projectId, otherId]), [
+          { projectId, directory: moved, board: true },
+          { projectId: otherId, directory: unused, board: false },
+        ]);
+        assert.isFalse(yield* fs.exists(unused));
+      }).pipe(Effect.provide(layerTwoProjects(KanbanStore.layer))),
+  );
+
+  it.effect("leaves out a loaded board once its project is deleted", () =>
+    Effect.gen(function* () {
+      const store = yield* KanbanStore.KanbanStore;
+      yield* store.board(otherId);
+      assert.deepEqual(yield* withBoard(store, [otherId]), [otherId]);
+      deleted.add(otherId);
+      assert.deepEqual(yield* store.boardFolders([otherId]), []);
+    }).pipe(
+      Effect.ensuring(Effect.sync(() => deleted.clear())),
+      Effect.provide(layerTwoProjects(KanbanStore.layer)),
+    ),
+  );
+
+  it.effect("shows a folder two projects share under the first of them by id only", () =>
+    Effect.gen(function* () {
+      const store = yield* KanbanStore.KanbanStore;
+      // Both load the shared folder, as a card filed in each would.
+      yield* store.write(projectId, "user", { action: "issue.create", title: "First" });
+      yield* store.board(twinId);
+      for (const order of [
+        [projectId, twinId],
+        [twinId, projectId],
+      ])
+        assert.deepEqual(yield* withBoard(store, order), [twinId]);
+      const [first, second] = yield* store.boardFolders([projectId, twinId]);
+      assert.strictEqual(first?.directory, second?.directory);
+      // Alone, either one still shows it.
+      assert.deepEqual(yield* withBoard(store, [projectId]), [projectId]);
+    }).pipe(Effect.provide(layerTwoProjects(KanbanStore.layer))),
+  );
+
+  it.effect("shows a folder two overrides reach through a symlink under one project only", () =>
+    Effect.gen(function* () {
+      const store = yield* KanbanStore.KanbanStore;
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const { baseDir } = yield* ServerConfig.ServerConfig;
+      const real = path.join(baseDir, "shared-board");
+      const link = path.join(baseDir, "shared-link");
+      yield* fs.makeDirectory(path.join(real, "issues"), { recursive: true });
+      yield* fs.symlink(real, link);
+      yield* store.setDirectory({ projectId, directory: real });
+      yield* store.setDirectory({ projectId: otherId, directory: link });
+
+      // The first by id keeps it; each keeps the folder it was given.
+      assert.deepEqual(yield* store.boardFolders([otherId, projectId]), [
+        { projectId: otherId, directory: link, board: false },
+        { projectId, directory: real, board: true },
+      ]);
+    }).pipe(Effect.provide(layerTwoProjects(KanbanStore.layer))),
+  );
+
+  it.effect(
+    "refuses a move to a folder that cannot be created, and keeps the board where it was",
+    () =>
+      Effect.gen(function* () {
+        const store = yield* KanbanStore.KanbanStore;
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const { baseDir } = yield* ServerConfig.ServerConfig;
+        const { id } = yield* store.write(projectId, "user", {
+          action: "issue.create",
+          title: "Stays put",
+        });
+        const before = (yield* store.board(projectId)).directory;
+        // A file where the new folder's parent should be.
+        const blocker = path.join(baseDir, "blocker");
+        yield* fs.writeFileString(blocker, "");
+
+        const moved = store.setDirectory({ projectId, directory: path.join(blocker, "board") });
+        assert.strictEqual(yield* failureCode(moved), "io");
+        assert.strictEqual(yield* store.directory(projectId), before);
+        assert.deepEqual(yield* store.boardFolders([projectId]), [
+          { projectId, directory: before, board: true },
+        ]);
+        assert.strictEqual((yield* store.getIssue({ projectId, id })).title, "Stays put");
+      }).pipe(Effect.provide(layerTwoProjects(KanbanStore.layer))),
+  );
+
+  it.effect("fails, rather than leaving the project out, when its folder cannot be inspected", () =>
+    Effect.gen(function* () {
+      const store = yield* KanbanStore.KanbanStore;
+      assert.strictEqual(yield* failureCode(store.boardFolders([otherId])), "io");
+      // Automation only skips such a project.
+      yield* store.advance(otherId, ThreadId.make("thr_any"), "in_progress");
+    }).pipe(
+      Effect.provide(layerTwoProjects(KanbanStore.layer.pipe(Layer.provide(deniedFileSystem)))),
+    ),
+  );
+});

@@ -2,8 +2,11 @@
 
 The board holds the work that is not a thread yet: bugs an agent found, ideas you want to get to,
 and the decisions you made along the way. Open it from **Board** in the sidebar's utility row or
-with **Open board** in the command palette (`Cmd/Ctrl+K`). Pick a project at the top; the board
-remembers your last one.
+with **Open board** in the command palette (`Cmd/Ctrl+K`). It shows the cards of every project
+that has a board, each card naming its project, and its environment when you work on more than
+one. Pick a project at the top to see only its cards; this is the same project filter as the
+sidebar's, so the two stay in step, and **All projects** goes back. A project gets a board when
+you add its first card.
 
 ## Columns
 
@@ -33,16 +36,16 @@ you can unarchive or delete an archived card.
 
 ## Waiting on you
 
-A strip above the columns lists what in the project is waiting on you, oldest first: questions and
-permission requests agents are waiting on, and flags other plugins raise, such as two agents
-writing the project at once, a stale review, a budget breach, a conflicted decision, a card held
-back from Done, a policy block or knowledge file that was edited or deleted outside T3 Code, a
-thread that ran another model than routing recommended in the past seven days,
+A strip above the columns lists what in the board's projects is waiting on you, oldest first:
+questions and permission requests agents are waiting on, and flags other plugins raise, such as
+two agents writing one project at once, a stale review, a budget breach, a conflicted decision, a
+card held back from Done, a policy block or knowledge file that was edited or deleted outside T3
+Code, a thread that ran another model than routing recommended in the past seven days,
 [findings](#findings) nobody took on, or [corrections](./learning.md#corrections) left without a
-failure mode. A policy for the whole environment affects every project, so its flag is on every
-board. Each row names its thread, or the project for a flag about the whole project, and has a
-button that takes you to the thread, the board, the Plugins page, or a plugin's screen, such as
-Learning's Corrections tab.
+failure mode. A policy for the whole environment affects every project, so its flag is listed once,
+as about every project. Each row names its thread, or the project for a flag about the whole
+project, and has a button that takes you to the thread, the board, the Plugins page, or a plugin's
+screen, such as Learning's Corrections tab.
 Rows cannot be dismissed: a row leaves on its own once its request is answered or its cause clears.
 Requests on settled or archived threads are not listed. A new flag shows up when you come back to
 the window or the board changes, and the strip is hidden while nothing waits.
@@ -65,17 +68,19 @@ And none of its [findings](#findings) may still be open. When a thread settles o
 merges on a card missing either, the card stays put and [Waiting on you](#waiting-on-you) says
 what is missing until it is there. Cards created before this check came in are exempt.
 
-Create a card with the **+** in a column header. Cards you create start in that column; cards an
-agent files start in Triage.
+Create a card with the **+** in a column header. When the board shows more than one project, pick
+the card's project there; it starts at the one you used last. Cards you create start in that
+column; cards an agent files start in Triage.
 
 ## Decisions
 
-**Decisions** at the top switches the board to the project's decisions: the calls made along the
-way, one row each with its state, the option it went with and, when set, what would make it worth
-revisiting. Type in the search box to find one by any word of its title, its reason or its
-alternatives, and narrow the list by state or by category, which you name, such as `auth` or
-`performance`. Superseded decisions stay hidden until you turn on **Superseded**. **Find decision**
-in the command palette (`Cmd/Ctrl+K`) opens this view for the project you are in.
+**Decisions** at the top switches the board to a project's decisions, with a project picker when
+the board shows more than one: the calls made along the way, one row each with its state, the
+option it went with and, when set, what would make it worth revisiting. Type in the search box to
+find one by any word of its title, its reason or its alternatives, and narrow the list by state or
+by category, which you name, such as `auth` or `performance`. Superseded decisions stay hidden
+until you turn on **Superseded**. **Find decision** in the command palette (`Cmd/Ctrl+K`) opens this
+view for the project you are in.
 
 Click a row to open the decision in full: its alternatives, why, the tickets and threads it is
 linked to (each opens in one click), what it replaced or was replaced by, and every revision.
@@ -137,9 +142,10 @@ drafted.
 
 ## On mobile
 
-In the mobile app, **Board** on a project's overview in Settings lists its tickets grouped by
-column, read-only: tap a ticket to open its thread, and pull down to refresh. The row appears only
-when the server runs the board, and a ticket with no thread yet cannot be opened. The same
+In the mobile app, **Board** on a project's overview in Settings lists that project's tickets
+grouped by column, read-only; the phone has no all-projects board. Tap a ticket to open its
+thread, and pull down to refresh. The row appears only when the server runs the board, and a
+ticket with no thread yet cannot be opened. The same
 [Waiting on you](#waiting-on-you) rows sit above the columns, oldest first; tap one to open its
 thread, while a row about the whole project, such as a budget breach, only shows its text. Nothing
 can be dismissed from the phone either. Decisions are not on the phone; open them on the web or

@@ -65,6 +65,43 @@ const waitingThreadsKey = (threads: ReadonlyArray<EnvironmentThreadShell>) =>
     )
     .join("\n");
 
+interface KanbanThreadSources {
+  readonly threadShells: (
+    refs: ReadonlyArray<ScopedProjectRef>,
+  ) => Atom.Atom<ReadonlyArray<EnvironmentThreadShell>>;
+  readonly focus?: Atom.Atom<unknown>;
+}
+
+interface KanbanAttentionSources extends KanbanThreadSources {
+  readonly board: (target: {
+    readonly environmentId: EnvironmentId;
+    readonly input: { readonly projectId: ProjectId };
+  }) => Atom.Atom<unknown>;
+}
+
+/** Changes on `focus`, a waiting-thread change in any of the projects, and on `boards`. */
+const attentionSignal = (
+  sources: KanbanThreadSources,
+  environmentId: EnvironmentId,
+  projectIds: ReadonlyArray<ProjectId>,
+  boards: Atom.Atom<unknown>,
+) => {
+  const threads = sources.threadShells(
+    projectIds.map((projectId) => ({ environmentId, projectId })),
+  );
+  return Atom.withEquality(
+    Atom.make(
+      (get) =>
+        [
+          sources.focus === undefined ? undefined : get(sources.focus),
+          waitingThreadsKey(get(threads)),
+          get(boards),
+        ] as const,
+    ),
+    (left, right) => left.every((value, index) => Object.is(value, right[index])),
+  );
+};
+
 /**
  * What waits on a person in a project, for the strip above the board: the `kanban.attention.list`
  * rows. It re-reads when `focus` changes, when a project thread's pending request starts or ends
@@ -77,42 +114,53 @@ const waitingThreadsKey = (threads: ReadonlyArray<EnvironmentThreadShell>) =>
  */
 export function createKanbanAttentionAtomFamily<R, ER>(
   runtime: Atom.AtomRuntime<EnvironmentRegistry.EnvironmentRegistry | R, ER>,
-  sources: {
-    readonly board: (target: {
-      readonly environmentId: EnvironmentId;
-      readonly input: { readonly projectId: ProjectId };
-    }) => Atom.Atom<unknown>;
-    readonly threadShells: (
-      refs: ReadonlyArray<ScopedProjectRef>,
-    ) => Atom.Atom<ReadonlyArray<EnvironmentThreadShell>>;
-    readonly focus?: Atom.Atom<unknown>;
-  },
+  sources: KanbanAttentionSources,
 ) {
-  const signal = (environmentId: EnvironmentId, projectId: ProjectId) => {
-    const threads = sources.threadShells([{ environmentId, projectId }]);
-    const board = sources.board({ environmentId, input: { projectId } });
-    return Atom.withEquality(
-      Atom.make(
-        (get) =>
-          [
-            sources.focus === undefined ? undefined : get(sources.focus),
-            waitingThreadsKey(get(threads)),
-            get(board),
-          ] as const,
-      ),
-      (left, right) => left.every((value, index) => Object.is(value, right[index])),
-    );
-  };
   return createPluginRpcQueryAtomFamily(runtime, {
     label: "environment-data:kanban:attention",
     method: KANBAN_METHODS.attentionList,
     staleTimeMs: 5_000,
-    refreshTrigger: ({ environmentId, input }) => signal(environmentId, input.projectId),
+    refreshTrigger: ({ environmentId, input }) =>
+      attentionSignal(
+        sources,
+        environmentId,
+        [input.projectId],
+        sources.board({ environmentId, input }),
+      ),
+  });
+}
+
+/**
+ * `createKanbanAttentionAtomFamily` for several projects of one environment in one read, each row
+ * with its project. It re-reads on the same signals, from any of the projects, with `boards` in
+ * place of each board: the client decides which boards it subscribes to, since a project need not
+ * have one for its requests and flags to show.
+ */
+export function createKanbanProjectsAttentionAtomFamily<R, ER>(
+  runtime: Atom.AtomRuntime<EnvironmentRegistry.EnvironmentRegistry | R, ER>,
+  sources: KanbanThreadSources & {
+    readonly boards: (target: {
+      readonly environmentId: EnvironmentId;
+      readonly input: { readonly projectIds: ReadonlyArray<ProjectId> };
+    }) => Atom.Atom<unknown>;
+  },
+) {
+  return createPluginRpcQueryAtomFamily(runtime, {
+    label: "environment-data:kanban:attention-projects",
+    method: KANBAN_METHODS.attentionListProjects,
+    staleTimeMs: 5_000,
+    refreshTrigger: ({ environmentId, input }) =>
+      attentionSignal(
+        sources,
+        environmentId,
+        input.projectIds,
+        sources.boards({ environmentId, input }),
+      ),
   });
 }
 
 /** A strip row with the words a client shows for it. */
-export type KanbanAttentionStripRow = KanbanAttentionRow & {
+export type KanbanAttentionStripRow<Row extends KanbanAttentionRow = KanbanAttentionRow> = Row & {
   /** The kind in words: "Question", "Budget breach". */
   readonly label: string;
   /** The thread's own title, "Untitled thread" when it has none, or "This project" for a flag. */
@@ -124,12 +172,12 @@ export type KanbanAttentionStripRow = KanbanAttentionRow & {
  * and a title. A row with a `threadId` leads to that thread; one without is about the project and
  * leads to no thread.
  */
-export function kanbanAttentionStripRows(
-  rows: ReadonlyArray<KanbanAttentionRow>,
-): ReadonlyArray<KanbanAttentionStripRow> {
+export function kanbanAttentionStripRows<Row extends KanbanAttentionRow>(
+  rows: ReadonlyArray<Row>,
+): ReadonlyArray<KanbanAttentionStripRow<Row>> {
   return rows.map((row) => ({
     ...row,
     label: KANBAN_ATTENTION_KIND_LABELS[row.kind],
-    title: row.threadTitle === null ? "This project" : row.threadTitle.trim() || "Untitled thread",
+    title: row.threadId === null ? "This project" : row.threadTitle?.trim() || "Untitled thread",
   }));
 }

@@ -42,9 +42,9 @@ without depending on the plugin that shows them. The strip above the kanban boar
 weekly report list a flag whose key is not a thread when the key ends in `:<projectId>`, has the
 project id between colons, or starts with `policy:*:` (`plugins/attentionKeys.ts`); a flag keyed by
 none of these is on no board and in no report. A flag's resume action leads to its thread, the
-board, the Plugins page, or a plugin's screen on the board's project with an optional tab and record
-(`AttentionResumeAction`); mobile has no plugin screens, so there a row with a plugin target stays
-on the board.
+board, the Plugins page, or a plugin's screen on the row's project, if it has one, with an optional
+tab and record (`AttentionResumeAction`); mobile has no plugin screens, so there a row with a plugin
+target stays on the board.
 
 A plugin says what it needs to do its work through `ServerPlugin.readiness`: checks, each `ready`,
 `attention` or `off`, with one sentence and where a person fixes it. `PluginHost.readiness` runs
@@ -125,7 +125,12 @@ them half-evaluated. The host hands `toolkitRegistration` to `ServerPlugin.mcp` 
 ## Plugins
 
 - **kanban**: a board per project. Issues and decisions are files under
-  `<T3 home>/wiki/<project-slug>/`; the folder is changeable per project from the board.
+  `<T3 home>/wiki/<project-slug>/`; the folder is changeable per project from the board. The web
+  board shows every project's board under the sidebar's project scope
+  (`uiStateStore.sidebarProjectScopeKey`, read and set, never edited): `kanban.boards` reads each
+  project's board folder and whether a board is there without creating any, and the client
+  subscribes to each board on its own, so a change re-sends one project's board and a project
+  without one gets no folder or watcher.
   Its own database, `plugins/kanban.sqlite`, holds the emergency stop (`StopGate`, which anything
   that starts a thread must ask first; the spec drafting and settle capture threads are the
   launches that ask so far), spec attempts and settle captures. The `writers` sweep raises an
@@ -145,17 +150,19 @@ them half-evaluated. The host hands `toolkitRegistration` to `ServerPlugin.mcp` 
   tick costs no retained board and a dry run changes nothing.
   `kanban.attention.list` feeds the strip above the board from the project's open host
   flags, its threads' pending questions and permission requests, and, while routing runs, its
-  routing mismatches. The thread header's decision count reads `kanban.listDecisions` with
-  `thread`, which answers none for a project with no board folder and creates none, and re-reads
-  when the thread's latest run starts or ends rather than following the board.
+  routing mismatches; `kanban.attention.listProjects` does the same for several projects with one
+  read of the flags and lists a `policy:*` flag, which every project matches, once. The thread
+  header's decision count reads `kanban.listDecisions` with `thread`, which answers none for a
+  project with no board folder and creates none, and re-reads when the thread's latest run starts
+  or ends rather than following the board.
   `kanban.ticket.specify` (MCP `kanban_ticket_specify`) checks a Triage or
   Inbox issue's description against the Goal, Approach and Acceptance format, or starts a plan-mode
   drafting thread on routing's cheap tier whose final message the plugin's reactor checks when the
   run ends; a valid spec becomes the issue's criteria and admits it as `spec`, and the description
-  is never edited. Mobile shows the board as a read-only list grouped by column, from the Board row
-  on a project's overview, under the same attention rows; it and the web board share the board and
-  active-plugin atoms, the attention atom and the strip's row model in
-  `packages/client-runtime/src/plugins/kanban.ts`, and the contract's
+  is never edited. Mobile shows one project's board as a read-only list grouped by column, from
+  the Board row on a project's overview, under the same attention rows; it and the web board share
+  the board and active-plugin atoms, the attention atoms' re-read signal and the strip's row model
+  in `packages/client-runtime/src/plugins/kanban.ts`, and the contract's
   `KANBAN_ATTENTION_KIND_LABELS` names each kind, so a new kind needs a label there and nothing per
   client. A finding, a problem an agent found outside its task, lives in its issue's frontmatter,
   on the issue it concerns or on a Triage issue labeled `finding` opened for it

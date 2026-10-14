@@ -19,7 +19,7 @@ export const directoryCheck = (directory: string, state: "writable" | "missing" 
     : state === "missing"
       ? Readiness.attention(
           DIRECTORY,
-          `${directory} does not exist yet; open the board to create it.`,
+          `${directory} does not exist yet; add a card for this project on the board to create it.`,
         )
       : Readiness.attention(
           DIRECTORY,

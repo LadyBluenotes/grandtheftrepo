@@ -10,7 +10,7 @@ import {
 import * as DateTime from "effect/DateTime";
 
 import type * as Attention from "../Attention.ts";
-import { attentionRows } from "./attentionRows.ts";
+import { attentionRows, projectsAttentionRows } from "./attentionRows.ts";
 import { projectA, projectB, thread } from "./writerFixtures.ts";
 
 const epoch = Date.parse("2026-10-12T00:00:00.000Z");
@@ -241,6 +241,41 @@ describe("attentionRows", () => {
     assert.deepEqual(
       result.map((row) => row.id),
       ["flag:11", "flag:12", `routing:b:${iso(20)}`, "request:request-a"],
+    );
+  });
+});
+
+describe("projectsAttentionRows", () => {
+  it("lists an environment-wide policy flag once, with no project, among each project's rows", () => {
+    const drift = {
+      pluginId: "policy",
+      kind: "delivery_drift",
+      resumeAction: { label: "Reinstall", target: "settings" },
+    } as const;
+    const result = projectsAttentionRows({
+      projects: [
+        { projectId: projectA, threads: [asking("a", "user_input", 30)], mismatches: [] },
+        {
+          projectId: projectB,
+          threads: [thread("b", { projectId: projectB })],
+          mismatches: [mismatch("b", 20)],
+        },
+      ],
+      flags: [
+        flag({ id: 1, threadId: "policy:*:claude:/home/me/.claude/CLAUDE.md", ...drift }),
+        flag({ id: 2, threadId: `policy:${projectB}:claude:/home/me/.claude/CLAUDE.md`, ...drift }),
+        flag({ id: 3, threadId: "b", raisedAt: iso(10) }),
+      ],
+    });
+    assert.deepEqual(
+      result.map((row) => [row.id, row.projectId]),
+      [
+        ["flag:1", null],
+        ["flag:2", projectB],
+        ["flag:3", projectB],
+        [`routing:b:${iso(20)}`, projectB],
+        ["request:request-a", projectA],
+      ],
     );
   });
 });

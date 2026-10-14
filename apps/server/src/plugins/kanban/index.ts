@@ -16,9 +16,10 @@ import * as Checks from "./readiness.ts";
  * when two agents write the same project or a decision is conflicted, a reactor
  * validates the spec a drafting thread wrote once its run ends and, where a
  * project turned it on, drafts what a settled thread decided or found without
- * recording it, and `kanban.attention.list` shows a project's flags with its
- * threads' pending requests above the board. Findings, problems an agent found
- * outside its task, live on issues and have tools of their own.
+ * recording it, and `kanban.attention.list` (or `listProjects`, for several
+ * boards at once) shows a project's flags with its threads' pending requests
+ * above the board. Findings, problems an agent found outside its task, live on
+ * issues and have tools of their own.
  */
 export const plugin = {
   id: "kanban",

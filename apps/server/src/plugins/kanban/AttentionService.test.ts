@@ -74,6 +74,7 @@ const fixture = Effect.gen(function* () {
   return {
     attention,
     list: service.list(projectA),
+    listProjects: service.listProjects,
     threads: (next: ReadonlyArray<OrchestrationV2ThreadShell>) => Ref.set(shells, next),
   };
 });
@@ -215,6 +216,58 @@ it.effect("routing mismatches show while routing runs, over the seven days up to
       assert.deepEqual(
         kinds(yield* list.pipe(Effect.provideService(AdherenceService.AdherenceService, failing))),
         ["question"],
+      );
+    }),
+  ),
+);
+
+it.effect("several projects read together list a policy of the whole environment once", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const { attention, listProjects, threads } = yield* fixture;
+      yield* threads([asking, thread("b", { projectId: projectB })]);
+      const resumeAction = { label: "Reinstall", target: "settings" } as const;
+      yield* attention.raise({
+        pluginId: "policy",
+        threadId: "policy:*:claude:/home/me/.claude/CLAUDE.md",
+        kind: "delivery_drift",
+        text: 'The "ponytail" policy block was edited.',
+        resumeAction,
+      });
+      yield* attention.raise({
+        ...budgetBreach,
+        threadId: `budget:1:${projectB}`,
+        text: "Over budget in B.",
+        resumeAction: { label: "Open budgets", target: "settings" },
+      });
+
+      assert.deepEqual(
+        (yield* listProjects([projectA, projectB])).map((row) => [row.kind, row.projectId]),
+        [
+          ["question", projectA],
+          ["delivery_drift", null],
+          ["budget_breach", projectB],
+        ],
+      );
+      // One project alone still lists the policy, once.
+      assert.deepEqual(
+        (yield* listProjects([projectB])).map((row) => [row.kind, row.projectId]),
+        [
+          ["delivery_drift", null],
+          ["budget_breach", projectB],
+        ],
+      );
+      // A project asked for twice is read and listed once.
+      assert.deepEqual(
+        (yield* listProjects([projectB, projectA, projectB])).map((row) => [
+          row.kind,
+          row.projectId,
+        ]),
+        [
+          ["question", projectA],
+          ["delivery_drift", null],
+          ["budget_breach", projectB],
+        ],
       );
     }),
   ),

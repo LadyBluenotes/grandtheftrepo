@@ -12,7 +12,7 @@ describe("directoryCheck", () => {
     assert.strictEqual(check.status, "attention");
     assert.strictEqual(
       check.sentence,
-      "/wiki/repo/issues does not exist yet; open the board to create it.",
+      "/wiki/repo/issues does not exist yet; add a card for this project on the board to create it.",
     );
     assert.strictEqual(check.target, "board");
     assert.strictEqual(directoryCheck("/wiki/repo/issues", "read_only").status, "attention");

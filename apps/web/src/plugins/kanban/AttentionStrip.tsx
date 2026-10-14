@@ -1,33 +1,36 @@
 import { kanbanAttentionStripRows } from "@t3tools/client-runtime/plugins/kanban";
-import type { EnvironmentId, KanbanAttentionRow, ProjectId } from "@t3tools/contracts";
+import type { EnvironmentId, ScopedProjectRef } from "@t3tools/contracts";
 import { useNavigate } from "@tanstack/react-router";
 import { FlagIcon, MessageCircleQuestionMarkIcon, ShieldAlertIcon } from "lucide-react";
 
 import { Alert, AlertAction, AlertDescription, AlertTitle } from "~/components/ui/alert";
 import { Badge } from "~/components/ui/badge";
 import { Button } from "~/components/ui/button";
-import { useEnvironmentQuery } from "~/state/query";
-import { attentionResumeTarget, kanbanAttention } from "./state";
+import { attentionResumeTarget, boardAttentionTitle, type BoardAttentionRow } from "./state";
 
 /**
- * Everything in the project waiting on a person, above the board's columns, oldest first:
- * questions and permission requests agents are waiting on, and flags other plugins raised. There
- * is no dismiss; a row leaves once its cause clears. Hidden while nothing waits.
+ * Everything in the board's projects waiting on a person, above the columns, oldest first:
+ * questions and permission requests agents are waiting on, and flags other plugins raised. A row
+ * about a project rather than a thread names the project, or every project for a policy of the
+ * whole environment, with that environment once the board spans several. There is no dismiss; a
+ * row leaves once its cause clears. Hidden while nothing waits.
  */
 export function AttentionStrip({
-  environmentId,
-  projectId,
+  rows: attention,
+  projectLabel,
+  environmentLabel,
 }: {
-  readonly environmentId: EnvironmentId;
-  readonly projectId: ProjectId;
+  readonly rows: ReadonlyArray<BoardAttentionRow>;
+  readonly projectLabel: (ref: ScopedProjectRef) => string | undefined;
+  /** Names an environment-wide row's environment; undefined unless the board spans several. */
+  readonly environmentLabel: (environmentId: EnvironmentId) => string | undefined;
 }) {
   const navigate = useNavigate();
-  const attention = useEnvironmentQuery(kanbanAttention({ environmentId, input: { projectId } }));
-  const rows = kanbanAttentionStripRows(attention.data ?? []);
+  const rows = kanbanAttentionStripRows(attention);
   if (rows.length === 0) return null;
 
-  const resume = (row: KanbanAttentionRow) => {
-    const target = attentionResumeTarget(row, { environmentId, projectId });
+  const resume = (row: BoardAttentionRow) => {
+    const target = attentionResumeTarget(row, row);
     switch (target?.to) {
       case "/$environmentId/$threadId":
         return void navigate(target);
@@ -52,15 +55,19 @@ export function AttentionStrip({
             : row.kind === "permission"
               ? ShieldAlertIcon
               : FlagIcon;
+        const title = boardAttentionTitle(row, projectLabel, environmentLabel);
         return (
-          <Alert key={row.id} variant={row.source === "request" ? "info" : "warning"}>
+          <Alert
+            key={`${row.environmentId}:${row.id}`}
+            variant={row.source === "request" ? "info" : "warning"}
+          >
             <Icon />
             <AlertTitle>
               <span className="flex min-w-0 items-center gap-1.5">
                 <Badge size="sm" variant="outline">
                   {row.label}
                 </Badge>
-                <span className="min-w-0 truncate">{row.title}</span>
+                <span className="min-w-0 truncate">{title}</span>
               </span>
             </AlertTitle>
             <AlertDescription>{row.text}</AlertDescription>
@@ -68,7 +75,7 @@ export function AttentionStrip({
               <Button
                 size="xs"
                 variant="outline"
-                disabled={attentionResumeTarget(row, { environmentId, projectId }) === null}
+                disabled={attentionResumeTarget(row, row) === null}
                 onClick={() => resume(row)}
               >
                 {row.resumeAction.label}

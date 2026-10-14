@@ -1,9 +1,12 @@
+import { kanbanAttentionStripRows } from "@t3tools/client-runtime/plugins/kanban";
 import { EnvironmentId, ProjectId, ThreadId } from "@t3tools/contracts";
 import { defaultParseSearch, defaultStringifySearch } from "@tanstack/react-router";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
   attentionResumeTarget,
+  boardAttentionTitle,
+  boardChanges,
   buildIssuePrompt,
   findDecisionSearch,
   validateBoardSearch,
@@ -124,6 +127,13 @@ describe("attentionResumeTarget", () => {
     expect(attentionResumeTarget(row("board"), board)).toEqual({ to: "/board", search: board });
   });
 
+  it("opens the board without a project for a row about every project", () => {
+    expect(attentionResumeTarget(row("board"), { ...board, projectId: null })).toEqual({
+      to: "/board",
+      search: {},
+    });
+  });
+
   it("opens the board's decisions view for a conflicted decision", () => {
     expect(attentionResumeTarget({ ...row("board"), kind: "decision_conflict" }, board)).toEqual({
       to: "/board",
@@ -153,6 +163,74 @@ describe("attentionResumeTarget", () => {
       params: { pluginId: "learning" },
       search: { machine: "remote", projectId: "project-1" },
     });
+    // A row about every project names no project.
+    expect(attentionResumeTarget(plugin({}), { ...board, projectId: null })).toStrictEqual({
+      to: "/plugins/$pluginId",
+      params: { pluginId: "learning" },
+      search: { machine: "remote" },
+    });
+  });
+});
+
+describe("boardAttentionTitle", () => {
+  const environmentId = EnvironmentId.make("local");
+  const projectId = ProjectId.make("project-1");
+  const projectLabel = () => "app";
+  const title = (
+    fields: {
+      threadId: string | null;
+      threadTitle: string | null;
+      projectId: ProjectId | null;
+    },
+    environmentLabel: (id: EnvironmentId) => string | undefined = () => undefined,
+  ) => {
+    const [row] = kanbanAttentionStripRows([
+      {
+        source: "flag" as const,
+        id: "flag:1",
+        threadId: fields.threadId === null ? null : ThreadId.make(fields.threadId),
+        threadTitle: fields.threadTitle,
+        kind: "two_writers" as const,
+        text: "Something waits.",
+        resumeAction: { label: "Open thread", target: "thread" as const },
+        since: "2026-10-13T08:00:00.000Z",
+        projectId: fields.projectId,
+        environmentId,
+      },
+    ]);
+    return boardAttentionTitle(row!, projectLabel, environmentLabel);
+  };
+
+  it("keeps a thread row a thread row, untitled or not", () => {
+    expect(title({ threadId: "thread-1", threadTitle: "Fix login", projectId })).toBe("Fix login");
+    expect(title({ threadId: "thread-1", threadTitle: null, projectId })).toBe("Untitled thread");
+  });
+
+  it("names the project for a project row, and every project for an environment's policy", () => {
+    expect(title({ threadId: null, threadTitle: null, projectId })).toBe("app");
+    expect(title({ threadId: null, threadTitle: null, projectId: null })).toBe("Every project");
+  });
+
+  it("names the environment of a policy row once the board spans several, as cards do", () => {
+    const spans = (id: EnvironmentId) => (id === environmentId ? "Laptop" : "Server");
+    expect(title({ threadId: null, threadTitle: null, projectId: null }, spans)).toBe(
+      "Every project · Laptop",
+    );
+    expect(title({ threadId: null, threadTitle: null, projectId }, spans)).toBe("app");
+    expect(title({ threadId: "thread-1", threadTitle: "Fix login", projectId: null }, spans)).toBe(
+      "Fix login",
+    );
+  });
+});
+
+describe("boardChanges", () => {
+  it("counts no change for a board's first snapshot or the same one again, and one per later one", () => {
+    const [first, second, third] = [{ n: 1 }, { n: 2 }, { n: 3 }];
+    let state = boardChanges<{ n: number }>({ snapshot: undefined, changes: 0 }, undefined);
+    const counts = [first, first, second, undefined, second, third].map(
+      (snapshot) => (state = boardChanges(state, snapshot)).changes,
+    );
+    expect(counts).toEqual([0, 0, 1, 1, 1, 2]);
   });
 });
 
