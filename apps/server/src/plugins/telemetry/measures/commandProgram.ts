@@ -147,11 +147,14 @@ const afterOptions = (
   return index;
 };
 
-/** What a segment names: a program, null for a command no program names, or undefined to look on. */
+/**
+ * What a segment names: a program, null for a command no program names, or undefined to look on.
+ * `at` is the word that settled it, such as the shell whose `-c` script names the program.
+ */
 const segmentProgram = (
   tokens: ReadonlyArray<string>,
   depth: number,
-): { readonly program: string | null } | undefined => {
+): { readonly program: string | null; readonly at: number } | undefined => {
   let index = 0;
   while (index < tokens.length) {
     const token = tokens[index]!;
@@ -160,7 +163,7 @@ const segmentProgram = (
       continue;
     }
     const name = programOf(token);
-    if (name === null || CONTROL.has(name)) return { program: null };
+    if (name === null || CONTROL.has(name)) return { program: null, at: index };
     if (SETUP.has(name)) return undefined;
     if (name === "env") {
       index = afterOptions(tokens, index + 1, ENV_OPTIONS_WITH_VALUE);
@@ -170,12 +173,14 @@ const segmentProgram = (
       index = afterOptions(tokens, index + 1) + 1;
     } else if (TRANSPARENT.has(name)) {
       // `command -v git` looks a program up; it does not run it.
-      if (name === "command" && /^-\w*[vV]/.test(tokens[index + 1] ?? "")) return { program: null };
+      if (name === "command" && /^-\w*[vV]/.test(tokens[index + 1] ?? "")) {
+        return { program: null, at: index };
+      }
       index = afterOptions(tokens, index + 1);
     } else if (SHELLS.has(name)) {
-      return { program: shellScriptProgram(tokens, index, name, depth) };
+      return { program: shellScriptProgram(tokens, index, name, depth), at: index };
     } else {
-      return { program: name };
+      return { program: name, at: index };
     }
   }
   return undefined;
@@ -233,4 +238,38 @@ export const programName = (command: string, depth = 0): string | null => {
     if (found !== undefined) return found.program;
   }
   return null;
+};
+
+/** The interpreters whose scripts agents write into the command line. */
+const INTERPRETERS = words("node python python3 bash sh ruby deno bun");
+/** An interpreter's options that run the next word as its script. */
+const INLINE_OPTIONS = words("-e -c --eval");
+
+/**
+ * Whether the program `programName` names is an interpreter running a script written into the
+ * command line: `node -e`, `python3 -c`, `ruby -e`, `bun --eval` or `deno eval` before its first
+ * argument, or a heredoc or here-string it reads, such as `python3 - <<'EOF'` or `bash <<EOF`.
+ * A shell's `-c` is a wrapper, judged by the command it runs, so `bash -lc 'git status'` is none.
+ */
+export const runsInlineScript = (command: string, depth = 0): boolean => {
+  for (const tokens of segmentsOf(command)) {
+    const found = segmentProgram(tokens, depth);
+    if (found === undefined) continue;
+    if (found.program === null || !INTERPRETERS.has(found.program)) return false;
+    const { at } = found;
+    if (tokens.slice(at + 1).some((token) => token.startsWith("<<"))) return true;
+    if (SHELLS.has(programOf(tokens[at]!) ?? "")) {
+      const script = tokens[scriptIndex(tokens, at)];
+      return script !== undefined && depth < MAX_DEPTH && runsInlineScript(script, depth + 1);
+    }
+    for (let index = at + 1; index < tokens.length; index += 1) {
+      const token = tokens[index]!;
+      if (INLINE_OPTIONS.has(token)) return true;
+      if (!token.startsWith("-") || token === "--") {
+        return found.program === "deno" && token === "eval";
+      }
+    }
+    return false;
+  }
+  return false;
 };

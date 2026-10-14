@@ -1,6 +1,6 @@
 import { assert, it } from "@effect/vitest";
 
-import { programName, unwrapShell } from "./commandProgram.ts";
+import { programName, runsInlineScript, unwrapShell } from "./commandProgram.ts";
 
 /** Cases taken from the client's `commandProgramName` tests, for the rules this file copies. */
 const named = (cases: ReadonlyArray<readonly [string, string | null]>) => {
@@ -147,5 +147,44 @@ it("unwraps the script inside shell -c wrappers, and leaves any other command li
       "bash -c 'git status'; ls",
       "env FOO=1 bash -c 'git status'",
     ],
+  );
+});
+
+it("finds an interpreter running a script written into the command line", () => {
+  const inline = (commands: ReadonlyArray<string>, expected: boolean) => {
+    for (const command of commands)
+      assert.strictEqual(runsInlineScript(command), expected, command);
+  };
+  inline(
+    [
+      "node -e 'console.log(1)'",
+      'python3 -c "import sys; print(sys.path)"',
+      "ruby -e 'puts 1'",
+      "bun --eval 'console.log(1)'",
+      "deno eval 'console.log(1)'",
+      "cd app && node --input-type=module -e 'console.log(1)'",
+      "python3 - <<'EOF'\nprint(1)\nEOF",
+      "python3 <<< 'print(1)'",
+      "bash <<EOF\necho hi\nEOF",
+      "sh -s <<'EOF'\necho hi\nEOF",
+      "/bin/zsh -lc \"python3 -c 'print(1)'\"",
+      "cd app && bash -c \"node -e 'console.log(1)'\"",
+    ],
+    true,
+  );
+  inline(
+    [
+      "node scripts/build.js -e production",
+      "python3 -m pytest -c pytest.ini",
+      "deno run main.ts",
+      "bash run.sh",
+      "bash -lc 'git status'",
+      "cd app && bash -c 'git status'",
+      "zsh <<EOF\necho hi\nEOF",
+      "cat <<EOF > notes.md\nhello\nEOF",
+      "grep -e node -c src",
+      "node",
+    ],
+    false,
   );
 });

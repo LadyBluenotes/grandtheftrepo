@@ -108,7 +108,12 @@ const candidate = (steps: ReadonlyArray<string>, estimatedTokens: number, index:
   deterministicRatio: 1,
   estimatedTokens,
   form: "script" as const,
-  example: { threadId: `thread:${index}`, runId: `run:${index}`, itemIds: [`item:${index}`] },
+  example: {
+    threadId: `thread:${index}`,
+    runId: `run:${index}`,
+    itemIds: [`item:${index}`],
+    scripts: steps.map(() => null),
+  },
 });
 
 it("renders the five costliest extraction candidates as a sub-table of the efficiency section", () => {

@@ -9,7 +9,7 @@ import * as NodePath from "node:path";
 
 import { digest } from "../digest.ts";
 import { COMMAND_CHARS, type FieldPath } from "../fields.ts";
-import { unwrapShell } from "./commandProgram.ts";
+import { programName, runsInlineScript, unwrapShell } from "./commandProgram.ts";
 import {
   type Measure,
   type MeasureInput,
@@ -54,6 +54,10 @@ const SEPARATOR = "\u0000";
 const QUOTED = /'[^']*'|"(?:[^"\\]|\\.)*"/g;
 const INTEGER = /^\d+$/;
 
+/** A script's step starts with this, and holds this many characters of its input's digest. */
+const SCRIPT = "script:";
+const SCRIPT_DIGEST_CHARS = 12;
+
 /** A path token: a word with a slash or a backslash in it. */
 const isPath = (token: string) => token.includes("/") || token.includes("\\");
 
@@ -80,23 +84,30 @@ export interface Shape {
 
 /**
  * A tool call's shape, or null for a call that is none: a file change, a web search, a file
- * search with no pattern, a command whose stored head may be cut short, or a call whose input is
- * not recorded (an event a compaction removed before migration 5 left no `input_digest`).
+ * search with no pattern, or a call whose input is not recorded (an event a compaction removed
+ * before migration 5 left no `input_digest`).
  *
  * A command is its command line out of its shell wrapper, split on whitespace, with quoted
  * strings as `<str>`, integers as `<n>` and paths under the project's directory made relative.
- * A dynamic tool with a pattern or a path is its name, its pattern, then its path; any other is
- * its name with its input's keys. A file search is `file_search:` and its pattern.
+ * A script is `script:<program>:` and the start of its input's digest instead: an interpreter
+ * running a script written into the command line, or any command line as long as the head the
+ * reactor keeps of it. A dynamic tool with a pattern or a path is its name, its pattern, then its
+ * path; any other is its name with its input's keys. A file search is `file_search:` and its
+ * pattern.
  */
 export const shapeOf = (call: ToolCallRow, directory: string | null): Shape | null => {
   if (call.input_digest === null) return null;
   switch (call.item_type) {
     case "command_execution": {
-      // The reactor keeps only a command line's first `COMMAND_CHARS` characters. A head at that
-      // length may be cut short, and shaping it could merge different commands into a step no
-      // script could run, so such a command is no shape. A command line that long is rarely the
-      // repeated work a script would take over.
-      if (call.command === null || call.command.length >= COMMAND_CHARS) return null;
+      if (call.command === null) return null;
+      // Quoted strings as `<str>` would make every `node -e '...'` one step, and the reactor keeps
+      // only a command line's first `COMMAND_CHARS` characters, so a head that long may be cut
+      // short. Such a command matches only the same input, by its digest.
+      if (call.command.length >= COMMAND_CHARS || runsInlineScript(call.command)) {
+        const program = programName(call.command) ?? "unknown";
+        const step = `${SCRIPT}${program}:${call.input_digest.slice(0, SCRIPT_DIGEST_CHARS)}`;
+        return { exact: step, slot: step };
+      }
       const tokens = unwrapShell(call.command)
         .replace(QUOTED, "<str>")
         .split(/\s+/)
@@ -347,6 +358,9 @@ const candidateOf = (window: Found, fixed: boolean): TelemetryExtractionCandidat
       threadId: example.run.threadId,
       runId: example.run.runId,
       itemIds: stepsAt(example, length).map((step) => step.call.item_id),
+      scripts: stepsAt(example, length).map((step) =>
+        step.exact.startsWith(SCRIPT) ? step.call.command : null,
+      ),
     },
   };
 };
