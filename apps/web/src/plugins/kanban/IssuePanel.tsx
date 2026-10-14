@@ -676,8 +676,6 @@ function LogRow({ entry }: { readonly entry: KanbanLogEntry }) {
           <>reopened: {entry.text === "defect" ? "the work was wrong" : "the ask changed"}</>
         ) : entry.kind === "criterion" ? (
           <>criterion {entry.text}</>
-        ) : entry.kind === "finding" ? (
-          <>finding {entry.text}</>
         ) : (
           entry.text
         )}

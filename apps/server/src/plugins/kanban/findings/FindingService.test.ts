@@ -153,7 +153,10 @@ describe("FindingService", () => {
         threadId: finder,
         review: null,
       });
-      assert.strictEqual(holder.log.at(-1)?.kind, "finding");
+      assert.deepStrictEqual(
+        [holder.log.at(-1)?.kind, holder.log.at(-1)?.text.startsWith("finding ")],
+        ["note", true],
+      );
 
       const opened = yield* capture((yield* search(finder)).searchId);
       const board = yield* store.board(projectId);
@@ -237,11 +240,13 @@ describe("FindingService", () => {
       const issue = yield* store.getIssue({ projectId, id: issueId });
       assert.deepStrictEqual(issue.findings, [reopened.finding]);
       assert.deepStrictEqual(
-        issue.log.filter((entry) => entry.kind === "finding").map((entry) => entry.text),
+        issue.log
+          .filter((entry) => entry.kind === "note" && entry.text.startsWith("finding "))
+          .map((entry) => entry.text),
         [
-          `${finding.id} added: ${finding.title}`,
-          `${finding.id} rejected: user says so`,
-          `${finding.id} open: thread:${other} says so`,
+          `finding ${finding.id} added: ${finding.title}`,
+          `finding ${finding.id} rejected: user says so`,
+          `finding ${finding.id} open: thread:${other} says so`,
         ],
       );
     }).pipe(Effect.provide(layerTest)),
@@ -350,7 +355,7 @@ describe("FindingService", () => {
       assert.deepStrictEqual((yield* store.getIssue({ projectId, id: right })).findings, [finding]);
       assert.strictEqual(
         (yield* store.getIssue({ projectId, id: wrong })).log.at(-1)?.text,
-        `${finding.id} moved to ${right}`,
+        `finding ${finding.id} moved to ${right}`,
       );
       assert.include(
         yield* failure(findings.move({ projectId, id: finding.id, issueId: right }, "user")),
