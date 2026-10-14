@@ -24,22 +24,32 @@ const issue = {
   archivedAt: null,
   log: [],
 };
-const decision = (category: string, stance: "for" | "against") => ({
+const decision = (category: string, state: "accepted" | "superseded") => ({
   category,
-  id: `${category}-${stance}`,
-  stance,
+  id: `${category}-${state}`,
+  state,
   title: "Some call",
   why: "A long justification that must not reach the prompt.",
+  alternatives: [],
+  reconsiderWhen: null,
+  supersedes: [],
+  supersededBy: null,
   issues: [issue.id],
+  threads: [],
   by: "user",
   at: "2026-10-12T00:00:00.000Z",
+  revisions: [],
 });
 
 describe("buildIssuePrompt", () => {
   it("indexes decisions by category without pasting their bodies", () => {
     const prompt = buildIssuePrompt(
       issue,
-      [decision("auth", "for"), decision("auth", "against"), decision("general", "for")],
+      [
+        decision("auth", "accepted"),
+        decision("auth", "superseded"),
+        decision("general", "accepted"),
+      ],
       [
         { category: "auth", count: 12 },
         { category: "general", count: 7 },
@@ -47,7 +57,7 @@ describe("buildIssuePrompt", () => {
     );
     expect(prompt.startsWith("Fix login redirect\n\nLoops on an expired cookie.")).toBe(true);
     expect(prompt).toContain(
-      "Decisions on this ticket (3): auth: for 1, against 1; general: for 1, against 0",
+      "Decisions on this ticket (3): auth: accepted 1, superseded 1; general: accepted 1",
     );
     expect(prompt).toContain("Decision categories: auth (12), general (7)");
     expect(prompt).toContain("kanban_list kind=decision issue=fix-login-redirect");
@@ -86,6 +96,7 @@ describe("attentionResumeTarget", () => {
     projectId: ProjectId.make("project-1"),
   };
   const row = (target: "thread" | "board" | "settings", threadId: string | null = null) => ({
+    kind: "two_writers" as const,
     resumeAction: { label: "Go", target },
     threadId: threadId === null ? null : ThreadId.make(threadId),
   });
@@ -105,7 +116,34 @@ describe("attentionResumeTarget", () => {
     expect(attentionResumeTarget(row("board"), board)).toEqual({ to: "/board", search: board });
   });
 
+  it("opens the board's decisions view for a conflicted decision", () => {
+    expect(attentionResumeTarget({ ...row("board"), kind: "decision_conflict" }, board)).toEqual({
+      to: "/board",
+      search: { ...board, view: "decisions" },
+    });
+  });
+
   it("has nowhere to go for a thread action without a thread", () => {
     expect(attentionResumeTarget(row("thread"), board)).toBeNull();
+  });
+
+  it("opens a plugin's screen on the board's environment, with the tab and record named", () => {
+    const plugin = (patch: { readonly tab?: string; readonly recordId?: string }) =>
+      ({
+        kind: "budget_breach",
+        resumeAction: { label: "Open item", target: "plugin", pluginId: "learning", ...patch },
+        threadId: ThreadId.make("thread-1"),
+      }) as const;
+    expect(attentionResumeTarget(plugin({ tab: "items", recordId: "12" }), board)).toEqual({
+      to: "/plugins/$pluginId",
+      params: { pluginId: "learning" },
+      search: { machine: "remote", tab: "items", recordId: "12" },
+    });
+    // Without a tab or record the screen opens as it would from the sidebar.
+    expect(attentionResumeTarget(plugin({}), board)).toStrictEqual({
+      to: "/plugins/$pluginId",
+      params: { pluginId: "learning" },
+      search: { machine: "remote" },
+    });
   });
 });

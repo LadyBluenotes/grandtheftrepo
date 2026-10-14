@@ -11,9 +11,10 @@ directories and never edit an upstream file. Upstream is merged nightly by
 - `packages/contracts/src/plugins/` holds each plugin's schemas and method definitions.
 - `apps/web/src/plugins/` holds each plugin's screens.
   A plugin with a screen is registered in `apps/web/src/plugins/registry.ts` and reached at
-  `/plugins/<id>`; every plugin is listed, with an on/off switch, at `/plugins`. That page shows
-  the primary environment, or the one its `machine` search names; settings panels read
-  `usePluginEnvironmentId` so they follow it.
+  `/plugins/<id>`; every plugin is listed, with an on/off switch, at `/plugins`. Both show the
+  primary environment, or the one their `machine` search names; screens and settings panels read
+  `usePluginEnvironmentId` so they follow it. A screen keeps its tab and open record in the URL
+  (`tab` and `recordId`, through `usePluginScreenSearch`), so a link can open the thing it is about.
 
 Enabled state is `plugins.json` under the server state directory. A missing entry means enabled.
 Changes apply on the next server start.
@@ -37,7 +38,10 @@ with `Attention.clear` once the cause is gone. Flags live in the host's `attenti
 same file, so any plugin can raise one without depending on the plugin that shows them. The strip
 above the kanban board and a project's weekly report list a flag whose key is not a thread when the
 key ends in `:<projectId>`, has the project id between colons, or starts with `policy:*:`
-(`plugins/attentionKeys.ts`); a flag keyed by none of these is on no board and in no report.
+(`plugins/attentionKeys.ts`); a flag keyed by none of these is on no board and in no report. A
+flag's resume action leads to its thread, the board, the Plugins page, or a plugin's screen with an
+optional tab and record (`AttentionResumeAction`); mobile has no plugin screens, so there a row
+with a plugin target stays on the board.
 
 A plugin says what it needs to do its work through `ServerPlugin.readiness`: checks, each `ready`,
 `attention` or `off`, with one sentence and where a person fixes it. `PluginHost.readiness` runs
@@ -110,7 +114,10 @@ them half-evaluated. The host hands `toolkitRegistration` to `ServerPlugin.mcp` 
   Its own database, `plugins/kanban.sqlite`, holds the emergency stop (`StopGate`, which anything
   that starts a thread must ask first; the spec drafting thread is the one launch that asks so far)
   and spec attempts. The `writers` sweep raises an attention flag when two agents write one
-  project. `kanban.attention.list` feeds the strip above the board from the project's open host
+  project, and the `decisions` sweep one per conflicted decision, keyed
+  `decision:<projectId>:<category>/<id>`; it sees only projects the store has loaded, so a flag on
+  one not loaded since the server started stays until the store next loads it.
+  `kanban.attention.list` feeds the strip above the board from the project's open host
   flags, its threads' pending questions and permission requests, and, while routing runs, its
   routing mismatches. `kanban.ticket.specify` (MCP `kanban_ticket_specify`) checks a Triage or
   Inbox issue's description against the Goal, Approach and Acceptance format, or starts a plan-mode
@@ -167,11 +174,13 @@ them half-evaluated. The host hands `toolkitRegistration` to `ServerPlugin.mcp` 
   and the report five; nothing writes to the repo. A shape needs more than the earlier columns, so
   migration 5 adds each call's provider turn, which groups a subagent's calls with no run, its
   search pattern, a dynamic tool's input keys, and the input's size and sha256, never the input,
-  and replays the log; a call a compaction removed before then has no shape, and neither does a
-  command line as long as the 512 characters kept of it. Absolute paths that resolve under the
-  project's directory, which `MeasureService` reads from `ProjectService` when it is built, are
-  made relative to it. Neither measure reads a tier; the share is a rate the regression sweep
-  compares, the count a volume it does not.
+  and replays the log; a call a compaction removed before then has no shape. A command's shape
+  puts quoted strings as `<str>`, and only 512 characters of a command line are kept, so an
+  interpreter's inline script (`node -e`, `python3 -c`, a heredoc) and any command line that long
+  are shaped by that sha256 instead, `script:<program>:<digest prefix>`, and a candidate's example names the stored calls, never their text. Absolute paths that resolve under the project's
+  directory, which `MeasureService` reads from `ProjectService` when it is built, are made relative
+  to it. Neither measure reads a tier; the share is a rate the regression sweep compares, the count
+  a volume it does not.
   `telemetry.report` and the `telemetry_report` MCP tool fold a project's range
   into ten sections, from the thread records, the learning and review plugins and the host's
   attention flags, with the same report as one self-contained HTML page; at start the plugin gives
@@ -196,8 +205,14 @@ them half-evaluated. The host hands `toolkitRegistration` to `ServerPlugin.mcp` 
   `packages/contracts/src/plugins/routing.ts`. Web: `apps/web/src/plugins/routing/`.
 - **learning**: a record of corrections, visible instances of work going wrong, taken from
   events the server already emits: failed or interrupted provider turns, pull request wakes
-  while changes are requested, and threads reopened after settlement. Agents read and add
-  them over MCP. Two sweeps turn corrections with a declared failure mode into learning items, one
+  while changes are requested, and threads reopened after settlement. `KanbanStore.write` also
+  records a done ticket it reopens, on the thread linked to it last, through
+  `producers/ticketReopens.ts` and `Effect.serviceOption`, so a reopen while learning is off
+  records nothing. A ticket can link any thread id, so the reopen is recorded only when the core's
+  thread shell places that thread in the ticket's project. Agents read and add them over MCP. A correction declares a failure mode only
+  when its source names the cause: a review verdict, a person, the security scan (`security`) or a
+  reopened ticket (`defect` for a defect, `unclear_spec` for a scope change); a provider failure
+  never does. Two sweeps turn corrections with a declared failure mode into learning items, one
   per mode per project, routed by fixed rules on the mode to an owner kind, and hand each item
   over through one promotion record, at least once, keyed by the record's id so a promoter can
   drop a repeat. The plugin registers the promoters for `project_knowledge`, `policy` and `prompt`
@@ -225,7 +240,7 @@ them half-evaluated. The host hands `toolkitRegistration` to `ServerPlugin.mcp` 
   after the delivery answers the flag, so none is raised, and the next tick clears one that is
   open; the sweep never closes or reroutes an item, and never judges `local_only`. Server:
   `apps/server/src/plugins/learning/`. Contracts:
-  `packages/contracts/src/plugins/learning.ts`. Web: `apps/web/src/plugins/learning/`, the Learning screen at `/plugins/learning` with the items, corrections and reviews of a project.
+  `packages/contracts/src/plugins/learning.ts`. Web: `apps/web/src/plugins/learning/`, the Learning screen at `/plugins/learning` with the items, corrections and reviews of a project; `recordId` opens an item.
 - **policy**: reviewed working rules per project (`*` is the whole environment), versioned in the
   plugin's database and rendered as one marked block each, with `<state dir>/RULES.md` ahead of
   the body, into the instruction file each agent reads from the user's home. Verify re-reads the
@@ -267,8 +282,8 @@ them half-evaluated. The host hands `toolkitRegistration` to `ServerPlugin.mcp` 
   is the completion gate a ticket asks before it finishes; nothing calls it yet. The plugin's
   reactor tests the lines each root-run turn adds against six fixed patterns unless the project's
   security mode is `off`, and the `review/security` sweep records each finding as a `security`
-  correction, because a reactor sees only its own plugin's services; in `block` a finding refuses
-  `review.request`, verdicts and `ReviewGate.check`, holds back the invalidation sweep's
+  correction declaring the `security` mode, because a reactor sees only its own plugin's
+  services; in `block` a finding refuses `review.request`, verdicts and `ReviewGate.check`, holds back the invalidation sweep's
   replacement request and keeps a `security_hold` flag until `review.security.ack`. The same sweep calls the reactor's
   `retryFailed` each tick and settles an event the reactor gave up on as a scan row, with a
   `scan_failed` finding in `block`; in `block` a turn the scan cannot read, a stopped or failed

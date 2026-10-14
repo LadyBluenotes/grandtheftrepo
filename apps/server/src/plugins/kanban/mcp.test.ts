@@ -380,6 +380,78 @@ it.effect("registers kanban tools through the plugin host and files an issue ove
       expect(gone).toContain("The issue no longer exists.");
       expect(gone).not.toContain("The spec did not modify the issue.");
 
+      // Decisions: alternatives round-trip, a why is required, and agents supersede, not delete.
+      expect(
+        listedTools(tools).find((tool) => tool.name === "kanban_decisions")?.annotations,
+      ).toEqual(expect.objectContaining({ readOnlyHint: true }));
+      const call = (id: number, name: string, args: unknown) =>
+        rpc(id, "tools/call", { name, arguments: { projectId, ...(args as object) } }).pipe(
+          Effect.map(resultText),
+        );
+      expect(
+        yield* call(40, "kanban_write", { action: "decision.create", title: "No reason given" }),
+      ).toContain("why is required for decision.create");
+      const chosen = yield* call(41, "kanban_write", {
+        action: "decision.create",
+        category: "storage",
+        title: "Store state in SQLite",
+        why: "One file per environment.",
+        alternatives: [
+          {
+            title: "SQLite",
+            disposition: "chosen",
+            reason: "Already bundled.",
+            reasonKind: "contextual",
+          },
+          {
+            title: "Postgres",
+            disposition: "rejected",
+            reason: "Needs a server.",
+            reasonKind: "permanent",
+          },
+        ],
+        reconsiderWhen: "Machines share one environment.",
+      });
+      expect(chosen).toBe("store-state-in-sqlite");
+      const full = yield* call(42, "kanban_list", { kind: "decision", id: chosen });
+      expect(full).toContain("storage/store-state-in-sqlite · accepted · Store state in SQLite");
+      expect(full).toContain("- chosen (contextual): SQLite | Already bundled.");
+      expect(full).toContain("- rejected (permanent): Postgres | Needs a server.");
+      expect(full).toContain("reconsider when: Machines share one environment.");
+      expect(full).toContain("created: accepted");
+      const found = yield* call(43, "kanban_decisions", { query: "postgres" });
+      expect(found).toContain("- rejected (permanent): Postgres | Needs a server.");
+      expect(found).not.toContain("Revisions:");
+      expect(yield* call(44, "kanban_decisions", { query: "postgres", state: "rejected" })).toBe(
+        "No decisions match.",
+      );
+
+      yield* call(45, "kanban_write", {
+        action: "decision.create",
+        category: "storage",
+        title: "Store state in Postgres",
+        why: "Machines now share one environment.",
+      });
+      yield* call(46, "kanban_write", {
+        action: "decision.supersede",
+        category: "storage",
+        id: chosen,
+        by: "storage/store-state-in-postgres",
+      });
+      const old = yield* call(47, "kanban_list", { kind: "decision", id: chosen });
+      expect(old).toContain("storage/store-state-in-sqlite · superseded ·");
+      expect(old).toContain("superseded by: storage/store-state-in-postgres");
+      expect(
+        yield* call(48, "kanban_list", { kind: "decision", id: "store-state-in-postgres" }),
+      ).toContain("supersedes: storage/store-state-in-sqlite");
+      expect(
+        yield* call(49, "kanban_write", {
+          action: "decision.delete",
+          category: "storage",
+          id: "store-state-in-postgres",
+        }),
+      ).toContain("only a person deletes one");
+
       const fs = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
       const { baseDir } = yield* ServerConfig.ServerConfig;

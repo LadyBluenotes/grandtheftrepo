@@ -1,6 +1,7 @@
 import { assert, it } from "@effect/vitest";
 import type { TelemetryExtractionCandidate } from "@t3tools/contracts";
 
+import { digest } from "../digest.ts";
 import * as Fixtures from "../eventFixtures.ts";
 import { COMMAND_CHARS } from "../fields.ts";
 import { call, INSIDE, input, rowOf, run } from "./fixtures.ts";
@@ -24,9 +25,22 @@ const recorded = (overrides: Partial<ToolCallRow>): ToolCallRow => {
     ...row,
     input_digest:
       overrides.input_digest ??
-      JSON.stringify([row.item_type, row.command, row.pattern, row.path, row.input_keys]),
+      digest(JSON.stringify([row.item_type, row.command, row.pattern, row.path, row.input_keys])),
   };
 };
+
+/** The step of a script whose whole input is `input`. */
+const scriptStep = (program: string, input: string) =>
+  `script:${program}:${digest(input).slice(0, 12)}`;
+
+/** A 900-character Python script an agent writes out in a heredoc. */
+const HEREDOC = (() => {
+  const open = "cd /work/acme && python3 - <<'EOF'\nimport json, subprocess\n";
+  const close =
+    "\nlog = subprocess.run(['git', 'log', '-n', '20'], capture_output=True, text=True)" +
+    "\nprint(json.dumps(log.stdout.splitlines()))\nEOF";
+  return `${open}# ${"-".repeat(900 - open.length - close.length - 2)}${close}`;
+})();
 
 const sh = (command: string, overrides: Partial<ToolCallRow> = {}): Partial<ToolCallRow> => ({
   item_type: "command_execution",
@@ -151,16 +165,79 @@ it("keeps a path in a sibling directory whose name starts with the project's as 
   );
 });
 
-it("leaves a command longer than the stored head unshaped", () => {
+it("shapes a command as long as the stored head by its whole input's digest", () => {
   const long = `pnpm test ${"apps/web/src/components/".repeat(30)}`;
   assert.isAbove(long.length, COMMAND_CHARS);
   // The row the reactor stores for it, with the head cut at the cap.
   const row = rowOf({ ...Fixtures.commandItem, input: long });
   assert.strictEqual(row.command?.length, COMMAND_CHARS);
-  assert.isNull(shapeOf(row, DIRECTORY));
-  // One a character shorter than the cap is shaped.
+  const step = scriptStep("pnpm", long);
+  assert.deepEqual(shapeOf(row, DIRECTORY), { exact: step, slot: step });
+  // Another command with the same head is another step.
+  const longer = rowOf({ ...Fixtures.commandItem, input: `${long} --watch` });
+  assert.strictEqual(longer.command, row.command);
+  assert.strictEqual(shapeOf(longer, DIRECTORY)?.exact, scriptStep("pnpm", `${long} --watch`));
+  // One a character shorter than the cap is shaped by its words.
   const short = rowOf({ ...Fixtures.commandItem, input: long.slice(0, COMMAND_CHARS - 1) });
-  assert.isNotNull(shapeOf(short, DIRECTORY));
+  assert.match(shapeOf(short, DIRECTORY)?.slot ?? "", /^command:pnpm test <path>$/);
+});
+
+it("shapes each inline script by its digest, so three different node -e scripts are three steps", () => {
+  const shape = (command: string) => shapeOf(recorded(sh(command)), DIRECTORY);
+  const scripts = [
+    "node -e 'console.log(process.version)'",
+    `node -e "console.log(require('./package.json').name)"`,
+    "node -e 'process.exit(1)'",
+  ];
+  const shapes = scripts.map(shape);
+  assert.strictEqual(new Set(shapes.map((found) => found?.exact)).size, 3);
+  for (const found of shapes) {
+    assert.match(found?.exact ?? "", /^script:node:[0-9a-f]{12}$/);
+    assert.strictEqual(found?.slot, found?.exact);
+  }
+  // Inside a shell wrapper and as a heredoc, under the interpreter that runs it.
+  assert.match(shape(`/bin/bash -lc "python3 -c 'print(1)'"`)?.exact ?? "", /^script:python3:/);
+  assert.match(shape("python3 - <<'EOF'\nprint(1)\nEOF")?.exact ?? "", /^script:python3:/);
+  // A script file, and a shell's -c wrapper around any other command, keep their words.
+  assert.strictEqual(shape("node scripts/build.js")?.exact, "command:node scripts/build.js");
+  assert.strictEqual(shape("bash -lc 'git status'")?.exact, "command:git status");
+
+  // One in each of three threads: no candidate, where `node -e <str>` used to be one.
+  const window = windowOf(scripts.flatMap((script, index) => inThread(index + 1, sh(script))));
+  assert.deepEqual([extractionCandidates(window).state, candidatesOf(window)], ["ok", []]);
+});
+
+it("finds the same 900-character heredoc script in three threads as one script candidate", () => {
+  assert.strictEqual(HEREDOC.length, 900);
+  // The row the reactor stores for it: the head, the size and the digest of the whole script.
+  // No column holds the script past its head.
+  const stored = rowOf({ ...Fixtures.commandItem, input: HEREDOC });
+  assert.strictEqual(stored.command, HEREDOC.slice(0, COMMAND_CHARS));
+  const past = HEREDOC.slice(COMMAND_CHARS);
+  for (const value of Object.values(stored)) {
+    if (typeof value === "string") assert.notInclude(value, past);
+  }
+  const script = sh(stored.command ?? "", {
+    input_digest: stored.input_digest,
+    input_tokens: stored.input_tokens,
+  });
+  const candidates = candidatesOf(windowOf([1, 2, 3].flatMap((n) => inThread(n, script))));
+  assert.deepEqual(candidates.map(summary), [
+    {
+      kind: "step",
+      steps: [scriptStep("python3", HEREDOC)],
+      threads: 3,
+      occurrences: 3,
+      form: "script",
+    },
+  ]);
+  assert.strictEqual(candidates[0]?.deterministicRatio, 1);
+  // Its example names the stored calls; no read returns a script's text.
+  assert.deepEqual(Object.keys(candidates[0]?.example ?? {}).sort(), [
+    "itemIds",
+    "runId",
+    "threadId",
+  ]);
 });
 
 it("shapes a dynamic tool by its pattern and relative path, or else by its input's keys", () => {
@@ -294,8 +371,6 @@ it("names reads of the same two files that open three threads a context file", (
     ),
   );
   assert.deepEqual(candidates.map(summary), [
-    // Every read, whichever file: one tool could hand over what they gather.
-    { kind: "step", steps: ["Read <path>"], threads: 3, occurrences: 6, form: "mcp_tool" },
     {
       kind: "procedure",
       steps: ["Read AGENTS.md", "Read docs/fork.md"],
@@ -306,24 +381,70 @@ it("names reads of the same two files that open three threads a context file", (
   ]);
 });
 
-it("names Grep with a different pattern in each of three threads one varying mcp_tool candidate", () => {
+it("names Grep then Read with a different pattern and file in each of three threads one varying mcp_tool procedure", () => {
+  const hooks = ["useEffect", "useMemo", "useState"];
   const candidates = candidatesOf(
     windowOf(
-      ["useEffect", "useMemo", "useState"].flatMap((pattern, index) =>
-        inThread(index + 1, grepOf(pattern, "/work/acme/src")),
+      hooks.flatMap((pattern, index) =>
+        inThread(
+          index + 1,
+          grepOf(pattern, "/work/acme/src"),
+          readOf(`/work/acme/src/${pattern}.ts`),
+        ),
       ),
     ),
   );
   assert.deepEqual(candidates.map(summary), [
     {
-      kind: "step",
-      steps: ["Grep <pattern> <path>"],
+      kind: "procedure",
+      steps: ["Grep <pattern> <path>", "Read <path>"],
       threads: 3,
       occurrences: 3,
       form: "mcp_tool",
     },
   ]);
   assert.closeTo(candidates[0]?.deterministicRatio ?? 0, 1 / 3, 0.01);
+
+  // Grep alone is one call whose pattern the agent chose each time: nothing to extract.
+  const alone = windowOf(
+    hooks.flatMap((pattern, index) => inThread(index + 1, grepOf(pattern, "/work/acme/src"))),
+  );
+  assert.deepEqual(
+    [extractionCandidates(alone).value, deterministicWorkShare(alone).value],
+    [0, 0],
+  );
+});
+
+it("lists a two-step procedure and none of the reads of different files around it", () => {
+  const window = windowOf(
+    [1, 2, 3, 4, 5, 6].flatMap((n) =>
+      inThread(
+        n,
+        // Reads back to back, then an edit, which is no step, so the last read sits right
+        // before the procedure.
+        ...["a", "b", "c"].map((file) => ({
+          ...readOf(`/work/acme/src/${n}/${file}.ts`),
+          output_tokens: 500,
+        })),
+        edited(`/work/acme/src/${n}/a.ts`),
+        // The first three threads then run the procedure.
+        ...(n <= 3 ? [sh("pnpm lint"), sh("pnpm test")] : []),
+      ),
+    ),
+  );
+  // `Read <path>` alone, twice or three times in a row, or three reads then the procedure, would
+  // each cost more than the procedure, but in none do two different steps change.
+  assert.deepEqual(candidatesOf(window).map(summary), [
+    {
+      kind: "procedure",
+      steps: ["command:pnpm lint", "command:pnpm test"],
+      threads: 3,
+      occurrences: 3,
+      form: "script",
+    },
+  ]);
+  // The procedure's 660 tokens over every call's 9,840: the 18 reads' 9,180 and its own.
+  assert.strictEqual(deterministicWorkShare(window).value, 660 / 9840);
 });
 
 it("names a command run once a day on five days a scheduled task, and not when two share a day", () => {
@@ -438,12 +559,12 @@ it("answers unavailable for an empty window and for one of two threads", () => {
 });
 
 it("lists the first candidates for the MCP tool, or none with the reason", () => {
-  const window = windowOf(
-    [1, 2, 3].flatMap((n) =>
-      inThread(n, readOf("/work/acme/AGENTS.md"), readOf("/work/acme/docs/fork.md")),
-    ),
-  );
+  const window = windowOf([
+    ...[1, 2, 3].flatMap((n) => inThread(n, sh("pnpm lint"), sh("pnpm test"))),
+    ...inThread(4, sh("pnpm lint")),
+  ]);
   const measures = [extractionCandidates(window)];
+  assert.strictEqual(candidatesOf(window).length, 2);
   assert.deepEqual(extractionCandidatesOf(measures, 1), {
     candidates: candidatesOf(window).slice(0, 1),
     missingReason: null,

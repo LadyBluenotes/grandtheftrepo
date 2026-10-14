@@ -1,6 +1,6 @@
 import { Link } from "@tanstack/react-router";
 import type { LucideIcon } from "lucide-react";
-import type { ReactNode } from "react";
+import { useContext, type ReactNode } from "react";
 
 import { ScrollArea } from "~/components/ui/scroll-area";
 import { SidebarInset } from "~/components/ui/sidebar";
@@ -13,6 +13,7 @@ import {
 import { WorkspacePageContainer } from "~/components/WorkspacePageContainer";
 import { WorkspacePageHeader } from "~/components/WorkspacePageHeader";
 import { isElectron } from "~/env";
+import { PluginEnvironmentContext } from "./pluginState";
 
 export interface PluginDetailTab<Id extends string> {
   readonly id: Id;
@@ -35,13 +36,16 @@ export function PluginDetailShell<Id extends string>({
   readonly onTabChange: (tab: Id) => void;
   readonly children: ReactNode;
 }) {
+  const environmentId = useContext(PluginEnvironmentContext);
   return (
     <SidebarInset className="h-dvh min-h-0 overflow-hidden overscroll-y-none isolate">
       <div className="flex min-h-0 min-w-0 flex-1 flex-col bg-background text-foreground">
         <WorkspacePageHeader electron={isElectron}>
           <WorkspaceBreadcrumb ariaLabel={`${title} breadcrumb`} className="min-w-0">
             <WorkspaceBreadcrumbItem>
-              <Link to="/plugins">Plugins</Link>
+              <Link to="/plugins" search={environmentId === null ? {} : { machine: environmentId }}>
+                Plugins
+              </Link>
             </WorkspaceBreadcrumbItem>
             <WorkspaceBreadcrumbSeparator />
             <WorkspaceBreadcrumbItem current>

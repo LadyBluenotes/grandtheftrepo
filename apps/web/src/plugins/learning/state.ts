@@ -80,9 +80,42 @@ export function useLearningItems({ environmentId, projectId }: LearningScope) {
   return useEnvironmentQuery(learningItems({ environmentId, input: { projectId } }));
 }
 
-/** One item with its evidence and promotions; nothing while `id` is null. */
-export function useLearningItem(environmentId: EnvironmentId, id: number | null) {
-  return useEnvironmentQuery(id === null ? null : learningItem({ environmentId, input: { id } }));
+/** One item with its evidence and promotions; nothing while either argument is null. */
+export function useLearningItem(environmentId: EnvironmentId | null, id: number | null) {
+  return useEnvironmentQuery(
+    environmentId === null || id === null ? null : learningItem({ environmentId, input: { id } }),
+  );
+}
+
+/**
+ * The Learning screen's project: the one a person picked, else the environment's first (null),
+ * until an item the URL opens names its own. `followed` is the open item's project once loaded.
+ */
+export interface LearningProjectChoice {
+  readonly projectId: string | null;
+  readonly followed: string | undefined;
+}
+
+export const NO_PROJECT_CHOICE: LearningProjectChoice = { projectId: null, followed: undefined };
+
+/**
+ * The choice once the open item's project is known, or once it closes (`undefined`). Every item
+ * the URL opens, from a link or the browser's history, selects its project when it loads; a
+ * person's pick while it stays open is kept.
+ */
+export function followOpenItem(
+  choice: LearningProjectChoice,
+  itemProjectId: string | undefined,
+): LearningProjectChoice {
+  if (itemProjectId === choice.followed) return choice;
+  return { projectId: itemProjectId ?? choice.projectId, followed: itemProjectId };
+}
+
+/** The item a `/plugins/learning` link names by `recordId`, or null for anything but an item id. */
+export function learningItemId(recordId: string | undefined): number | null {
+  if (recordId === undefined || !/^\d+$/.test(recordId)) return null;
+  const id = Number(recordId);
+  return Number.isSafeInteger(id) && id > 0 ? id : null;
 }
 
 /** A project's corrections in `window`, every kind and mode; `filterCorrections` narrows them. */
@@ -186,6 +219,7 @@ export const DECLARED_MODES = [
   "missing_verification",
   "convention",
   "unclear_spec",
+  "security",
 ] as const satisfies ReadonlyArray<LearningDeclaredMode>;
 export const isDeclaredMode = oneOf(DECLARED_MODES);
 export const DECLARED_MODE_LABEL: Record<LearningDeclaredMode, string> = {
@@ -195,6 +229,7 @@ export const DECLARED_MODE_LABEL: Record<LearningDeclaredMode, string> = {
   missing_verification: "Missing verification",
   convention: "Convention",
   unclear_spec: "Unclear spec",
+  security: "Security",
 };
 
 export const PROMOTION_STATE_LABEL: Record<LearningPromotion["state"], string> = {
