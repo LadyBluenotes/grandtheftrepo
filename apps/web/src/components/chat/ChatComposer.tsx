@@ -4123,7 +4123,10 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         return;
       }
       if (item.type === "saved-prompt") {
-        void pickSavedPrompt(item, composerTargetKey(attachmentDraftTarget), (body) => {
+        const pickKey = attachmentTargetKey;
+        void pickSavedPrompt(item, pickKey, (body) => {
+          // The body loads asynchronously; a draft switched to meanwhile is not the one picked in.
+          if (attachmentTargetKeyRef.current !== pickKey) return false;
           const replacement = `${body} `;
           const replacementRangeEnd = extendReplacementRangeForTrailingSpace(
             snapshot.value,
