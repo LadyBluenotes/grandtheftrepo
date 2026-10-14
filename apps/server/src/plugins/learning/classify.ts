@@ -13,7 +13,9 @@ const PROVIDER_FAILURE_KINDS: ReadonlySet<LearningFailureKind> = new Set([
 
 /**
  * A correction's failure mode, or null when it stays `unclassified`, and why. Only the failure
- * kind and the declared mode decide it; the description is prose and never an input.
+ * kind and the declared mode decide it; the description is prose and never an input. A source
+ * declares a mode only when it names the cause: a review verdict, a security finding, a reopened
+ * ticket's reason, or a person.
  */
 export const classify = ({
   failureKind,
@@ -33,6 +35,8 @@ const OWNER_BY_MODE = {
   defect: "local_only",
   incomplete: "local_only",
   unclear_spec: "local_only",
+  // A finding that keeps coming back needs a working rule the agents read.
+  security: "policy",
 } as const satisfies Record<LearningDeclaredMode, LearningOwnerKind>;
 const RULES: ReadonlyMap<string, LearningOwnerKind> = new Map(Object.entries(OWNER_BY_MODE));
 
