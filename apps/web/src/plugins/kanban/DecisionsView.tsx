@@ -1,13 +1,11 @@
 import {
   KANBAN_DECISION_STATES,
   type EnvironmentId,
-  type KanbanDecision,
   type KanbanDecisionState,
   type ProjectId,
 } from "@t3tools/contracts";
-import { useState, type FormEvent, type ReactNode } from "react";
+import { useMemo, useState, type ReactNode } from "react";
 
-import { Badge } from "~/components/ui/badge";
 import { Button } from "~/components/ui/button";
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "~/components/ui/empty";
 import { Input } from "~/components/ui/input";
@@ -19,11 +17,13 @@ import {
   SelectTrigger,
   SelectValue,
 } from "~/components/ui/select";
-import { Textarea } from "~/components/ui/textarea";
+import { Toggle } from "~/components/ui/toggle";
 import { useEnvironmentQuery } from "~/state/query";
-import { useAtomCommand } from "~/state/use-atom-command";
-import { reportFailure } from "./BoardPage";
-import { kanbanDecisions, kanbanWrite } from "./state";
+import { DecisionDrawer, useOpenBoardIssue } from "./DecisionDrawer";
+import { DecisionForm } from "./DecisionForm";
+import { DecisionRow, type DecisionTarget } from "./DecisionRow";
+import { decisionRef, filterDecisions } from "./decisionList";
+import { kanbanDecisions } from "./state";
 
 type Categories = ReadonlyArray<{ readonly category: string; readonly count: number }>;
 
@@ -32,224 +32,13 @@ interface Scope {
   readonly projectId: ProjectId;
 }
 
-const NO_ISSUES: ReadonlyArray<string> = [];
+const isState = (value: unknown): value is KanbanDecisionState =>
+  KANBAN_DECISION_STATES.some((state) => state === value);
 
-/** The states a person picks; `superseded` comes only from superseding. */
-const PICKABLE_STATES = KANBAN_DECISION_STATES.filter((state) => state !== "superseded");
-const isPickable = (value: unknown): value is KanbanDecisionState =>
-  PICKABLE_STATES.some((state) => state === value);
-
-const STATE_BADGE = {
-  proposed: "info",
-  accepted: "success",
-  rejected: "error",
-  deferred: "secondary",
-  conflicted: "warning",
-  superseded: "outline",
-} as const satisfies Record<KanbanDecisionState, string>;
-
-const slugLike = (value: string) =>
-  value
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "");
-
-/** Create or edit one decision. Pass `decision` to edit it in place. */
-export function DecisionForm({
-  environmentId,
-  projectId,
-  categories,
-  decision,
-  initialIssues = NO_ISSUES,
-  onDone,
-}: Scope & {
-  readonly categories: Categories;
-  readonly decision?: KanbanDecision;
-  readonly initialIssues?: ReadonlyArray<string>;
-  readonly onDone: () => void;
-}) {
-  const write = useAtomCommand(kanbanWrite, { reportFailure: false });
-  const [category, setCategory] = useState(
-    decision?.category ?? categories[0]?.category ?? "general",
-  );
-  const [state, setState] = useState<KanbanDecisionState>(decision?.state ?? "accepted");
-  const [title, setTitle] = useState(decision?.title ?? "");
-  const [why, setWhy] = useState(decision?.why ?? "");
-  const [issues, setIssues] = useState((decision?.issues ?? initialIssues).join(", "));
-  const submit = async (event: FormEvent) => {
-    event.preventDefault();
-    const issueIds = issues
-      .split(",")
-      .map(slugLike)
-      .filter((id) => id.length > 0);
-    const base = { projectId, title: title.trim(), why: why.trim(), issues: issueIds };
-    let result = await write({
-      environmentId,
-      input:
-        decision === undefined
-          ? {
-              ...base,
-              action: "decision.create",
-              state,
-              category: slugLike(category) || "general",
-            }
-          : { ...base, action: "decision.update", category: decision.category, id: decision.id },
-    });
-    // A state change is its own write, so its revision says what it was.
-    if (result._tag === "Success" && decision !== undefined && state !== decision.state)
-      result = await write({
-        environmentId,
-        input: {
-          projectId,
-          action: "decision.setState",
-          category: decision.category,
-          id: decision.id,
-          state,
-        },
-      });
-    reportFailure("Could not save the decision", result);
-    if (result._tag === "Success") onDone();
-  };
-  return (
-    <form className="flex flex-col gap-2 rounded-lg border border-border p-3" onSubmit={submit}>
-      <div className="flex gap-2">
-        <Select
-          value={state}
-          onValueChange={(value) => (isPickable(value) ? setState(value) : undefined)}
-        >
-          <SelectTrigger size="sm" className="w-32 min-w-0" aria-label="State">
-            <SelectValue>{state}</SelectValue>
-          </SelectTrigger>
-          <SelectPopup>
-            {PICKABLE_STATES.map((option) => (
-              <SelectItem key={option} value={option}>
-                {option}
-              </SelectItem>
-            ))}
-          </SelectPopup>
-        </Select>
-        <Input
-          size="sm"
-          list="kanban-decision-categories"
-          value={category}
-          disabled={decision !== undefined}
-          placeholder="category"
-          aria-label="Category"
-          onChange={(event) => setCategory(event.target.value)}
-        />
-        <datalist id="kanban-decision-categories">
-          {categories.map((c) => (
-            <option key={c.category} value={c.category} />
-          ))}
-        </datalist>
-      </div>
-      <Input
-        size="sm"
-        autoFocus
-        value={title}
-        placeholder="What was decided"
-        aria-label="Decision"
-        onChange={(event) => setTitle(event.target.value)}
-      />
-      <Textarea
-        rows={3}
-        value={why}
-        placeholder="Why"
-        aria-label="Why"
-        onChange={(event) => setWhy(event.target.value)}
-      />
-      <Input
-        size="sm"
-        value={issues}
-        placeholder="Related issues, comma separated"
-        aria-label="Related issues"
-        onChange={(event) => setIssues(event.target.value)}
-      />
-      <div className="flex justify-end gap-2">
-        <Button type="button" size="xs" variant="ghost-muted" onClick={onDone}>
-          Cancel
-        </Button>
-        <Button type="submit" size="xs" disabled={title.trim().length === 0}>
-          Save
-        </Button>
-      </div>
-    </form>
-  );
-}
-
-export function DecisionRow({
-  environmentId,
-  projectId,
-  decision,
-  categories,
-  canWrite,
-}: Scope & {
-  readonly decision: KanbanDecision;
-  readonly categories: Categories;
-  readonly canWrite: boolean;
-}) {
-  const write = useAtomCommand(kanbanWrite, { reportFailure: false });
-  const [editing, setEditing] = useState(false);
-  if (editing)
-    return (
-      <li>
-        <DecisionForm
-          environmentId={environmentId}
-          projectId={projectId}
-          categories={categories}
-          decision={decision}
-          onDone={() => setEditing(false)}
-        />
-      </li>
-    );
-  return (
-    <li className="flex flex-col gap-1 rounded-lg border border-border/60 p-3 text-sm">
-      <div className="flex items-start gap-2">
-        <Badge size="sm" variant={STATE_BADGE[decision.state]}>
-          {decision.state}
-        </Badge>
-        <span className="min-w-0 flex-1 font-medium">{decision.title}</span>
-        {canWrite ? (
-          <>
-            <Button size="xs" variant="ghost-muted" onClick={() => setEditing(true)}>
-              Edit
-            </Button>
-            <Button
-              size="xs"
-              variant="ghost-destructive"
-              onClick={async () =>
-                reportFailure(
-                  "Could not delete the decision",
-                  await write({
-                    environmentId,
-                    input: {
-                      projectId,
-                      action: "decision.delete",
-                      category: decision.category,
-                      id: decision.id,
-                    },
-                  }),
-                )
-              }
-            >
-              Delete
-            </Button>
-          </>
-        ) : null}
-      </div>
-      {decision.why.length > 0 ? (
-        <p className="whitespace-pre-wrap text-muted-foreground">{decision.why}</p>
-      ) : null}
-      <p className="text-xs text-muted-foreground">
-        {decision.category} · {decision.by} · {new Date(decision.at).toLocaleString()}
-        {decision.issues.length > 0 ? ` · ${decision.issues.join(", ")}` : ""}
-        {decision.supersededBy === null ? "" : ` · superseded by ${decision.supersededBy}`}
-      </p>
-    </li>
-  );
-}
-
+/**
+ * The project's decisions, searchable and filtered by state and category; superseded ones stay
+ * hidden until asked for. A row opens the drawer with the decision in full.
+ */
 export function DecisionsView({
   environmentId,
   projectId,
@@ -266,24 +55,62 @@ export function DecisionsView({
   /** Picks the project whose decisions show, when the board covers more than one. */
   readonly projectSelect?: ReactNode;
 }) {
-  const decisions = useEnvironmentQuery(
-    kanbanDecisions({
-      environmentId,
-      input: { projectId, ...(category === undefined ? {} : { category }) },
-    }),
-  );
+  // Every decision of the project, so the drawer resolves any supersession link from this read.
+  const decisions = useEnvironmentQuery(kanbanDecisions({ environmentId, input: { projectId } }));
+  const [query, setQuery] = useState("");
+  const [state, setState] = useState<KanbanDecisionState | null>(null);
+  const [showSuperseded, setShowSuperseded] = useState(false);
   const [recording, setRecording] = useState(false);
-  const list = [...(decisions.data ?? [])].sort((a, b) => b.at.localeCompare(a.at));
+  const [target, setTarget] = useState<DecisionTarget | null>(null);
+  const openIssue = useOpenBoardIssue({ environmentId, projectId });
+  const all = decisions.data;
+  const list = useMemo(
+    () => filterDecisions(all ?? [], { query, state, category: category ?? null, showSuperseded }),
+    [all, query, state, category, showSuperseded],
+  );
+  // The superseded ones the search and category would show, so the hint never promises an empty list.
+  const superseded = filterDecisions(all ?? [], {
+    query,
+    state: "superseded",
+    category: category ?? null,
+    showSuperseded: true,
+  }).length;
   return (
     <ScrollArea className="min-h-0 flex-1">
       <div className="mx-auto flex w-full max-w-3xl flex-col gap-3 px-5 pt-4 pb-12 sm:px-6">
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           {projectSelect}
+          <Input
+            className="min-w-48 flex-1"
+            size="sm"
+            type="search"
+            autoFocus
+            value={query}
+            placeholder="Search title, why, alternatives"
+            aria-label="Search decisions"
+            onChange={(event) => setQuery(event.target.value)}
+          />
+          <Select
+            value={state ?? ""}
+            onValueChange={(value) => setState(isState(value) ? value : null)}
+          >
+            <SelectTrigger size="sm" className="w-36 min-w-0" aria-label="State">
+              <SelectValue>{state ?? "All states"}</SelectValue>
+            </SelectTrigger>
+            <SelectPopup>
+              <SelectItem value="">All states</SelectItem>
+              {KANBAN_DECISION_STATES.map((option) => (
+                <SelectItem key={option} value={option}>
+                  {option}
+                </SelectItem>
+              ))}
+            </SelectPopup>
+          </Select>
           <Select
             value={category ?? ""}
             onValueChange={(value) => onCategoryChange(value ? String(value) : undefined)}
           >
-            <SelectTrigger size="sm" className="w-56 min-w-0" aria-label="Category">
+            <SelectTrigger size="sm" className="w-44 min-w-0" aria-label="Category">
               <SelectValue>{category ?? "All categories"}</SelectValue>
             </SelectTrigger>
             <SelectPopup>
@@ -295,8 +122,17 @@ export function DecisionsView({
               ))}
             </SelectPopup>
           </Select>
+          <Toggle
+            size="sm"
+            variant="outline"
+            pressed={showSuperseded}
+            onPressedChange={setShowSuperseded}
+            aria-label="Show superseded decisions"
+          >
+            Superseded{superseded > 0 ? ` (${superseded})` : ""}
+          </Toggle>
           {canWrite ? (
-            <Button className="ml-auto" size="sm" onClick={() => setRecording((v) => !v)}>
+            <Button className="ms-auto" size="sm" onClick={() => setRecording((v) => !v)}>
               {recording ? "Cancel" : "Record decision"}
             </Button>
           ) : null}
@@ -305,34 +141,54 @@ export function DecisionsView({
           <DecisionForm
             environmentId={environmentId}
             projectId={projectId}
-            categories={categories}
             onDone={() => setRecording(false)}
           />
         ) : null}
-        {list.length === 0 && !recording ? (
+        {all === null || recording ? null : all.length === 0 ? (
           <Empty>
             <EmptyHeader>
               <EmptyTitle>No decisions yet</EmptyTitle>
               <EmptyDescription>
-                Record the calls you make and why, so the next agent inherits them.
+                Agents record a call they make with the <code>kanban_write</code> tool, with the
+                alternatives they weighed and the thread they decided in. Record one yourself with
+                Record decision, or from a card&apos;s panel.
+              </EmptyDescription>
+            </EmptyHeader>
+          </Empty>
+        ) : list.length === 0 ? (
+          <Empty>
+            <EmptyHeader>
+              <EmptyTitle>No decision matches</EmptyTitle>
+              <EmptyDescription>
+                {superseded > 0 && !showSuperseded && state === null
+                  ? `Clear a filter, or show the ${superseded} superseded.`
+                  : "Clear a filter or try other words."}
               </EmptyDescription>
             </EmptyHeader>
           </Empty>
         ) : (
-          <ul className="flex flex-col gap-2">
+          <ul className="flex flex-col gap-1.5">
             {list.map((decision) => (
               <DecisionRow
-                key={`${decision.category}:${decision.id}`}
+                key={decisionRef(decision)}
                 environmentId={environmentId}
                 projectId={projectId}
                 decision={decision}
-                categories={categories}
                 canWrite={canWrite}
+                onOpen={(editing) => setTarget({ ref: decisionRef(decision), editing })}
               />
             ))}
           </ul>
         )}
       </div>
+      <DecisionDrawer
+        environmentId={environmentId}
+        projectId={projectId}
+        target={target}
+        onTargetChange={setTarget}
+        canWrite={canWrite}
+        onOpenIssue={openIssue}
+      />
     </ScrollArea>
   );
 }

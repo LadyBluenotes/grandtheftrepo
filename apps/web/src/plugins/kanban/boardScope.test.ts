@@ -9,6 +9,7 @@ import {
   pickBoardProject,
   projectIdsByEnvironment,
   scopedBoardProjects,
+  subscribedBoards,
 } from "./boardScope";
 
 const local = EnvironmentId.make("env-local");
@@ -191,5 +192,23 @@ describe("decisionsCategory", () => {
       undefined,
     );
     expect(decisionsCategory({ category: "auth" }, here)).toBe(undefined);
+  });
+});
+
+describe("subscribedBoards", () => {
+  const all = scopedBoardProjects(groups, null, projects);
+  const shown = all.filter((p) => p.projectId === appHere.id);
+  const ref = (p: Project) => ({ environmentId: p.environmentId, projectId: p.id });
+
+  it("adds the open issue's project once, even outside the scope", () => {
+    expect(refs(subscribedBoards(shown, ref(notes)))).toEqual([
+      "env-local/app-here",
+      "env-local/notes",
+    ]);
+    expect(subscribedBoards(shown, ref(appHere))).toBe(shown);
+  });
+
+  it("subscribes to the shown boards only while no issue is open", () => {
+    expect(subscribedBoards(shown, null)).toBe(shown);
   });
 });

@@ -1114,6 +1114,75 @@ it.layer(layerTest)("KanbanStore decisions", (it) => {
       assert.deepStrictEqual(yield* search("postgres"), []);
     }),
   );
+
+  it.effect("lists the decisions linked to a thread, the one an agent decided in included", () =>
+    Effect.gen(function* () {
+      const store = yield* KanbanStore.KanbanStore;
+      const here = ThreadId.make("thr_here");
+      const elsewhere = ThreadId.make("thr_elsewhere");
+      const { id: made } = yield* store.write(projectId, `thread:${here}`, {
+        action: "decision.create",
+        category: "linked",
+        title: "Made in the thread",
+        why: "The agent decided it there.",
+      });
+      const { id: applied } = yield* store.write(projectId, "user", {
+        action: "decision.create",
+        category: "linked",
+        title: "Applied in the thread",
+        threads: [elsewhere, here],
+      });
+      yield* store.write(projectId, "user", {
+        action: "decision.create",
+        category: "linked",
+        title: "Elsewhere only",
+        threads: [elsewhere],
+      });
+      const linked = (thread: ThreadId) =>
+        Effect.map(store.listDecisions({ projectId, category: "linked", thread }), (found) =>
+          found.map((d) => d.id).sort(),
+        );
+      assert.deepStrictEqual(yield* linked(here), [applied, made].sort());
+
+      // Unlinking the thread takes the decision off its count.
+      yield* store.write(projectId, "user", {
+        action: "decision.update",
+        category: "linked",
+        id: applied,
+        threads: [elsewhere],
+      });
+      assert.deepStrictEqual(yield* linked(here), [made]);
+      assert.strictEqual((yield* linked(elsewhere)).length, 2);
+    }),
+  );
+});
+
+it.layer(layerTest)("KanbanStore without a board", (it) => {
+  it.effect("answers no decisions and creates no folder until the board is used", () =>
+    Effect.gen(function* () {
+      const store = yield* KanbanStore.KanbanStore;
+      const fs = yield* FileSystem.FileSystem;
+      const thread = ThreadId.make("thr_first");
+      const directory = yield* store.directory(projectId);
+
+      assert.deepStrictEqual(yield* store.listDecisions({ projectId, thread }), []);
+      assert.isFalse(yield* fs.exists(directory));
+      // A folder that exists without the board's `issues/` marker is no board yet either.
+      yield* fs.makeDirectory(directory, { recursive: true });
+      assert.deepStrictEqual(yield* store.listDecisions({ projectId, thread }), []);
+      assert.deepStrictEqual(yield* fs.readDirectory(directory), []);
+
+      yield* store.write(projectId, `thread:${thread}`, {
+        action: "decision.create",
+        title: "First call",
+        why: "Someone had to.",
+      });
+      assert.deepStrictEqual(
+        (yield* store.listDecisions({ projectId, thread })).map((d) => d.id),
+        ["first-call"],
+      );
+    }),
+  );
 });
 
 /** The store over the real file system, except that writing a file named in `failing` fails. */
@@ -1341,7 +1410,7 @@ describe("boardFolders", () => {
     Effect.map(FileSystem.FileSystem, (real): FileSystem.FileSystem => ({
       ...real,
       exists: (path) =>
-        path.endsWith("other-repo")
+        path.includes("other-repo")
           ? Effect.fail(
               PlatformError.systemError({
                 _tag: "PermissionDenied",
@@ -1367,8 +1436,11 @@ describe("boardFolders", () => {
         { projectId, directory: path.join(baseDir, "wiki", "grand-theft-repo"), board: false },
         { projectId: otherId, directory: path.join(baseDir, "wiki", "other-repo"), board: false },
       ]);
-      // A folder another client or the user made counts before anything loads it.
+      // The project folder alone is no board; an `issues/` folder another client or the user made
+      // is one before anything loads it.
       yield* fs.makeDirectory(path.join(baseDir, "wiki", "other-repo"), { recursive: true });
+      assert.deepEqual(yield* withBoard(store, [otherId]), []);
+      yield* fs.makeDirectory(path.join(baseDir, "wiki", "other-repo", "issues"));
       assert.deepEqual(yield* withBoard(store, [projectId, otherId, gone]), [otherId]);
       assert.isFalse(yield* fs.exists(path.join(baseDir, "wiki", "grand-theft-repo")));
 

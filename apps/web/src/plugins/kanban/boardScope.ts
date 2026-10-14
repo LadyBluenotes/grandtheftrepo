@@ -111,6 +111,27 @@ export function boardFolder(
     ?.folders?.find((folder) => folder.projectId === ref.projectId);
 }
 
+/**
+ * The boards the page subscribes to: every shown board, and, while an issue is open, its project's,
+ * which the URL can name outside the scope, so its panel has the project's categories and tickets.
+ */
+export function subscribedBoards(
+  shown: ReadonlyArray<BoardProject>,
+  openIssueProject: ScopedProjectRef | null,
+): ReadonlyArray<ScopedProjectRef> {
+  return openIssueProject === null ||
+    shown.some(
+      (project) =>
+        project.environmentId === openIssueProject.environmentId &&
+        project.projectId === openIssueProject.projectId,
+    )
+    ? shown
+    : [
+        ...shown,
+        { environmentId: openIssueProject.environmentId, projectId: openIssueProject.projectId },
+      ];
+}
+
 /** The first of `preferred` that is one of `options`, else the first option; null without any. */
 export function pickBoardProject(
   options: ReadonlyArray<BoardProject>,

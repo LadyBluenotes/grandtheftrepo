@@ -405,9 +405,18 @@ const make = Effect.gen(function* () {
     });
 
   /**
-   * The project's board folder and whether the board is there: loaded, or its folder on disk;
-   * null for a project that is gone. Nothing is created or loaded. Only a missing folder means no
-   * board; a folder that cannot be inspected fails.
+   * Whether a board is in `directory`: its `issues/` or `decisions/` folder exists; the project
+   * folder alone is no board. A folder that cannot be inspected fails.
+   */
+  const boardAt = (directory: string) =>
+    Effect.forEach(["issues", "decisions"], (name) => fs.exists(path.join(directory, name))).pipe(
+      Effect.map((found) => found.includes(true)),
+      Effect.catch(io(`Could not inspect ${directory}.`)),
+    );
+
+  /**
+   * The project's board folder and whether the board is there: loaded, or `boardAt` its folder;
+   * null for a project that is gone. Nothing is created or loaded.
    */
   const folderOf = (
     projectId: ProjectId,
@@ -423,10 +432,7 @@ const make = Effect.gen(function* () {
             if (state !== undefined)
               return Effect.succeed({ projectId, directory: state.directory, board: true });
             const { directory } = directoryOf(projectId, project.title, overrides);
-            return fs.exists(directory).pipe(
-              Effect.map((board) => ({ projectId, directory, board })),
-              Effect.catch(io(`Could not inspect ${directory}.`)),
-            );
+            return Effect.map(boardAt(directory), (board) => ({ projectId, directory, board }));
           },
         }),
       ),
@@ -462,6 +468,20 @@ const make = Effect.gen(function* () {
         return state;
       }),
     );
+  });
+
+  /**
+   * The project's state when it has a board: loaded already, or its `issues/` or `decisions/`
+   * folder exists; the project folder alone is no board. Null when it has none, and nothing is
+   * created, so a read for any project's thread leaves no folder behind.
+   */
+  const loadExisting = Effect.fn("KanbanStore.loadExisting")(function* (projectId: ProjectId) {
+    if (!loaded.has(projectId)) {
+      const { directory } = yield* resolveDirectory(projectId);
+      // Best effort: a folder that cannot be inspected counts as no board here.
+      if (!(yield* boardAt(directory).pipe(Effect.orElseSucceed(() => false)))) return null;
+    }
+    return yield* load(projectId);
   });
 
   const summary = ({
@@ -1023,13 +1043,8 @@ const make = Effect.gen(function* () {
   const advance: KanbanStore["Service"]["advance"] = Effect.fn("KanbanStore.advance")(
     function* (projectId, threadId, status) {
       // Thread events arrive for every project; only one with a board folder is worth loading.
-      // Best effort: one whose folder cannot be inspected is skipped like one without a board.
-      if (
-        !loaded.has(projectId) &&
-        !(yield* hasBoard(projectId, yield* readOverrides).pipe(Effect.orElseSucceed(() => false)))
-      )
-        return;
-      const state = yield* load(projectId);
+      const state = yield* loadExisting(projectId);
+      if (state === null) return;
       const linked = Array.from(state.issues.values()).filter(
         (issue) =>
           issue.threads.some((link) => link.id === threadId) &&
@@ -1161,14 +1176,17 @@ const make = Effect.gen(function* () {
           ? Effect.fail(notFound(`No issue "${id}".`))
           : Effect.succeed(issue);
       }),
-    listDecisions: ({ projectId, category, issue, state: wanted, query }) =>
-      Effect.map(load(projectId), (state) => {
+    // A project without a board has no decisions; reading them never creates its folder.
+    listDecisions: ({ projectId, category, issue, thread, state: wanted, query }) =>
+      Effect.map(loadExisting(projectId), (state) => {
+        if (state === null) return [];
         const listed = Array.from(state.decisions.values())
           .flat()
           .filter(
             (d) =>
               (category === undefined || d.category === category) &&
               (issue === undefined || d.issues.includes(issue)) &&
+              (thread === undefined || d.threads.includes(thread)) &&
               (wanted === undefined || d.state === wanted),
           );
         return query === undefined ? listed : search(listed, query);

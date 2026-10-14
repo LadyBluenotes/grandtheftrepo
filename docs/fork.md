@@ -76,11 +76,16 @@ resolved by keeping the line.
 | `apps/web/src/routes/_chat.board.tsx`                        | the kanban board's own route; a new plugin screen uses `/plugins/<id>` through the registry instead                                                                 |
 | `apps/web/src/components/sidebar/mainAppLocation.ts`         | `/board` and the `/plugins` paths in `isSidebarUtilityPage`                                                                                                         |
 | `apps/web/src/components/sidebar/SidebarChrome.tsx`          | the board's `SidebarUtilityItem`, gated on `kanbanSupportedAtom`, and `<PluginSidebarEntries />` after the Usage entry, plus imports                                |
-| `apps/web/src/components/CommandPalette.tsx`                 | the board's `actionItems.push` block, gated the same way, plus imports                                                                                              |
+| `apps/web/src/components/CommandPalette.tsx`                 | the board's `actionItems.push` block (Open board, Find decision), gated the same way, plus imports                                                                  |
+| `apps/web/src/components/chat/ChatHeader.tsx`                | `<ThreadDecisions ... />` after the breadcrumb, the thread's decision count, plus its import                                                                        |
 | `apps/server/src/orchestration-v2/toolOutputImageBytes.ts`   | `export function carriesImage`, the one exported function: does a record hold image bytes or the size stripping left, so the estimate matches what ingestion stores |
 | `third-party-licenses.config.json`                           | the `Caveman reply rules` and `Ponytail ladder` entries at the end of `customNotices`, so the adapted policy text is credited in the app's license list             |
 | `scripts/build-desktop-artifact.ts`                          | in `createBuildConfig`, unsigned Mac builds get `identity: "-"`, `hardenedRuntime: false` and no GitHub update feed, plus their tests                               |
 | `packages/provider-core/.../orchestrationInstructions.ts`    | `export let` on `T3_CODE_ORCHESTRATION_INSTRUCTIONS` and `setPluginOrchestrationInstructions` at the end, which the host calls with the capture rule                |
+| `apps/web/src/components/chat/ComposerCommandMenu.tsx`       | `\| SavedPromptComposerItem` at the end of `ComposerCommandItem`, plus its import                                                                                   |
+| `apps/web/src/components/chat/ChatComposer.tsx`              | `composerMenuItems = useSavedPromptMenuItems(...)` after the menu items' `useMemo`, renamed `builtInComposerMenuItems`, plus its import                             |
+| `apps/web/src/components/chat/ChatComposer.tsx`              | the `saved-prompt` branch in `onSelectComposerItem`: `pickSavedPrompt(...)`, whose callback inserts the body as the skill branch does                               |
+| `apps/web/src/components/chat/ChatComposer.tsx`              | in `submitComposer`, `const sentPrompt = promptRef.current;` and, once `didDispatch`, `countSavedPromptUses(...)`                                                   |
 
 ## Plugin services and the type system
 
@@ -125,7 +130,10 @@ them half-evaluated. The host hands `toolkitRegistration` to `ServerPlugin.mcp` 
   `kanban.attention.list` feeds the strip above the board from the project's open host
   flags, its threads' pending questions and permission requests, and, while routing runs, its
   routing mismatches; `kanban.attention.listProjects` does the same for several projects with one
-  read of the flags and lists a `policy:*` flag, which every project matches, once.
+  read of the flags and lists a `policy:*` flag, which every project matches, once. The thread
+  header's decision count reads `kanban.listDecisions` with `thread`, which answers none for a
+  project with no board folder and creates none, and re-reads when the thread's latest run starts
+  or ends rather than following the board.
   `kanban.ticket.specify` (MCP `kanban_ticket_specify`) checks a Triage or
   Inbox issue's description against the Goal, Approach and Acceptance format, or starts a plan-mode
   drafting thread on routing's cheap tier whose final message the plugin's reactor checks when the
@@ -232,15 +240,29 @@ them half-evaluated. The host hands `toolkitRegistration` to `ServerPlugin.mcp` 
   that owner kind. The `reviews` sweep keeps a `promotion_review` flag,
   `promotion:<projectId>:<promotionId>`, for each record in review whose item still wants it, with
   a `plugin` action that opens the item. Migration 8 adopts records delivered before reviews at
-  their delivery time. The plugin registers the promoters for `project_knowledge`, `policy` and `prompt`
-  itself, from `knowledge/promoter.ts` and `policy/promoter.ts`, because a plugin's layer cannot
-  see the registry of one it does not depend on. Each reaches its plugin's service with
+  their delivery time. The plugin registers the promoters for `project_knowledge` and `policy` itself,
+  from `knowledge/promoter.ts` and `policy/promoter.ts`, because a plugin's layer cannot see the
+  registry of one it does not depend on. Each reaches its plugin's service with
   `Effect.serviceOption` when the sweep runs and hands over a draft: a knowledge page keyed
-  `learned-<mode>-<item id>`, or a policy version keyed `learned-<mode>`, `prompt-learned-<mode>`
-  for a prompt, until briefs read prompt policies. A promoter has an `available` check, false while
-  its plugin is off, and the registry's `ownerKinds` leaves such a kind out, so its records wait
-  without counting an attempt, as a kind with no promoter does; the report's `promoters` is the
-  same list. The `regressions` sweep compares each
+  `learned-<mode>-<item id>`, or a policy version keyed `learned-<mode>`. A promoter has an
+  `available` check, false while its plugin is off, and the registry's `ownerKinds` leaves such a
+  kind out, so its records wait without counting an attempt, as a kind with no promoter does; the
+  report's `promoters` is the same list. The `prompt` kind goes to the plugin's own prompt library
+  (`prompts/`): saved prompts and workflows per project, `active`, `proposed` or `archived`, with
+  append-only versions and a use count. `PromptStore.proposeFrom` saves a sweep's proposal once per
+  project and source key (`promotion:<id>` for a promotion), in the transaction that looks for it.
+  Lists and searches filter in SQLite and answer with bounded summaries carrying a 200-character
+  preview, so a library's bodies never cross the socket together; the body comes with one prompt,
+  whose detail lists its latest 20 versions as previews too. Agents
+  reach the library with `prompt_search`, `prompt_save` and `prompt_get`; a save is proposed and
+  needs a search id from the last 15 minutes, kept in memory, so it checked for a duplicate first.
+  People save, edit, revert, accept, archive and unarchive through the `learning.prompt*` gateway
+  methods on the Learning screen's Prompts tab. The web composer's `/` menu reads the thread's
+  project's active summaries when it opens and lists those whose title matches, most used first;
+  the tab re-reads that list after each change. Picking one loads the prompt and inserts its
+  latest body, or nothing once it is no longer active, and a send whose message still holds a body
+  picked into that draft calls `learning.promptsUse` to count a use
+  (`apps/web/src/plugins/learning/composerPrompts.ts`). The `regressions` sweep compares each
   project's telemetry measures over the last seven whole UTC days with the seven before, once a
   day, and opens or strengthens an `efficiency_regression:<measure>` item, with no owner kind, for
   each measure worse by its threshold in `regressions/thresholds.ts`, except a volume measure
@@ -258,7 +280,7 @@ them half-evaluated. The host hands `toolkitRegistration` to `ServerPlugin.mcp` 
   open, as it does once the record is rolled back; the sweep never closes or reroutes an item, and
   never judges `local_only`. Server:
   `apps/server/src/plugins/learning/`. Contracts:
-  `packages/contracts/src/plugins/learning.ts`. Web: `apps/web/src/plugins/learning/`, the Learning screen at `/plugins/learning` with the items, corrections and reviews of a project; `recordId` opens an item.
+  `packages/contracts/src/plugins/learning.ts` and `prompts.ts`. Web: `apps/web/src/plugins/learning/`, the Learning screen at `/plugins/learning` with the items, corrections, prompts and reviews of a project; `recordId` opens an item. No mobile screen, and the mobile composer does not list prompts. User guide: [Learning](./user/learning.md).
 - **policy**: reviewed working rules per project (`*` is the whole environment), versioned in the
   plugin's database and rendered as one marked block each, with `<state dir>/RULES.md` ahead of
   the body, into the instruction file each agent reads from the user's home. Verify re-reads the

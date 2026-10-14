@@ -78,6 +78,7 @@ import {
   decisionsCategory,
   pickBoardProject,
   scopedBoardProjects,
+  subscribedBoards,
   type BoardEnvironment,
   type BoardProject,
 } from "./boardScope";
@@ -500,7 +501,6 @@ export function BoardPage({ search }: { readonly search: BoardSearch }) {
     () => boardFanOut(scoped, environments),
     [scoped, environments],
   );
-  const boards = useAtomValue(kanbanBoards(shown));
   // Every project the board can write to, board or not: their requests and an environment's
   // policy flag wait on a person all the same.
   const attention = useAtomValue(kanbanBoardAttention(writable));
@@ -531,12 +531,21 @@ export function BoardPage({ search }: { readonly search: BoardSearch }) {
   const viewProject = pickBoardProject(shown, inHand, lastUsed);
   // The open issue is in the URL's project even outside the scope; the panel stays mounted to close.
   const panelProject = inHand ?? viewProject;
+  // Keyed by the refs, so a new list with the same projects keeps the same subscriptions.
+  const subscribedOnes = useAtomValue(
+    kanbanBoards(subscribedBoards(shown, search.issue === undefined ? null : panelProject)),
+  );
+  // The columns show only the scope's boards; the open issue's own project only feeds its panel.
+  const boards = useMemo(
+    () => subscribedOnes.filter((board) => shown.some(sameProject(board))),
+    [shown, subscribedOnes],
+  );
   const canWritePanel = useAtomValue(
     kanbanWrite.permissionAtom(panelProject?.environmentId ?? null),
   );
   const canWriteView = useAtomValue(kanbanWrite.permissionAtom(viewProject?.environmentId ?? null));
   const boardOf = (ref: ScopedProjectRef | null) =>
-    ref === null ? undefined : (boards.find(sameProject(ref))?.board ?? undefined);
+    ref === null ? undefined : (subscribedOnes.find(sameProject(ref))?.board ?? undefined);
 
   const setSearch = useCallback(
     (
