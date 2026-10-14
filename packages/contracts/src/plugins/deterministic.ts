@@ -15,6 +15,7 @@ import { TelemetryExtractionCandidate, TelemetryExtractionForm } from "./telemet
 /**
  * `waiting` has no draft yet because its form's target is off or absent, and the weekly sweep
  * tries again; `pending` has a draft waiting for a person; `accepted` and `dismissed` are decided.
+ * A draft its target refuses is dismissed by the sweep (`decidedBy` `supervisor`), not retried.
  */
 export const DeterministicProposalState = Schema.Literals([
   "waiting",
@@ -85,7 +86,7 @@ export const DeterministicProposal = Schema.Struct({
   draft: Schema.NullOr(DeterministicDraft),
   /** Why a `waiting` proposal has no draft yet. */
   waitingReason: Schema.NullOr(Schema.String),
-  /** `user` for a person, `thread:<id>` for an agent. */
+  /** `user` for a person, `thread:<id>` for an agent, `supervisor` for a draft its target refused. */
   decidedBy: Schema.NullOr(Schema.String),
   decidedAt: Schema.NullOr(IsoDateTime),
   dismissReason: Schema.NullOr(Schema.String),

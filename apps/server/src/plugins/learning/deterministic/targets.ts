@@ -36,9 +36,14 @@ interface Proposed {
 }
 
 /** A draft saved in its target, or why there is none yet. */
+/**
+ * A draft saved in its target; or why there is none yet, which the next sweep tries again; or why
+ * the target refused it, which no retry changes.
+ */
 type Drafted =
   | { readonly _tag: "drafted"; readonly draft: DeterministicDraft }
-  | { readonly _tag: "waiting"; readonly reason: string };
+  | { readonly _tag: "waiting"; readonly reason: string }
+  | { readonly _tag: "rejected"; readonly reason: string };
 
 const waiting = (reason: string): Drafted => ({ _tag: "waiting", reason });
 const drafted = (draft: DeterministicDraft): Drafted => ({ _tag: "drafted", draft });
@@ -176,12 +181,20 @@ export const make = Effect.gen(function* () {
         }
       }
     }).pipe(
-      Effect.catch((cause) =>
-        Effect.logWarning("learning: a deterministic proposal's draft could not be saved", {
+      Effect.catch((cause) => {
+        // A store that refuses the text refuses it again; anything else may pass next time.
+        const refused = "code" in cause && (cause.code === "invalid" || cause.code === "gated");
+        return Effect.logWarning("learning: a deterministic proposal's draft could not be saved", {
           proposalId: proposal.id,
           cause,
-        }).pipe(Effect.as(waiting("The draft could not be saved; the next sweep tries again."))),
-      ),
+        }).pipe(
+          Effect.as<Drafted>(
+            refused
+              ? { _tag: "rejected", reason: cause.message }
+              : waiting("The draft could not be saved; the next sweep tries again."),
+          ),
+        );
+      }),
     );
 
   /** Applies a draft in its target; one already applied there is left as it is. */

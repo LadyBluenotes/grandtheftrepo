@@ -311,7 +311,8 @@ them half-evaluated. The host hands `toolkitRegistration` to `ServerPlugin.mcp` 
   the board strip's `projectId` selects. People accept (`learning.deterministicAccept`, behind `settingsWrite`) and dismiss
   with a reason (`learning.deterministicDismiss`), which withdraws a draft its target still holds
   undecided, and fails, leaving the proposal undecided, while that target is off or the withdrawal
-  fails; each draft carries what it said when saved, which the drawer shows. Agents read and
+  fails; each draft carries what it said when saved, which the drawer shows, cut to its target's
+  contract, and one its target still refuses is dismissed as `supervisor`. Agents read and
   dismiss with `learning_deterministic_proposals` and
   `learning_deterministic_dismiss`. The weekly report's `deterministic` section reads them. The
   `outcomes` sweep checks each adopted bet once its 28 days after adoption are complete: it

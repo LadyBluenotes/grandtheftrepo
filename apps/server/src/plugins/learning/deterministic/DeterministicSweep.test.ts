@@ -4,7 +4,11 @@ import {
   type KanbanIssue,
   KanbanError,
   type KnowledgeEntry,
+  KNOWLEDGE_MARKER_WORD,
+  KnowledgeBody,
   KnowledgeError,
+  KnowledgeKey,
+  KnowledgeTitle,
   type OrchestrationProjectShell,
   type TelemetryExtractionCandidate,
   type TelemetryMeasuresInput,
@@ -15,6 +19,7 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
+import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as TestClock from "effect/testing/TestClock";
 
@@ -31,6 +36,10 @@ import { migrations } from "../migrations.ts";
 import * as PromptStore from "../prompts/PromptStore.ts";
 import * as DeterministicSweep from "./DeterministicSweep.ts";
 import * as ProposalStore from "./ProposalStore.ts";
+
+const isKnowledgeKey = Schema.is(KnowledgeKey);
+const isKnowledgeTitle = Schema.is(KnowledgeTitle);
+const isKnowledgeBody = Schema.is(KnowledgeBody);
 
 /** Wednesday 14 October 2026, so the week reviewed is Monday 5 to Monday 12 October. */
 const NOW = Date.UTC(2026, 9, 14, 15, 30);
@@ -353,24 +362,36 @@ it.effect("a project gets at most five proposals a week, the costliest eligible 
 const fakeKnowledge = Effect.gen(function* () {
   const pages = yield* Ref.make<ReadonlyArray<KnowledgeEntry>>([]);
   const failing = yield* Ref.make(false);
+  const refusing = yield* Ref.make(false);
   const installs = yield* Ref.make(0);
   const setState = (id: number, state: KnowledgeEntry["state"]) =>
     Ref.update(pages, (all) => all.map((page) => (page.id === id ? { ...page, state } : page)));
   const layer = Layer.mock(KnowledgeStore.KnowledgeStore)({
     list: ({ projectId }) =>
       Effect.map(Ref.get(pages), (all) => all.filter((page) => page.projectId === projectId)),
+    // Refuses what the real store refuses: text outside the contract, or anything while `refusing`.
     propose: (input, source) =>
-      Ref.modify(pages, (all) => {
-        const page: KnowledgeEntry = {
-          id: all.length + 1,
-          ...input,
-          state: "draft",
-          source,
-          createdAt: WEEK_2,
-          acceptedAt: null,
-          retiredAt: null,
-        };
-        return [page, [...all, page]];
+      Effect.gen(function* () {
+        if (
+          (yield* Ref.get(refusing)) ||
+          !isKnowledgeKey(input.key) ||
+          !isKnowledgeTitle(input.title) ||
+          !isKnowledgeBody(input.body)
+        ) {
+          return yield* new KnowledgeError({ code: "invalid", message: "The page is invalid." });
+        }
+        return yield* Ref.modify(pages, (all) => {
+          const page: KnowledgeEntry = {
+            id: all.length + 1,
+            ...input,
+            state: "draft",
+            source,
+            createdAt: WEEK_2,
+            acceptedAt: null,
+            retiredAt: null,
+          };
+          return [page, [...all, page]];
+        });
       }),
     discard: ({ id }) =>
       Effect.gen(function* () {
@@ -391,9 +412,111 @@ const fakeKnowledge = Effect.gen(function* () {
     pages: Ref.get(pages),
     installs: Ref.get(installs),
     failDiscard: (fail: boolean) => Ref.set(failing, fail),
+    refuseProposals: (refuse: boolean) => Ref.set(refusing, refuse),
     setState,
   };
 });
+
+it.effect(
+  "steps with a path longer than a page are cut so the page and the prompt fit their contracts",
+  () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const world = yield* setup();
+        const knowledge = yield* fakeKnowledge;
+        const longPath = `docs/${"deep/".repeat(1500)}notes.md`;
+        world.weeks.set(WEEK_1, [
+          candidate("1009000000000001", { steps: [`Read ${longPath}`], form: "context_file" }),
+          candidate("1009000000000002", {
+            steps: [`Grep <pattern> ${longPath}`, `Read ${longPath}`],
+            form: "skill",
+          }),
+        ]);
+        yield* world.tick(knowledge.context);
+
+        assert.deepEqual(
+          (yield* world.store.list({ projectId: projectA.id })).map((p) => [p.form, p.state]),
+          [
+            ["skill", "pending"],
+            ["context_file", "pending"],
+          ],
+        );
+        const [page] = yield* knowledge.pages;
+        assert.isTrue(isKnowledgeBody(page!.body) && isKnowledgeTitle(page!.title));
+        const [prompt] = yield* world.prompts.list({ projectId: projectA.id });
+        assert.isAtMost((yield* world.prompts.get(prompt!.id)).prompt.body.length, 10_000);
+      }),
+    ),
+);
+
+it.effect("a knowledge title never holds the index block's marker, even when a step does", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const world = yield* setup();
+      const knowledge = yield* fakeKnowledge;
+      world.weeks.set(WEEK_1, [
+        candidate("3a7c000000000001", {
+          steps: ["Grep fork-knowledge: AGENTS.md", "Read fork-fork-knowledge:knowledge:x.md"],
+          form: "context_file",
+        }),
+      ]);
+      yield* world.tick(knowledge.context);
+      const [page] = yield* knowledge.pages;
+      // Removing the inner marker of `fork-fork-knowledge:knowledge:` leaves one, which goes too.
+      assert.strictEqual(page?.title, "What runs read first: Grep AGENTS.md → Read x.md");
+      assert.isFalse(page!.title.includes(KNOWLEDGE_MARKER_WORD));
+    }),
+  ),
+);
+
+it.effect("an empty command step drafts a script with a comment in its place", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const world = yield* setup();
+      world.weeks.set(WEEK_1, [candidate("e3c7000000000001", { steps: ["command:  "] })]);
+      yield* world.tick();
+      const [proposal] = yield* world.store.list({ projectId: projectA.id });
+      assert.strictEqual(proposal?.state, "pending");
+      assert.deepInclude(proposal?.draft, {
+        kind: "script",
+        script: {
+          id: "repeated-e3c700000000",
+          name: "Repeated: (empty command)",
+          command:
+            "# A command with no text was recorded; see item item:a in thread thread:example.",
+          icon: "play",
+          runOnWorktreeCreate: false,
+        },
+      });
+    }),
+  ),
+);
+
+it.effect("a draft its target refuses is dismissed by the sweep instead of waiting for good", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const world = yield* setup();
+      const knowledge = yield* fakeKnowledge;
+      yield* knowledge.refuseProposals(true);
+      world.weeks.set(WEEK_1, [
+        candidate("5ef0000000000001", { steps: ["Read docs/arch.md"], form: "context_file" }),
+      ]);
+      // Recorded, refused and dismissed in one tick, so no flag waits on it.
+      assert.deepEqual(yield* world.tick(knowledge.context), { examined: 2, acted: 1, flags: 0 });
+      const [proposal] = yield* world.store.list({ projectId: projectA.id });
+      assert.deepInclude(proposal, {
+        state: "dismissed",
+        decidedBy: "supervisor",
+        dismissReason: "The draft could not be saved: The page is invalid.",
+        draft: null,
+      });
+      // Nothing is waiting, so the next tick tries nothing.
+      yield* knowledge.refuseProposals(false);
+      assert.deepEqual(yield* world.tick(knowledge.context), { examined: 0, acted: 0, flags: 0 });
+      assert.deepEqual(yield* knowledge.pages, []);
+    }),
+  ),
+);
 
 it.effect("a context file waits while the knowledge plugin is off, then becomes a draft page", () =>
   Effect.scoped(

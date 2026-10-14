@@ -140,7 +140,8 @@ elsewhere; while the plugin holding that draft is off, dismissing fails and the 
 turn the plugin on and try again. A dismissed proposal comes back only when its work costs at least
 twice as much in a later week. While the knowledge or kanban plugin is
 off, or the project has no default model for a task, a proposal waits without a draft; it gets one
-once that is fixed.
+once that is fixed. A draft the knowledge page, prompt, task or card refuses is dismissed for you,
+with the reason, rather than tried again.
 
 While proposals wait for you, the strip above the project's board flags them, and the flag's
 button opens this tab. Agents list proposals with `learning_deterministic_proposals` and dismiss one

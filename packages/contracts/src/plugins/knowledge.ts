@@ -22,8 +22,9 @@ export const KNOWLEDGE_MARKER_WORD = "fork-knowledge:";
  * One line: it is the page's heading and its line in the index block, so it cannot hold the
  * block's marker text. A body never enters the block and may.
  */
+export const KNOWLEDGE_TITLE_MAX_LENGTH = 200;
 export const KnowledgeTitle = TrimmedNonEmptyString.check(
-  Schema.isMaxLength(200),
+  Schema.isMaxLength(KNOWLEDGE_TITLE_MAX_LENGTH),
   Schema.isPattern(/^[^\r\n]*$/),
   Schema.makeFilter((title) =>
     title.includes(KNOWLEDGE_MARKER_WORD)

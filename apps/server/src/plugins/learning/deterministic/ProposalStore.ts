@@ -14,6 +14,7 @@ import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";
 import * as SqlClient from "effect/sql/SqlClient";
@@ -326,20 +327,46 @@ const make = Effect.gen(function* () {
       return chosen.length;
     }).pipe(lock.withPermits(1), Effect.catchTags({ SqlError: failed, SchemaError: failed }));
 
-  /** Drafts one waiting proposal, unless a person decided it since it was read. */
+  /**
+   * Dismisses a waiting proposal whose draft cannot be made, as `supervisor`, so it leaves the
+   * flag and the sweep instead of waiting for good. Its candidate returns once its cost doubles.
+   */
+  const refuse = (id: number, reason: string, at: string) =>
+    sql`UPDATE deterministic_proposals
+      SET state = 'dismissed', decided_by = 'supervisor', decided_at = ${at},
+        dismiss_reason = ${`The draft could not be saved: ${reason}`}, waiting_reason = NULL,
+        updated_at = ${at}
+      WHERE id = ${id} AND state = 'waiting'`;
+
+  /**
+   * Drafts one waiting proposal, unless a person decided it since it was read. A draft its target
+   * refuses, or that does not fit the draft contract, is refused for good rather than retried.
+   */
   const draftOne = (id: number) =>
     Effect.gen(function* () {
       const [row] = yield* sql<Row>`SELECT * FROM deterministic_proposals
         WHERE id = ${id} AND state = 'waiting'`;
       if (row === undefined) return false;
-      const { candidate } = yield* read(row);
+      const at = yield* nowIso;
+      const stored = yield* Effect.result(read(row));
+      if (Result.isFailure(stored)) {
+        yield* Effect.logWarning("learning: a proposal's candidate could not be read", {
+          proposalId: id,
+          cause: stored.failure,
+        });
+        yield* refuse(id, "its candidate could not be read.", at);
+        return false;
+      }
       const result = yield* targets.draft({
         id: row.id,
         projectId: row.project_id,
-        candidate,
+        candidate: stored.success.candidate,
         windowFrom: row.window_from,
       });
-      const at = yield* nowIso;
+      if (result._tag === "rejected") {
+        yield* refuse(id, result.reason, at);
+        return false;
+      }
       if (result._tag === "waiting") {
         // Every tick tries again; only a new reason is written.
         if (result.reason !== row.waiting_reason) {
@@ -348,9 +375,18 @@ const make = Effect.gen(function* () {
         }
         return false;
       }
+      const encoded = yield* Effect.result(encodeDraft(result.draft));
+      if (Result.isFailure(encoded)) {
+        yield* Effect.logWarning("learning: a proposal's draft does not fit its contract", {
+          proposalId: id,
+          cause: encoded.failure,
+        });
+        yield* refuse(id, "it does not fit what its target accepts.", at);
+        return false;
+      }
       yield* sql`UPDATE deterministic_proposals
-        SET state = 'pending', draft = ${yield* encodeDraft(result.draft)},
-          waiting_reason = NULL, updated_at = ${at}
+        SET state = 'pending', draft = ${encoded.success}, waiting_reason = NULL,
+          updated_at = ${at}
         WHERE id = ${id}`;
       return true;
     }).pipe(lock.withPermits(1));
@@ -365,7 +401,7 @@ const make = Effect.gen(function* () {
       let drafted = 0;
       for (const row of rows) if (yield* draftOne(row.id)) drafted += 1;
       return { waiting: rows.length, drafted };
-    }).pipe(Effect.catchTags({ SqlError: failed, SchemaError: failed }));
+    }).pipe(Effect.catchTags({ SqlError: failed }));
 
   const undecided: ProposalStore["Service"]["undecided"] = sql<{
     readonly project_id: ProjectId;

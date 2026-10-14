@@ -21,9 +21,10 @@ export type PromptState = typeof PromptState.Type;
 export const PromptOrigin = Schema.Literals(["user", "repeated_work", "learning"]);
 export type PromptOrigin = typeof PromptOrigin.Type;
 
+export const PROMPT_TITLE_MAX_LENGTH = 200;
 /** One line, as a menu lists it. */
 export const PromptTitle = TrimmedNonEmptyString.check(
-  Schema.isMaxLength(200),
+  Schema.isMaxLength(PROMPT_TITLE_MAX_LENGTH),
   Schema.isPattern(/^[^\r\n]*$/),
 );
 
