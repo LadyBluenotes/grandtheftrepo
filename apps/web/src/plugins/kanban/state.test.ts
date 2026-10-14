@@ -95,6 +95,7 @@ describe("attentionResumeTarget", () => {
     projectId: ProjectId.make("project-1"),
   };
   const row = (target: "thread" | "board" | "settings", threadId: string | null = null) => ({
+    kind: "two_writers" as const,
     resumeAction: { label: "Go", target },
     threadId: threadId === null ? null : ThreadId.make(threadId),
   });
@@ -112,6 +113,13 @@ describe("attentionResumeTarget", () => {
       params: { environmentId: "remote", threadId: "thread-1" },
     });
     expect(attentionResumeTarget(row("board"), board)).toEqual({ to: "/board", search: board });
+  });
+
+  it("opens the board's decisions view for a conflicted decision", () => {
+    expect(attentionResumeTarget({ ...row("board"), kind: "decision_conflict" }, board)).toEqual({
+      to: "/board",
+      search: { ...board, view: "decisions" },
+    });
   });
 
   it("has nowhere to go for a thread action without a thread", () => {

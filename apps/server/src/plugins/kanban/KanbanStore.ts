@@ -183,6 +183,33 @@ const search = (decisions: ReadonlyArray<KanbanDecision>, query: string) => {
     .map((match) => match.decision);
 };
 
+/**
+ * Sets every decision's `supersedes` to the decisions whose `supersededBy` names it. The superseded
+ * side is the record of a link: a write saves the replacement's file first and the superseded
+ * decision's last, so one that failed between the two, or a file edited by hand, reads as the
+ * superseded side says. A `supersededBy` naming no decision is kept: the state and the revisions
+ * still say what replaced it.
+ */
+const relink = (decisions: Map<string, Array<KanbanDecision>>) => {
+  const claims = new Map<string, Array<string>>();
+  for (const list of decisions.values())
+    for (const d of list)
+      if (d.supersededBy !== null)
+        claims.set(d.supersededBy, [...(claims.get(d.supersededBy) ?? []), Files.decisionRef(d)]);
+  for (const [category, list] of decisions) {
+    let changed = false;
+    const next = list.map((d) => {
+      const claimed = claims.get(Files.decisionRef(d)) ?? [];
+      const kept = d.supersedes.filter((ref) => claimed.includes(ref));
+      const added = claimed.filter((ref) => !kept.includes(ref));
+      if (added.length === 0 && kept.length === d.supersedes.length) return d;
+      changed = true;
+      return { ...d, supersedes: [...kept, ...added] };
+    });
+    if (changed) decisions.set(category, next);
+  }
+};
+
 const make = Effect.gen(function* () {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
@@ -241,7 +268,10 @@ const make = Effect.gen(function* () {
       Effect.gen(function* () {
         if (!(yield* fs.exists(file))) {
           if (kind === "issue") state.issues.delete(id);
-          else state.decisions.delete(id);
+          else {
+            state.decisions.delete(id);
+            relink(state.decisions);
+          }
           return;
         }
         const text = yield* fs.readFileString(file);
@@ -260,6 +290,7 @@ const make = Effect.gen(function* () {
           if (parsed === null)
             return yield* Effect.logWarning("kanban: unreadable decision file", { file });
           state.decisions.set(id, [...parsed]);
+          relink(state.decisions);
         }
       }),
     );
@@ -366,20 +397,28 @@ const make = Effect.gen(function* () {
       Effect.tap(() => Effect.sync(() => state.issues.set(issue.id, issue))),
     );
 
-  const saveDecisions = (state: Loaded, category: string) => {
+  /** Writes a category's file as `list`, then indexes it; a failed write leaves the index as it was. */
+  const saveDecisions = (state: Loaded, category: string, list: ReadonlyArray<KanbanDecision>) => {
     const file = decisionPath(state, category);
-    const list = state.decisions.get(category) ?? [];
-    if (list.length === 0) {
-      state.decisions.delete(category);
-      return fs.remove(file).pipe(Effect.catch(io(`Could not remove ${file}.`)));
-    }
-    return writeFileStringAtomically({
-      filePath: file,
-      contents: Files.serializeDecisions(category, state.slug, list),
-    }).pipe(
-      Effect.provideService(FileSystem.FileSystem, fs),
-      Effect.provideService(Path.Path, path),
-      Effect.catch(io(`Could not write ${file}.`)),
+    const written =
+      list.length === 0
+        ? fs.remove(file).pipe(Effect.catch(io(`Could not remove ${file}.`)))
+        : writeFileStringAtomically({
+            filePath: file,
+            contents: Files.serializeDecisions(category, state.slug, list),
+          }).pipe(
+            Effect.provideService(FileSystem.FileSystem, fs),
+            Effect.provideService(Path.Path, path),
+            Effect.catch(io(`Could not write ${file}.`)),
+          );
+    return written.pipe(
+      Effect.tap(() =>
+        Effect.sync(() => {
+          if (list.length === 0) state.decisions.delete(category);
+          else state.decisions.set(category, [...list]);
+          relink(state.decisions);
+        }),
+      ),
     );
   };
 
@@ -446,6 +485,35 @@ const make = Effect.gen(function* () {
       ...next,
       revisions: [...next.revisions, { at, by: actor, change }],
     });
+    /**
+     * Saves a decision and, when a supersession link changes with it, the decision on the other
+     * end: that one's file first and this one's last, so a failure between them leaves this
+     * decision as it was and `relink` reads the link that way.
+     */
+    const saveLinked = (
+      own: { readonly category: string; readonly index: number; readonly next: KanbanDecision },
+      other: {
+        readonly category: string;
+        readonly index: number;
+        readonly next: KanbanDecision;
+      } | null,
+    ) =>
+      Effect.gen(function* () {
+        const listOf = (category: string) => state.decisions.get(category) ?? [];
+        if (other !== null && other.category === own.category)
+          return yield* saveDecisions(
+            state,
+            own.category,
+            listOf(own.category).with(other.index, other.next).with(own.index, own.next),
+          );
+        if (other !== null)
+          yield* saveDecisions(
+            state,
+            other.category,
+            listOf(other.category).with(other.index, other.next),
+          );
+        yield* saveDecisions(state, own.category, listOf(own.category).with(own.index, own.next));
+      });
     const touch = (current: KanbanIssue, patch: Partial<KanbanIssue>): KanbanIssue => ({
       ...current,
       ...patch,
@@ -647,25 +715,26 @@ const make = Effect.gen(function* () {
         if (initial === "superseded") return yield* invalid(SUPERSEDE_ONLY);
         const list = state.decisions.get(category) ?? [];
         const id = Files.uniqueSlug(Files.slugOf(title), (slug) => list.some((d) => d.id === slug));
-        list.push({
-          category,
-          id,
-          state: initial,
-          title,
-          why: w.why ?? "",
-          alternatives: w.alternatives ?? [],
-          reconsiderWhen: nullIfBlank(w.reconsiderWhen),
-          supersedes: [],
-          supersededBy: null,
-          issues: w.issues ?? [],
-          // The thread an agent decides in is where the decision was made.
-          threads: [...new Set([...(w.threads ?? []), ...actorThreads(actor)])],
-          by: actor,
-          at,
-          revisions: [{ at, by: actor, change: `created: ${initial}` }],
-        });
-        state.decisions.set(category, list);
-        yield* saveDecisions(state, category);
+        yield* saveDecisions(state, category, [
+          ...list,
+          {
+            category,
+            id,
+            state: initial,
+            title,
+            why: w.why ?? "",
+            alternatives: w.alternatives ?? [],
+            reconsiderWhen: nullIfBlank(w.reconsiderWhen),
+            supersedes: [],
+            supersededBy: null,
+            issues: w.issues ?? [],
+            // The thread an agent decides in is where the decision was made.
+            threads: [...new Set([...(w.threads ?? []), ...actorThreads(actor)])],
+            by: actor,
+            at,
+            revisions: [{ at, by: actor, change: `created: ${initial}` }],
+          },
+        ]);
         return { id };
       }
       case "decision.update": {
@@ -689,8 +758,11 @@ const make = Effect.gen(function* () {
         );
         // Nothing to record: no write, so no revision.
         if (changed.length === 0) return { id: current.id };
-        list[index] = revised(next, `edited: ${changed.join(", ")}`);
-        yield* saveDecisions(state, category);
+        yield* saveDecisions(
+          state,
+          category,
+          list.with(index, revised(next, `edited: ${changed.join(", ")}`)),
+        );
         return { id: current.id };
       }
       case "decision.setState": {
@@ -700,25 +772,32 @@ const make = Effect.gen(function* () {
         const current = list[index]!;
         if (current.state === to) return { id: current.id };
         const replacement = current.supersededBy;
-        list[index] = revised(
-          { ...current, state: to, supersededBy: null },
-          `state: ${current.state} → ${to}${
-            replacement === null ? "" : `; no longer superseded by ${replacement}`
-          }`,
-        );
+        const ref = Files.decisionRef(current);
         // Leaving superseded unlinks both sides, so the replacement no longer claims it.
-        const touched = new Set([category]);
         const other = replacement === null ? null : findRef(replacement);
-        if (other !== null) {
-          const ref = Files.decisionRef(current);
-          const found = other.list[other.index]!;
-          other.list[other.index] = revised(
-            { ...found, supersedes: found.supersedes.filter((r) => r !== ref) },
-            `no longer supersedes ${ref}`,
-          );
-          touched.add(other.category);
-        }
-        yield* Effect.forEach(touched, (c) => saveDecisions(state, c), { discard: true });
+        const found = other === null ? null : other.list[other.index]!;
+        yield* saveLinked(
+          {
+            category,
+            index,
+            next: revised(
+              { ...current, state: to, supersededBy: null },
+              `state: ${current.state} → ${to}${
+                replacement === null ? "" : `; no longer superseded by ${replacement}`
+              }`,
+            ),
+          },
+          other === null || found === null
+            ? null
+            : {
+                category: other.category,
+                index: other.index,
+                next: revised(
+                  { ...found, supersedes: found.supersedes.filter((r) => r !== ref) },
+                  `no longer supersedes ${ref}`,
+                ),
+              },
+        );
         return { id: current.id };
       }
       case "decision.supersede": {
@@ -738,17 +817,27 @@ const make = Effect.gen(function* () {
           return yield* invalid(
             `${by} is itself superseded by ${replacement.supersededBy ?? "another"}; supersede with that.`,
           );
-        list[index] = revised(
-          { ...current, state: "superseded", supersededBy: by },
-          `state: ${current.state} → superseded by ${by}`,
+        yield* saveLinked(
+          {
+            category,
+            index,
+            next: revised(
+              { ...current, state: "superseded", supersededBy: by },
+              `state: ${current.state} → superseded by ${by}`,
+            ),
+          },
+          {
+            category: other.category,
+            index: other.index,
+            next: revised(
+              {
+                ...replacement,
+                supersedes: [...replacement.supersedes.filter((r) => r !== ref), ref],
+              },
+              `supersedes ${ref}`,
+            ),
+          },
         );
-        other.list[other.index] = revised(
-          { ...replacement, supersedes: [...replacement.supersedes.filter((r) => r !== ref), ref] },
-          `supersedes ${ref}`,
-        );
-        yield* Effect.forEach(new Set([category, other.category]), (c) => saveDecisions(state, c), {
-          discard: true,
-        });
         return { id: current.id };
       }
       case "decision.delete": {
@@ -763,8 +852,7 @@ const make = Effect.gen(function* () {
           return yield* invalid(
             `${Files.decisionRef(current)} is linked by supersession; set the superseded decision's state to unlink it first.`,
           );
-        list.splice(index, 1);
-        yield* saveDecisions(state, category);
+        yield* saveDecisions(state, category, list.toSpliced(index, 1));
         return { id: current.id };
       }
     }

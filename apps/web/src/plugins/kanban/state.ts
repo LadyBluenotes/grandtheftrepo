@@ -80,11 +80,11 @@ export const kanbanAttention = createKanbanAttentionAtomFamily(connectionAtomRun
 
 /**
  * Where a strip row's button leads, always on the board's environment: the row's thread, the
- * board, or that environment's Plugins page, where budgets and other plugin settings live. Null
- * when a thread row has no thread.
+ * board (its decisions view for a decision conflict), or that environment's Plugins page, where
+ * budgets and other plugin settings live. Null when a thread row has no thread.
  */
 export function attentionResumeTarget(
-  row: Pick<KanbanAttentionRow, "resumeAction" | "threadId">,
+  row: Pick<KanbanAttentionRow, "resumeAction" | "threadId" | "kind">,
   board: { readonly environmentId: EnvironmentId; readonly projectId: ProjectId },
 ) {
   switch (row.resumeAction.target) {
@@ -96,7 +96,9 @@ export function attentionResumeTarget(
             params: buildThreadRouteParams(scopeThreadRef(board.environmentId, row.threadId)),
           } as const);
     case "board":
-      return { to: "/board", search: board } as const;
+      return row.kind === "decision_conflict"
+        ? ({ to: "/board", search: { ...board, view: "decisions" } } as const)
+        : ({ to: "/board", search: board } as const);
     case "settings":
       return { to: "/plugins", search: { machine: board.environmentId } } as const;
   }

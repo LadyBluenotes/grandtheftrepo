@@ -1,6 +1,12 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, describe, it } from "@effect/vitest";
-import { ProjectId, ThreadId, type KanbanError, type Project } from "@t3tools/contracts";
+import {
+  ProjectId,
+  ThreadId,
+  type KanbanDecision,
+  type KanbanError,
+  type Project,
+} from "@t3tools/contracts";
 import * as Context from "effect/Context";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -9,13 +15,19 @@ import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
+import * as PlatformError from "effect/PlatformError";
 import * as Queue from "effect/Queue";
 import * as Ref from "effect/Ref";
 import * as Stream from "effect/Stream";
 
 import * as ServerConfig from "../../config.ts";
 import * as ProjectService from "../../project/ProjectService.ts";
-import { ISSUE_EXTENSION, parseDecisions, serializeIssue } from "./KanbanFiles.ts";
+import {
+  ISSUE_EXTENSION,
+  parseDecisions,
+  serializeDecisions,
+  serializeIssue,
+} from "./KanbanFiles.ts";
 import * as KanbanStore from "./KanbanStore.ts";
 
 const projectId = ProjectId.make("project-1");
@@ -853,6 +865,58 @@ it.layer(layerTest)("KanbanStore decisions", (it) => {
     }),
   );
 
+  it.effect("reads a link one file lost as the superseded side holds it", () =>
+    Effect.gen(function* () {
+      const store = yield* KanbanStore.KanbanStore;
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const folder = yield* fs.makeTempDirectoryScoped({ prefix: "t3code-kanban-links-" });
+      yield* fs.makeDirectory(path.join(folder, "decisions"), { recursive: true });
+      const decision = (category: string, id: string): KanbanDecision => ({
+        category,
+        id,
+        state: "accepted",
+        title: id,
+        why: "",
+        alternatives: [],
+        reconsiderWhen: null,
+        supersedes: [],
+        supersededBy: null,
+        issues: [],
+        threads: [],
+        by: "user",
+        at: "2026-10-12T00:00:00.000Z",
+        revisions: [],
+      });
+      const write = (category: string, decisions: ReadonlyArray<KanbanDecision>) =>
+        fs.writeFileString(
+          path.join(folder, "decisions", `${category}.yaml`),
+          serializeDecisions(category, "grand-theft-repo", decisions),
+        );
+      // `old` says `b/new` replaced it, but `new` never recorded it; `new` claims `a/gone`, which
+      // does not exist; `orphan` names a replacement that does not exist.
+      yield* write("a", [
+        { ...decision("a", "old"), state: "superseded", supersededBy: "b/new" },
+        { ...decision("a", "orphan"), state: "superseded", supersededBy: "b/missing" },
+      ]);
+      yield* write("b", [{ ...decision("b", "new"), supersedes: ["a/gone"] }]);
+      yield* store.setDirectory({ projectId, directory: folder });
+
+      const links = new Map(
+        (yield* store.listDecisions({ projectId })).map((d) => [
+          `${d.category}/${d.id}`,
+          [d.state, d.supersededBy, d.supersedes],
+        ]),
+      );
+      assert.deepStrictEqual(Object.fromEntries(links), {
+        "a/old": ["superseded", "b/new", []],
+        "a/orphan": ["superseded", "b/missing", []],
+        "b/new": ["accepted", null, ["a/old"]],
+      });
+      yield* store.setDirectory({ projectId, directory: null });
+    }),
+  );
+
   it.effect("searches a decision's words, most matches first, within a state", () =>
     Effect.gen(function* () {
       const store = yield* KanbanStore.KanbanStore;
@@ -894,6 +958,120 @@ it.layer(layerTest)("KanbanStore decisions", (it) => {
       assert.deepStrictEqual(yield* search("job", "rejected"), ["drop-the-job-runner"]);
       assert.deepStrictEqual(yield* search("postgres"), []);
     }),
+  );
+});
+
+/** The store over the real file system, except that writing a file named in `failing` fails. */
+const layerFailingWrites = (failing: Set<string>) =>
+  KanbanStore.layer.pipe(
+    Layer.provide(
+      Layer.effect(
+        FileSystem.FileSystem,
+        Effect.map(FileSystem.FileSystem, (real) => ({
+          ...real,
+          // Every store write lands by renaming a temp file onto its target.
+          rename: (from, to) =>
+            [...failing].some((name) => to.endsWith(`/${name}`))
+              ? Effect.fail(
+                  PlatformError.systemError({
+                    _tag: "Unknown",
+                    module: "FileSystem",
+                    method: "rename",
+                    description: "ENOSPC: no space left on device",
+                  }),
+                )
+              : real.rename(from, to),
+        })),
+      ),
+    ),
+    Layer.provideMerge(
+      Layer.mock(ProjectService.ProjectService)({
+        getById: (id) => Effect.succeed(id === projectId ? Option.some(project) : Option.none()),
+      }),
+    ),
+    Layer.provideMerge(
+      Layer.fresh(ServerConfig.layerTest(process.cwd(), { prefix: "t3code-kanban-test-" })),
+    ),
+    Layer.provideMerge(NodeServices.layer),
+  );
+
+describe("decision writes across two files", () => {
+  it.effect("change nothing when either file fails, and take effect once both land", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const failing = new Set<string>();
+        const services = yield* Layer.build(layerFailingWrites(failing));
+        const store = Context.get(services, KanbanStore.KanbanStore);
+        const fs = Context.get(services, FileSystem.FileSystem);
+        const path = Context.get(services, Path.Path);
+        const create = (category: string, title: string) =>
+          store.write(projectId, "user", { action: "decision.create", category, title, why: "." });
+        const a = (yield* create("old", "Cache in memory")).id;
+        const b = (yield* create("new", "Cache in Redis")).id;
+        const supersede = store.write(projectId, "user", {
+          action: "decision.supersede",
+          category: "old",
+          id: a,
+          by: `new/${b}`,
+        });
+        // Keyed by decision: a reload reads the files in the directory's order.
+        const links = Effect.map(store.listDecisions({ projectId }), (list) =>
+          Object.fromEntries(
+            list.map((d) => [`${d.category}/${d.id}`, [d.state, d.supersededBy, d.supersedes]]),
+          ),
+        );
+        const unlinked = {
+          [`old/${a}`]: ["accepted", null, []],
+          [`new/${b}`]: ["accepted", null, []],
+        };
+        const linked = {
+          [`old/${a}`]: ["superseded", `new/${b}`, []],
+          [`new/${b}`]: ["accepted", null, [`old/${a}`]],
+        };
+        const { directory } = yield* store.board(projectId);
+        const onDisk = (category: string) =>
+          Effect.map(
+            fs.readFileString(path.join(directory, "decisions", `${category}.yaml`)),
+            (text) => parseDecisions(category, text)?.map((d) => [d.supersededBy, d.supersedes]),
+          );
+
+        // The replacement's file is written first: when it fails, neither file nor the index moved.
+        failing.add("new.yaml");
+        assert.strictEqual(yield* failureCode(supersede), "io");
+        assert.deepStrictEqual(yield* links, unlinked);
+        assert.deepStrictEqual(yield* onDisk("new"), [[null, []]]);
+
+        // The superseded decision's file is written last: when only it fails, the replacement's
+        // file claims a link the other side never took, and it is read as not there.
+        failing.clear();
+        failing.add("old.yaml");
+        assert.strictEqual(yield* failureCode(supersede), "io");
+        assert.deepStrictEqual(yield* onDisk("new"), [[null, [`old/${a}`]]]);
+        assert.deepStrictEqual(yield* links, unlinked);
+        // So it is after a reload from disk too.
+        yield* store.setDirectory({ projectId, directory: null });
+        assert.deepStrictEqual(yield* links, unlinked);
+
+        failing.clear();
+        yield* supersede;
+        assert.deepStrictEqual(yield* links, linked);
+        // Unlinking with the superseded side failing leaves the link standing on both sides.
+        failing.add("old.yaml");
+        assert.strictEqual(
+          yield* failureCode(
+            store.write(projectId, "user", {
+              action: "decision.setState",
+              category: "old",
+              id: a,
+              state: "accepted",
+            }),
+          ),
+          "io",
+        );
+        assert.deepStrictEqual(yield* onDisk("new"), [[null, []]]);
+        assert.deepStrictEqual(yield* links, linked);
+      }),
+    ),
   );
 });
 
