@@ -403,7 +403,13 @@ export function BoardPage({ search }: { readonly search: BoardSearch }) {
                   } catch {
                     // Remembering the project is a convenience; the URL still carries it.
                   }
-                  void setSearch({ ...next, issue: undefined, category: undefined });
+                  // Issues, categories and decision refs belong to one project.
+                  void setSearch({
+                    ...next,
+                    issue: undefined,
+                    category: undefined,
+                    decision: undefined,
+                  });
                 }}
               >
                 <SelectTrigger size="xs" variant="ghost" aria-label="Project">

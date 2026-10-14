@@ -4,6 +4,7 @@ import {
   type KanbanFindingPlacement,
   type KnowledgeEntry,
   type LearningCorrection,
+  type OrchestrationV2TurnItem,
   type Prompt,
   ThreadId,
   TurnItemId,
@@ -188,7 +189,7 @@ const item = (fields: {
 });
 
 /** The record a client reads from the item as it crosses the wire, if any. */
-const wireRecord = (toolItem: ReturnType<typeof item>) => {
+const wireRecord = (toolItem: OrchestrationV2TurnItem) => {
   const projected = projectTurnItemForWire(toolItem);
   const output: unknown = JSON.parse(
     JSON.stringify(projected.type === "dynamic_tool" ? (projected.output ?? null) : null),
@@ -238,6 +239,15 @@ describe("capturedRecordFromToolItem", () => {
       item({ ...findingCase, toolName: "mcp__other__finding_capture", output: finding }),
     ];
     for (const failedItem of failed) expect(wireRecord(failedItem)).toBeUndefined();
+  });
+
+  it("keeps the record when an item already projected for the wire is projected again", () => {
+    for (const c of cases) {
+      const once = projectTurnItemForWire(item({ ...c, output: mcpResult(c.result).content }));
+      expect(projectTurnItemForWire(once)).toEqual(once);
+      // Projected a second time, the record is still there for a client to read.
+      expect(wireRecord(once)).toEqual(c.record);
+    }
   });
 
   it("puts the record on the wire for a client to decode", () => {

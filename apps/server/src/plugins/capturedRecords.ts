@@ -1,10 +1,12 @@
 import {
   CAPTURED_RECORD_OUTPUT_KEY,
-  type CapturedRecord,
+  CapturedRecord,
   type OrchestrationV2TurnItem,
   ProjectId,
 } from "@t3tools/contracts";
+import * as Option from "effect/Option";
 import * as Predicate from "effect/Predicate";
+import * as Schema from "effect/Schema";
 
 type ToolItem = Pick<
   Extract<OrchestrationV2TurnItem, { readonly type: "dynamic_tool" }>,
@@ -17,6 +19,7 @@ const MAX_STATE_LENGTH = 64;
 /** A capture result is a few kilobytes; anything far larger is not one. */
 const MAX_OUTPUT_LENGTH = 1_000_000;
 const MAX_DEPTH = 6;
+const decodeRecord = Schema.decodeUnknownOption(CapturedRecord);
 
 const text = (value: unknown, max: number) => {
   const trimmed = typeof value === "string" ? value.trim() : "";
@@ -172,6 +175,11 @@ export function capturedRecordFromToolItem(item: ToolItem): CapturedRecord | und
   if (item.status !== "completed") return undefined;
   const read = captureReader(item.toolName);
   if (read === undefined) return undefined;
+  // An item projected for the wire already holds only its record, so projecting it again keeps it.
+  const projected = Predicate.isObject(item.output)
+    ? decodeRecord(item.output[CAPTURED_RECORD_OUTPUT_KEY])
+    : Option.none();
+  if (Option.isSome(projected)) return projected.value;
   const input = Predicate.isObject(item.input) ? item.input : {};
   return read(input, resultOf(item.output));
 }

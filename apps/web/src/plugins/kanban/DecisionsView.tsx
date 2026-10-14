@@ -65,6 +65,8 @@ export function DecisionsView({
   const [showSuperseded, setShowSuperseded] = useState(false);
   const [recording, setRecording] = useState(false);
   const [editingRef, setEditingRef] = useState<string | null>(null);
+  // However the decision closed, by the drawer or by the URL, its edit form goes with it.
+  if (openRef === null && editingRef !== null) setEditingRef(null);
   // One object per decision and mode, as the drawer compares targets by identity.
   const target = useMemo<DecisionTarget | null>(
     () => (openRef === null ? null : { ref: openRef, editing: editingRef === openRef }),
