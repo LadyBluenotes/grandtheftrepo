@@ -106,6 +106,11 @@ Unarchiving brings back a prompt you had accepted as active, and one you never a
 proposed. Editing the title or body saves a new version; the latest 20 versions are listed, and
 **Restore** saves a copy of one as the latest.
 
+To use a prompt, type `/` in a thread's message box and part of its title: the menu lists the
+project's active prompts that match, the ones you use most first. Picking one puts its latest text
+into your message to edit; nothing is sent until you send it. Sending a message that still holds
+the prompt's text counts a use. The mobile app does not list prompts.
+
 Agents reach the library through the `prompt_search`, `prompt_save` and `prompt_get` tools. An
 agent has to search before it saves, so it finds a prompt that already covers the work, and what it
 saves is proposed until you accept it.

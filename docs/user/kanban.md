@@ -64,20 +64,31 @@ agent files start in Triage.
 ## Decisions
 
 **Decisions** at the top switches the board to the project's decisions: the calls made along the
-way, with the reason and the tickets they concern. They are grouped into categories you name, such
-as `auth` or `performance`, and filterable by category. Record one from the decisions view or from a
-card's panel, and edit or delete it later.
+way, one row each with its state, the option it went with and, when set, what would make it worth
+revisiting. Type in the search box to find one by any word of its title, its reason or its
+alternatives, and narrow the list by state or by category, which you name, such as `auth` or
+`performance`. Superseded decisions stay hidden until you turn on **Superseded**. **Find decision**
+in the command palette (`Cmd/Ctrl+K`) opens this view for the project you are in.
 
-Each decision has a state: proposed, accepted, rejected, deferred, conflicted or superseded. An
-agent recording one also keeps the alternatives it weighed, each with why it was chosen or passed
-over and whether that reason is permanent, holds only for now, or lacks evidence, and what would
-make the call worth revisiting; they are in the decision's file. When one decision replaces
-another, the old one stays, marked superseded and linked to its replacement; giving it another
-state unlinks them, and a linked decision cannot be deleted. A conflicted decision waits in
+Click a row to open the decision in full: its alternatives, why, the tickets and threads it is
+linked to (each opens in one click), what it replaced or was replaced by, and every revision.
+Record one with **Record decision** or from a card's panel, where it starts linked to that card;
+pick its tickets and threads from lists, and add each alternative it weighed. Edit or delete a
+decision from its row's menu or the open decision; deleting asks first.
+
+Each decision has a state: proposed, accepted, rejected, deferred, conflicted or superseded. Each
+alternative says whether it was chosen, rejected, deferred, unverified or out of scope, why, and
+whether that reason holds for good, only for now, or lacks evidence. Agents record the
+alternatives they weighed and link the thread they decided in. When one decision replaces another,
+the old one stays, marked superseded and linked to its replacement; giving it another state
+unlinks them, and a linked decision cannot be deleted. A conflicted decision waits in
 [Waiting on you](#waiting-on-you) until its state changes. Every change is kept as a revision
 until you delete the decision; only a person can delete one.
 Decisions recorded as for or against something read as accepted, with that call as their one
 alternative, chosen or rejected.
+
+A thread linked to decisions shows **Decisions** with their count in its header; click it to see
+them without leaving the thread.
 
 A new thread started from a card is told which decisions concern its ticket and which categories
 exist, so the agent can look them up instead of relitigating them.
@@ -109,7 +120,8 @@ column, read-only: tap a ticket to open its thread, and pull down to refresh. Th
 when the server runs the board, and a ticket with no thread yet cannot be opened. The same
 [Waiting on you](#waiting-on-you) rows sit above the columns, oldest first; tap one to open its
 thread, while a row about the whole project, such as a budget breach, only shows its text. Nothing
-can be dismissed from the phone either.
+can be dismissed from the phone either. Decisions are not on the phone; open them on the web or
+desktop app.
 
 ## Emergency stop
 
@@ -131,6 +143,11 @@ words. `kanban_stop` sets or clears the emergency stop. `finding_search`, `findi
 same thread made in the last 30 minutes, and each search allows one capture. Agents are told to
 record a decision whenever they choose one approach over another, and a finding whenever they find
 a problem outside their task, without being asked.
+
+Under the last reply of a turn, **Recorded this turn** lists what the agent recorded during it:
+decisions, findings, corrections, knowledge pages and prompts, each with the state it had then.
+Click one to open it where it lives; a correction or a knowledge page opens its project's list.
+The mobile app does not show it.
 
 `kanban_ticket_specify` turns a rough card in Triage or Inbox into a spec. By default it starts a
 drafting thread in plan mode on the routing plugin's cheap model; with `useExisting` it checks a

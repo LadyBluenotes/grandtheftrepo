@@ -369,6 +369,8 @@ export const KanbanListDecisionsInput = Schema.Struct({
   projectId: ProjectId,
   category: Schema.optional(KanbanSlug),
   issue: Schema.optional(KanbanSlug),
+  /** Only decisions linked to this thread, as the thread header counts them. */
+  thread: Schema.optional(ThreadId),
   state: Schema.optional(KanbanDecisionState),
   /**
    * Words to look for in a decision's text; a decision matching any is kept, and the list is
