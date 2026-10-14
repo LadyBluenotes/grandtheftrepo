@@ -13,6 +13,7 @@ import {
   type KanbanIssue,
   type KanbanIssueSummary,
   type KanbanListDecisionsInput,
+  type KanbanSetCaptureInput,
   type KanbanSetDirectoryInput,
   type KanbanStatus,
   type KanbanWrite,
@@ -128,9 +129,15 @@ const ARCHIVE_AFTER = Duration.days(7);
 const HOLDING = new Set<KanbanStatus>(["triage", "inbox"]);
 const rank = (status: KanbanStatus) => KANBAN_STATUSES.indexOf(status);
 
-/** `kanban.json` under the state directory: per-project base folder overrides. */
+/**
+ * `kanban.json` under the state directory: per-project base folder overrides, and the projects
+ * whose settled threads are read for unrecorded decisions and findings.
+ */
 const Overrides = fromJsonStringPretty(
-  Schema.Struct({ directories: Schema.Record(Schema.String, Schema.String) }),
+  Schema.Struct({
+    directories: Schema.Record(Schema.String, Schema.String),
+    capture: Schema.optional(Schema.Array(Schema.String)),
+  }),
 );
 const decodeOverrides = Schema.decodeUnknownEffect(Overrides);
 const encodeOverrides = Schema.encodeEffect(Overrides);
@@ -141,6 +148,8 @@ interface Loaded {
   readonly slug: string;
   readonly issues: Map<string, KanbanIssue>;
   readonly decisions: Map<string, Array<KanbanDecision>>;
+  /** As `kanban.json` had it at load, then as `setCapture` saved it. */
+  capture: boolean;
   readonly lock: Semaphore.Semaphore;
   /** Owns the folder watchers; closed when the folder changes. */
   readonly scope: Scope.Closeable;
@@ -166,6 +175,9 @@ export class KanbanStore extends Context.Service<
      * folder that cannot be created or read fails the move before anything changes.
      */
     readonly setDirectory: (input: KanbanSetDirectoryInput) => Effect.Effect<void, KanbanError>;
+    readonly setCapture: (input: KanbanSetCaptureInput) => Effect.Effect<void, KanbanError>;
+    /** Whether settle-time capture is on for the project, read from `kanban.json`; nothing is loaded. */
+    readonly captures: (projectId: ProjectId) => Effect.Effect<boolean, KanbanError>;
     /**
      * Admits an issue from Triage or Inbox to Todo as `by`, in one write, with `criteria` as its
      * acceptance criteria in that order: one already there with the same text keeps its id and
@@ -326,6 +338,9 @@ const make = Effect.gen(function* () {
   // Outlives a reload so subscribers keep hearing about the project after its folder moves.
   const changes = new Map<ProjectId, PubSub.PubSub<void>>();
   const loadLock = yield* Semaphore.make(1);
+  // One `kanban.json` read-modify-write at a time, so a folder change and a capture toggle that
+  // cross keep each other.
+  const overridesLock = yield* Semaphore.make(1);
   const isSlug = Schema.is(KanbanSlug);
 
   const io = (message: string) => (cause: unknown) =>
@@ -418,20 +433,24 @@ const make = Effect.gen(function* () {
   const readProject = (projectId: ProjectId) =>
     projects.getById(projectId).pipe(Effect.catch(io("Could not read the project.")));
 
-  /** The override from `kanban.json`, else `<T3 home>/wiki/<project-slug>`. */
+  /**
+   * The folder override from `kanban.json`, else `<T3 home>/wiki/<project-slug>`, and whether the
+   * file turns capture on.
+   */
   const directoryOf = (
     projectId: ProjectId,
     title: string,
     overrides: typeof Overrides.Type,
-  ): { readonly slug: string; readonly directory: string } => {
+  ): { readonly slug: string; readonly directory: string; readonly capture: boolean } => {
     const slug = Files.slugOf(title);
     return {
       slug,
       directory: overrides.directories[projectId] ?? path.join(config.baseDir, "wiki", slug),
+      capture: overrides.capture?.includes(projectId) ?? false,
     };
   };
 
-  /** The project's folder under `overrides`, or under `kanban.json` as it is now. */
+  /** The project's folder and capture under `overrides`, or under `kanban.json` as it is now. */
   const resolveDirectory = Effect.fn("KanbanStore.resolveDirectory")(function* (
     projectId: ProjectId,
     overrides?: typeof Overrides.Type,
@@ -501,12 +520,13 @@ const make = Effect.gen(function* () {
       Effect.gen(function* () {
         const again = loaded.get(projectId);
         if (again !== undefined) return again;
-        const { slug, directory } = yield* resolveDirectory(projectId);
+        const { slug, directory, capture } = yield* resolveDirectory(projectId);
         const state: Loaded = {
           directory,
           slug,
           issues: new Map(),
           decisions: new Map(),
+          capture,
           lock: yield* Semaphore.make(1),
           scope: yield* Scope.make(),
         };
@@ -553,6 +573,7 @@ const make = Effect.gen(function* () {
   });
   const board = (state: Loaded): KanbanBoard => ({
     directory: state.directory,
+    capture: state.capture,
     issues: Array.from(state.issues.values(), summary),
     decisionCategories: Array.from(state.decisions, ([category, list]) => ({
       category,
@@ -1230,29 +1251,70 @@ const make = Effect.gen(function* () {
       return result;
     });
 
+  const writeOverrides = (overrides: typeof Overrides.Type) =>
+    encodeOverrides(overrides).pipe(
+      Effect.catch(io("Could not encode kanban.json.")),
+      Effect.flatMap((contents) =>
+        writeFileStringAtomically({ filePath: overridesPath, contents: `${contents}\n` }).pipe(
+          Effect.provideService(FileSystem.FileSystem, fs),
+          Effect.provideService(Path.Path, path),
+          Effect.catch(io(`Could not write ${overridesPath}.`)),
+        ),
+      ),
+    );
+
+  /** `saved` runs under the same lock once the write lands, so memory follows writes in order. */
+  const updateOverrides = (
+    change: (overrides: typeof Overrides.Type) => typeof Overrides.Type,
+    saved: Effect.Effect<void> = Effect.void,
+  ) =>
+    overridesLock.withPermits(1)(
+      Effect.flatMap(readOverrides, (overrides) => writeOverrides(change(overrides))).pipe(
+        Effect.andThen(saved),
+      ),
+    );
+
+  const setCapture: KanbanStore["Service"]["setCapture"] = Effect.fn("KanbanStore.setCapture")(
+    function* ({ projectId, enabled }) {
+      // Under `loadLock` too, so a first load can't read the old value and cache it after this write.
+      // Lock order is `loadLock` then `overridesLock`; nothing takes them the other way round.
+      yield* loadLock.withPermits(1)(
+        updateOverrides(
+          (overrides) => {
+            const others = (overrides.capture ?? []).filter((id) => id !== projectId);
+            return { ...overrides, capture: enabled ? [...others, projectId] : others };
+          },
+          Effect.sync(() => {
+            const state = loaded.get(projectId);
+            if (state !== undefined) state.capture = enabled;
+          }),
+        ),
+      );
+      yield* publish(projectId);
+    },
+  );
+
   const setDirectory: KanbanStore["Service"]["setDirectory"] = Effect.fn(
     "KanbanStore.setDirectory",
   )(function* ({ projectId, directory }) {
     if (directory !== null && !path.isAbsolute(directory))
       return yield* invalid("The issues folder must be an absolute path.");
+    const withDirectory = (overrides: typeof Overrides.Type) => {
+      const directories: Record<string, string> = { ...overrides.directories };
+      if (directory === null) delete directories[projectId];
+      else directories[projectId] = directory;
+      return { ...overrides, directories };
+    };
     const overrides = yield* readOverrides;
     // A board keeps being one in its new folder; a project without one gets none from a move.
     const hadBoard = yield* hasBoard(projectId, overrides);
-    const directories: Record<string, string> = { ...overrides.directories };
-    if (directory === null) delete directories[projectId];
-    else directories[projectId] = directory;
     // Staged before anything changes: a destination that cannot be created or read fails the move
-    // and leaves the board, its watchers and `kanban.json` as they were.
+    // and leaves the board, its watchers and `kanban.json` as they were. It takes no lock.
     if (hadBoard)
-      yield* openFolders((yield* resolveDirectory(projectId, { directories })).directory);
-    const contents = yield* encodeOverrides({ directories }).pipe(
-      Effect.catch(io("Could not encode kanban.json.")),
-    );
-    yield* writeFileStringAtomically({ filePath: overridesPath, contents: `${contents}\n` }).pipe(
-      Effect.provideService(FileSystem.FileSystem, fs),
-      Effect.provideService(Path.Path, path),
-      Effect.catch(io(`Could not write ${overridesPath}.`)),
-    );
+      yield* openFolders((yield* resolveDirectory(projectId, withDirectory(overrides))).directory);
+    // Re-read under `overridesLock`, so a capture toggle made meanwhile is kept. Nothing below loads
+    // while it is held: `setCapture` takes `loadLock` before it.
+    yield* updateOverrides(withDirectory);
     const previous = loaded.get(projectId);
     if (previous !== undefined) {
       loaded.delete(projectId);
@@ -1296,6 +1358,9 @@ const make = Effect.gen(function* () {
       }),
     write,
     setDirectory,
+    setCapture,
+    captures: (projectId) =>
+      Effect.map(readOverrides, (overrides) => overrides.capture?.includes(projectId) ?? false),
     admit,
     advance,
     sweepArchive: Effect.forEach(loaded, ([projectId, state]) => sweepProject(projectId, state), {

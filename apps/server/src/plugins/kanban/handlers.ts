@@ -39,6 +39,7 @@ export const table = PluginRpc.defineHandlers(KANBAN_METHODS)({
   write: ({ projectId, ...write }) =>
     Effect.flatMap(store, (s) => s.write(projectId, "user", write)),
   setDirectory: (input) => Effect.flatMap(store, (s) => s.setDirectory(input)).pipe(Effect.as({})),
+  setCapture: (input) => Effect.flatMap(store, (s) => s.setCapture(input)).pipe(Effect.as({})),
   stopSet: ({ reason }) => Effect.flatMap(stopGate, (gate) => gate.set({ setBy: "user", reason })),
   stopClear: () => Effect.flatMap(stopGate, (gate) => gate.clear).pipe(Effect.as({})),
   stopGet: () => Effect.flatMap(stopGate, (gate) => gate.get),

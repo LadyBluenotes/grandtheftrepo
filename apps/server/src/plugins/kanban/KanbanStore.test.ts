@@ -940,6 +940,66 @@ it.layer(layerTest)("KanbanStore", (it) => {
   });
 
   describe("folder", () => {
+    it.effect("a folder change and a capture toggle made at once both land", () =>
+      Effect.gen(function* () {
+        const store = yield* KanbanStore.KanbanStore;
+        const fs = yield* FileSystem.FileSystem;
+        const other = yield* fs.makeTempDirectoryScoped({ prefix: "t3code-kanban-capture-" });
+        yield* Effect.all(
+          [
+            store.setDirectory({ projectId, directory: other }),
+            store.setCapture({ projectId, enabled: true }),
+          ],
+          { concurrency: "unbounded" },
+        );
+        assert.strictEqual(yield* store.directory(projectId), other);
+        assert.isTrue(yield* store.captures(projectId));
+        yield* store.setCapture({ projectId, enabled: false });
+        yield* store.setDirectory({ projectId, directory: null });
+      }),
+    );
+
+    it.effect("capture toggles made at once leave the board's setting as kanban.json has it", () =>
+      Effect.gen(function* () {
+        const store = yield* KanbanStore.KanbanStore;
+        const fs = yield* FileSystem.FileSystem;
+        const other = yield* fs.makeTempDirectoryScoped({ prefix: "t3code-kanban-capture-" });
+        yield* store.setDirectory({ projectId, directory: other });
+        // Loaded, so each toggle also updates the board in memory.
+        yield* store.board(projectId);
+        yield* Effect.all(
+          [true, false, true, false, true, false].map((enabled) =>
+            store.setCapture({ projectId, enabled }),
+          ),
+          { concurrency: "unbounded" },
+        );
+        assert.strictEqual(
+          (yield* store.board(projectId)).capture,
+          yield* store.captures(projectId),
+        );
+        yield* store.setCapture({ projectId, enabled: false });
+        yield* store.setDirectory({ projectId, directory: null });
+      }),
+    );
+
+    it.effect(
+      "keeps capture beside the folder in kanban.json, each surviving a change to the other",
+      () =>
+        Effect.gen(function* () {
+          const store = yield* KanbanStore.KanbanStore;
+          const fs = yield* FileSystem.FileSystem;
+          const other = yield* fs.makeTempDirectoryScoped({ prefix: "t3code-kanban-capture-" });
+          yield* store.setCapture({ projectId, enabled: true });
+          yield* store.setDirectory({ projectId, directory: other });
+          assert.isTrue((yield* store.board(projectId)).capture);
+          yield* store.setCapture({ projectId, enabled: false });
+          assert.strictEqual((yield* store.board(projectId)).directory, other);
+          assert.isFalse((yield* store.board(projectId)).capture);
+          assert.isFalse(yield* store.captures(projectId));
+          yield* store.setDirectory({ projectId, directory: null });
+        }),
+    );
+
     it.effect("archives Done issues older than seven days when a folder loads", () =>
       Effect.gen(function* () {
         const store = yield* KanbanStore.KanbanStore;

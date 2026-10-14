@@ -125,6 +125,21 @@ days after it was recorded is flagged under [Waiting on you](#waiting-on-you), o
 project with the count. Any review takes a finding on, and the row updates or leaves on the next
 sweep.
 
+## Drafts from settled threads
+
+An agent sometimes makes a call or notices a problem in its reply without recording it. To catch
+those, turn on drafting with the settings button at the top of the board. Then, when a
+thread in the project settles, the routing plugin's cheap model reads the thread's last reply and
+files each decision and finding it names that the thread did not already record. A drafted decision
+is **proposed** and a drafted finding is **open**, each linked to the thread; a finding lands on a
+new Triage card labeled `finding`. Nothing is accepted for you: give a decision its state in the
+decisions view, and review a finding on its card.
+
+It is off by default. Each settled thread costs one cheap turn, which runs in a thread of its own
+titled `Capture: <thread>` that settles once its drafts are filed; that thread is never read in
+turn. Without the routing plugin's cheap tier, or while the emergency stop is set, nothing is
+drafted.
+
 ## On mobile
 
 In the mobile app, **Board** on a project's overview in Settings lists that project's tickets
@@ -143,7 +158,7 @@ board. While it is set, a banner at the top of the board says so, with a **Clear
 does not interrupt running agents, and starting work yourself, including dragging a card to
 **In progress**, is never blocked. It is stored, so it survives a restart. Setting it twice, or
 clearing it when it is not set, changes nothing. While it is set, drafting a spec with a model is
-refused; checking a spec you wrote still works.
+refused, and settled threads are not drafted from; checking a spec you wrote still works.
 
 ## Agents
 
@@ -180,5 +195,5 @@ is closed as malformed with the reason, and you run it again if the card is stil
 Everything on the board is a file on the environment running the project: one markdown file per
 issue with its fields in frontmatter and the log at the end, and one YAML file per decision
 category. They live under `<T3 home>/wiki/<project>/` in `issues/` and `decisions/`. Use the
-folder button at the top of the board to choose another folder for a project. Edits made in an
+settings button at the top of the board to choose another folder for a project. Edits made in an
 editor show up on the board right away, and agents may edit the files directly.

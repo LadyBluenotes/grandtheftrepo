@@ -17,6 +17,7 @@ import {
 import {
   KANBAN_STATUSES,
   type EnvironmentId,
+  type KanbanBoard,
   type KanbanIssueSummary,
   type KanbanStatus,
   type ProjectId,
@@ -25,11 +26,11 @@ import {
 import { useNavigate } from "@tanstack/react-router";
 import {
   ArchiveIcon,
-  FolderIcon,
   GitBranchIcon,
   OctagonAlertIcon,
   PlusIcon,
   ScaleIcon,
+  Settings2Icon,
   SquareKanbanIcon,
   UserRoundCheckIcon,
 } from "lucide-react";
@@ -63,6 +64,7 @@ import {
   SelectValue,
 } from "~/components/ui/select";
 import { SidebarInset } from "~/components/ui/sidebar";
+import { Switch } from "~/components/ui/switch";
 import { stackedThreadToast, toastManager } from "~/components/ui/toast";
 import { Toggle } from "~/components/ui/toggle";
 import { isElectron } from "~/env";
@@ -103,6 +105,7 @@ import {
   kanbanBoardEnvironments,
   kanbanBoards,
   kanbanBoardsChanged,
+  kanbanSetCapture,
   kanbanSetDirectory,
   kanbanWrite,
 } from "./state";
@@ -381,29 +384,38 @@ function Column({
 }
 
 /**
- * The issues folder of one project, which the board can change. Over several projects it asks
- * which, starting from the project in hand. A project's folder is read without loading its board,
- * and saving waits until it is known, so an unread folder is never saved back as the default.
+ * One project's board settings: its issues folder and whether settled threads are drafted from.
+ * Over several projects it asks which, starting from the project in hand. A project's folder is
+ * read without loading its board, and saving waits until it is known, so an unread folder is never
+ * saved back as the default. Drafting shows its project's board, so it waits for one.
  */
-function FolderPopover({
+function BoardSettings({
   projects,
   defaultProject,
   environments,
+  boards,
   onSaved,
 }: {
   readonly projects: ReadonlyArray<BoardProject>;
   readonly defaultProject: BoardProject | null;
   readonly environments: ReadonlyArray<BoardEnvironment>;
+  readonly boards: ReadonlyArray<ScopedProjectRef & { readonly board: KanbanBoard | null }>;
   readonly onSaved: () => void;
 }) {
   const setDirectory = useAtomCommand(kanbanSetDirectory, { reportFailure: false });
+  const setCapture = useAtomCommand(kanbanSetCapture, { reportFailure: false });
   const [picked, setPicked] = useState<BoardProject | null>(null);
   // Null until edited: the field shows the project's folder as last read.
   const [draft, setDraft] = useState<string | null>(null);
   // A pick the scope has since dropped falls back to the default.
   const project = pickBoardProject(projects, picked, defaultProject);
   const canSave = useAtomValue(kanbanSetDirectory.permissionAtom(project?.environmentId ?? null));
+  const canSetCapture = useAtomValue(
+    kanbanSetCapture.permissionAtom(project?.environmentId ?? null),
+  );
   const current = project === null ? undefined : boardFolder(environments, project)?.directory;
+  const board =
+    project === null ? undefined : (boards.find(sameProject(project))?.board ?? undefined);
   const value = draft ?? current ?? "";
   return (
     <Popover
@@ -414,9 +426,9 @@ function FolderPopover({
       }}
     >
       <PopoverTrigger
-        render={<Button size="icon-sm" variant="ghost-muted" aria-label="Issues folder" />}
+        render={<Button size="icon-sm" variant="ghost-muted" aria-label="Board settings" />}
       >
-        <FolderIcon />
+        <Settings2Icon />
       </PopoverTrigger>
       <PopoverPopup side="bottom" align="end" className="w-96">
         <form
@@ -436,10 +448,6 @@ function FolderPopover({
             if (result._tag === "Success") onSaved();
           }}
         >
-          <p className="text-xs text-muted-foreground">
-            Issues and decisions live as files in this folder on the environment. Leave it empty to
-            use the default under the T3 home.
-          </p>
           {projects.length > 1 ? (
             <ProjectSelect
               projects={projects}
@@ -450,6 +458,10 @@ function FolderPopover({
               }}
             />
           ) : null}
+          <p className="text-xs text-muted-foreground">
+            Issues and decisions live as files in this folder on the environment. Leave it empty to
+            use the default under the T3 home.
+          </p>
           <Input
             size="sm"
             value={value}
@@ -467,6 +479,29 @@ function FolderPopover({
             </Button>
           </div>
         </form>
+        <div className="mt-3 flex items-start gap-3 border-t border-border pt-3">
+          <p className="min-w-0 flex-1 text-xs text-muted-foreground">
+            When a thread settles, the routing plugin&apos;s cheap model reads its last reply and
+            drafts the decisions and findings it did not record, for you to accept or reject. One
+            cheap turn per settled thread.
+          </p>
+          <Switch
+            size="sm"
+            aria-label="Draft decisions and findings when a thread settles"
+            checked={board?.capture === true}
+            disabled={!canSetCapture || board === undefined}
+            onCheckedChange={async (enabled) => {
+              if (project === null) return;
+              reportFailure(
+                "Could not change drafting from settled threads",
+                await setCapture({
+                  environmentId: project.environmentId,
+                  input: { projectId: project.projectId, enabled },
+                }),
+              );
+            }}
+          />
+        </div>
       </PopoverPopup>
     </Popover>
   );
@@ -820,10 +855,11 @@ export function BoardPage({ search }: { readonly search: BoardSearch }) {
               <ScaleIcon />
               Decisions
             </Toggle>
-            <FolderPopover
+            <BoardSettings
               projects={writable}
               defaultProject={newCardProject}
               environments={environments}
+              boards={boards}
               onSaved={boardsChanged}
             />
           </div>
