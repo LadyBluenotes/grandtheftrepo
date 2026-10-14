@@ -1048,29 +1048,35 @@ const make = Effect.gen(function* () {
         if (!(yield* fs.exists(directory).pipe(Effect.orElseSucceed(() => false)))) return [];
       }
       const state = yield* load(projectId);
-      const linked = Array.from(state.issues.values()).filter(
-        (issue) =>
-          issue.threads.some((link) => link.id === threadId) &&
-          !HOLDING.has(issue.status) &&
-          rank(status) > rank(issue.status),
-      );
-      // Done keeps its definition: open criteria, or a failed closure check, hold the card back.
-      const decisions = status === "done" ? allDecisions(state) : null;
-      const held: Array<Held> = [];
-      const moving = linked.filter((issue) => {
-        if (decisions === null) return true;
-        const missing = closureGaps(issue, decisions);
-        if (missing.length > 0) held.push({ id: issue.id, title: issue.title, missing });
-        return missing.length === 0 && !issue.criteria.some((c) => !c.checked);
-      });
-      if (moving.length === 0) return held;
-      const at = yield* nowIso;
-      yield* state.lock.withPermits(1)(
-        Effect.forEach(moving, (issue) => saveIssue(state, moved(issue, status, "system", at)), {
-          discard: true,
+      // Under the write lock, so a decision, finding or reason written meanwhile is neither missed
+      // by the check nor overwritten by the move.
+      const { held, changed } = yield* state.lock.withPermits(1)(
+        Effect.gen(function* () {
+          const linked = Array.from(state.issues.values()).filter(
+            (issue) =>
+              issue.threads.some((link) => link.id === threadId) &&
+              !HOLDING.has(issue.status) &&
+              rank(status) > rank(issue.status),
+          );
+          // Done keeps its definition: open criteria, or a failed closure check, hold the card.
+          const decisions = status === "done" ? allDecisions(state) : null;
+          const held: Array<Held> = [];
+          const moving = linked.filter((issue) => {
+            if (decisions === null) return true;
+            const missing = closureGaps(issue, decisions);
+            if (missing.length > 0) held.push({ id: issue.id, title: issue.title, missing });
+            return missing.length === 0 && !issue.criteria.some((c) => !c.checked);
+          });
+          const at = yield* nowIso;
+          yield* Effect.forEach(
+            moving,
+            (issue) => saveIssue(state, moved(issue, status, "system", at)),
+            { discard: true },
+          );
+          return { held, changed: moving.length > 0 };
         }),
       );
-      yield* publish(projectId);
+      if (changed) yield* publish(projectId);
       return held;
     },
   );

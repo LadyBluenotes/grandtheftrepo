@@ -126,17 +126,28 @@ function IssueDetails({
   const [note, setNote] = useState("");
   const [blockReason, setBlockReason] = useState("");
   const [criterion, setCriterion] = useState("");
-  // Null until edited, so the field shows the reason as it is now, whoever set it.
+  // Null while not being edited, so the field shows the reason as it is now, whoever set it.
   const [noDecision, setNoDecision] = useState<string | null>(null);
   const [reopenTo, setReopenTo] = useState<KanbanStatus | null>(null);
   const [recording, setRecording] = useState(false);
   const [starting, setStarting] = useState(false);
 
-  const change = async (input: Omit<Parameters<typeof write>[0]["input"], "projectId">) =>
-    reportFailure(
-      "Could not update the issue",
-      await write({ environmentId, input: { projectId, ...input } }),
-    );
+  const change = async (input: Omit<Parameters<typeof write>[0]["input"], "projectId">) => {
+    const result = await write({ environmentId, input: { projectId, ...input } });
+    reportFailure("Could not update the issue", result);
+    return result;
+  };
+  /** Saves an edited no-decision reason that differs, then shows the issue's own again. */
+  const saveNoDecision = async () => {
+    if (noDecision === null) return;
+    const reason = noDecision.trim();
+    if (reason !== (issue.noDecision?.reason ?? "")) {
+      const result = await change({ action: "issue.noDecision", id: issue.id, reason });
+      // A failed save keeps the draft in the field, next to the error.
+      if (result._tag !== "Success") return;
+    }
+    setNoDecision(null);
+  };
   const update = (patch: {
     title?: string;
     description?: string;
@@ -599,15 +610,7 @@ function IssueDetails({
                 disabled={!canWrite}
                 placeholder="No decision needed, because…"
                 onChange={(event) => setNoDecision(event.target.value)}
-                onBlur={() =>
-                  noDecision !== null &&
-                  noDecision.trim() !== (issue.noDecision?.reason ?? "") &&
-                  void change({
-                    action: "issue.noDecision",
-                    id: issue.id,
-                    reason: noDecision.trim(),
-                  })
-                }
+                onBlur={() => void saveNoDecision()}
               />
             ) : null}
           </Field>

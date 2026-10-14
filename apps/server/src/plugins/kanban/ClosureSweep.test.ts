@@ -7,6 +7,7 @@ import {
   type Project,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 
@@ -49,17 +50,19 @@ const fixture = Effect.gen(function* () {
         }),
       ),
       Layer.provide(ServerConfig.layerTest(process.cwd(), { prefix: "t3code-kanban-closure-" })),
-      Layer.provide(NodeServices.layer),
+      Layer.provideMerge(NodeServices.layer),
     ),
   );
   const run = yield* ClosureSweep.sweep.pipe(Effect.provideContext(services));
   const hold = yield* ClosureSweep.hold.pipe(Effect.provideContext(services));
   const attention = yield* Attention.Attention.pipe(Effect.provideContext(services));
   const store = yield* KanbanStore.KanbanStore.pipe(Effect.provideContext(services));
+  const fs = yield* FileSystem.FileSystem.pipe(Effect.provideContext(services));
   return {
     run,
     hold,
     store,
+    fs,
     attention,
     open: attention.listOpen({ pluginId: "kanban", kind: "closure_held" }),
   };
@@ -147,6 +150,25 @@ it.effect("a flag whose card or project is gone clears", () =>
       assert.lengthOf(yield* open, 2);
       assert.deepEqual(yield* run({ dryRun: false }), { examined: 2, acted: 2, flags: 0 });
       assert.deepEqual(yield* open, []);
+    }),
+  ),
+);
+
+it.effect("a dry run leaves a project the store has not loaded alone", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const { run, hold, store, fs, open } = yield* fixture;
+      // Raised before this start: nothing has loaded the project since.
+      yield* hold(projectId, [{ id: "gone", title: "Gone", missing: ["it needs a decision"] }]);
+      const folder = yield* store.directory(projectId);
+
+      assert.deepEqual(yield* run({ dryRun: true }), { examined: 1, acted: 0, flags: 1 });
+      assert.isFalse(yield* fs.exists(folder));
+      assert.lengthOf(yield* open, 1);
+
+      // A real run reads the card, which loads the project, and clears the flag of one gone.
+      assert.deepEqual(yield* run({ dryRun: false }), { examined: 1, acted: 1, flags: 0 });
+      assert.isTrue(yield* fs.exists(folder));
     }),
   ),
 );

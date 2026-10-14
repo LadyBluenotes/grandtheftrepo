@@ -603,6 +603,57 @@ it.layer(layerTest)("KanbanStore", (it) => {
       }),
     );
 
+    it.effect("checks a settling card against what a write holding the lock saves", () =>
+      Effect.gen(function* () {
+        const store = yield* KanbanStore.KanbanStore;
+        const threadId = ThreadId.make("thr_race");
+        const { id } = yield* store.write(projectId, "user", {
+          action: "issue.create",
+          title: "Race the gate",
+        });
+        yield* store.write(projectId, "user", {
+          action: "issue.noDecision",
+          id,
+          reason: "Plain fix.",
+        });
+        yield* store.write(projectId, "user", { action: "issue.link", id, threadId });
+
+        // A finding lands while the thread settles: the card passes until the write saves it.
+        const entered = yield* Deferred.make<void>();
+        const release = yield* Deferred.make<void>();
+        const capturing = yield* Effect.forkChild(
+          store.transact(projectId, (issues, at) =>
+            Effect.gen(function* () {
+              yield* Deferred.succeed(entered, undefined);
+              yield* Deferred.await(release);
+              return {
+                result: undefined,
+                save: [{ ...issues.get(id)!, findings: [finding("open", at)] }],
+              };
+            }),
+          ),
+        );
+        yield* Deferred.await(entered);
+        // Runs until it waits for the lock the write holds.
+        const settling = yield* Effect.forkChild(store.advance(projectId, threadId, "done"), {
+          startImmediately: true,
+        });
+        yield* Deferred.succeed(release, undefined);
+        yield* Fiber.join(capturing);
+
+        const held = yield* Fiber.join(settling);
+        assert.deepStrictEqual(
+          held.map((card) => card.id),
+          [id],
+        );
+        const issue = yield* store.getIssue({ projectId, id });
+        assert.deepStrictEqual(
+          [issue.status, issue.findings.map((f) => f.disposition)],
+          ["todo", ["open"]],
+        );
+      }),
+    );
+
     it.effect("lets an issue filed before the check move to Done, by hand or on its own", () =>
       Effect.gen(function* () {
         const store = yield* KanbanStore.KanbanStore;

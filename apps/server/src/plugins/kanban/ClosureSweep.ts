@@ -51,8 +51,9 @@ export const hold = Effect.gen(function* () {
 /**
  * Builds the closure sweep. It clears each open `closure_held` flag once its card passes the
  * closure check, reaches Done, is archived or is gone, and rewrites its text while what the card
- * lacks changes. A card it cannot read for another reason keeps its flag. Under a dry run it
- * writes nothing.
+ * lacks changes. A card it cannot read for another reason keeps its flag. A dry run reads no
+ * card, since reading one loads its project, which creates folders and watchers and archives old
+ * cards; it counts the open flags as they are and writes nothing.
  */
 export const sweep = Effect.gen(function* () {
   const store = yield* KanbanStore.KanbanStore;
@@ -80,6 +81,7 @@ export const sweep = Effect.gen(function* () {
 
   return Effect.fn("ClosureSweep.run")(function* (input: { readonly dryRun: boolean }) {
     const open = yield* attention.listOpen({ pluginId: PLUGIN_ID, kind: FLAG_KIND });
+    if (input.dryRun) return { examined: open.length, acted: 0, flags: open.length };
     const gone: Array<string> = [];
     const stale: Array<readonly [string, string]> = [];
     for (const flag of open) {
@@ -90,22 +92,20 @@ export const sweep = Effect.gen(function* () {
       else if (text !== undefined && text !== flag.text) stale.push([flag.threadId, text]);
     }
 
-    if (!input.dryRun) {
-      for (const threadId of gone)
-        yield* attention.clear({ pluginId: PLUGIN_ID, threadId, kind: FLAG_KIND });
-      for (const [threadId, text] of stale)
-        yield* attention.raise({
-          pluginId: PLUGIN_ID,
-          threadId,
-          kind: FLAG_KIND,
-          text,
-          resumeAction: RESUME_ACTION,
-        });
-    }
+    for (const threadId of gone)
+      yield* attention.clear({ pluginId: PLUGIN_ID, threadId, kind: FLAG_KIND });
+    for (const [threadId, text] of stale)
+      yield* attention.raise({
+        pluginId: PLUGIN_ID,
+        threadId,
+        kind: FLAG_KIND,
+        text,
+        resumeAction: RESUME_ACTION,
+      });
 
     return {
       examined: open.length,
-      acted: input.dryRun ? 0 : gone.length + stale.length,
+      acted: gone.length + stale.length,
       flags: open.length - gone.length,
     };
   });
