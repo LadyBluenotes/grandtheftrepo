@@ -10,7 +10,9 @@ import {
 } from "@t3tools/client-runtime/plugins/rpc";
 import { scopeThreadRef } from "@t3tools/client-runtime/environment";
 import {
+  parseProjectKey,
   parseProjectRefCollectionKey,
+  projectKey,
   projectRefCollectionKey,
 } from "@t3tools/client-runtime/state/entities";
 import {
@@ -292,37 +294,76 @@ const kanbanBoardsFamily = Atom.family((key: string) => {
 export const kanbanBoards = (refs: ReadonlyArray<ScopedProjectRef>) =>
   kanbanBoardsFamily(projectRefCollectionKey(refs));
 
+/** A board's last snapshot, undefined before its first, and how often it changed since that one. */
+interface BoardChanges<A> {
+  readonly snapshot: A | undefined;
+  readonly changes: number;
+}
+
 /**
- * Changes with each snapshot of the boards, among one environment's `projectIds`, that have one.
- * It subscribes to those only: subscribing to a board loads it, which creates its folder.
+ * `previous` after the board's `snapshot`, undefined while it has none: the snapshot a board
+ * arrives with counts nothing, since the read it would refresh was made for the same state, and
+ * nor does the same snapshot again. Each later one counts once.
+ */
+export function boardChanges<A>(
+  previous: BoardChanges<A>,
+  snapshot: A | undefined,
+): BoardChanges<A> {
+  if (snapshot === undefined || snapshot === previous.snapshot) return previous;
+  return {
+    snapshot,
+    changes: previous.snapshot === undefined ? previous.changes : previous.changes + 1,
+  };
+}
+
+const NO_BOARD_CHANGES: BoardChanges<never> = { snapshot: undefined, changes: 0 };
+
+/** How often one board changed since its first snapshot; see `boardChanges`. */
+const boardChangeCount = Atom.family((key: string) => {
+  const { environmentId, projectId } = parseProjectKey(key);
+  const board = kanbanBoard({ environmentId, input: { projectId } });
+  return Atom.make((get) =>
+    boardChanges(
+      Option.getOrElse(get.self<BoardChanges<KanbanBoard>>(), () => NO_BOARD_CHANGES),
+      Option.getOrUndefined(AsyncResult.value(get(board))),
+    ),
+  );
+});
+
+/**
+ * Changes with each snapshot of the boards, among one environment's `projectIds`, that have one,
+ * but each board's first: a board arriving, as all of them do on mount, re-reads nothing, so the
+ * attention read runs once on mount and once per later board change. It subscribes to those boards
+ * only: subscribing to a board loads it, which creates its folder.
  */
 const subscribedBoardsSignal = Atom.family((key: string) => {
   const refs = parseProjectRefCollectionKey(key);
   const projectIds = refs.map((ref) => ref.projectId);
-  return Atom.withEquality(
-    Atom.make((get) => {
-      const environmentId = refs[0]?.environmentId;
-      if (environmentId === undefined) return [];
-      // The same read `kanbanBoardEnvironments` makes for these projects, so no second request.
-      const folders = Option.getOrNull(
-        AsyncResult.value(get(kanbanBoardFolders({ environmentId, input: { projectIds } }))),
-      );
-      return (folders ?? [])
-        .filter((folder) => folder.board)
-        .map((folder) =>
-          get(kanbanBoard({ environmentId, input: { projectId: folder.projectId } })),
-        );
-    }),
-    (left, right) =>
-      left.length === right.length && left.every((value, index) => Object.is(value, right[index])),
-  );
+  return Atom.make((get) => {
+    const environmentId = refs[0]?.environmentId;
+    if (environmentId === undefined) return "";
+    // The same read `kanbanBoardEnvironments` makes for these projects, so no second request.
+    const folders = Option.getOrNull(
+      AsyncResult.value(get(kanbanBoardFolders({ environmentId, input: { projectIds } }))),
+    );
+    return (folders ?? [])
+      .filter((folder) => folder.board)
+      .map((folder) => ({
+        projectId: folder.projectId,
+        changes: get(boardChangeCount(projectKey({ environmentId, projectId: folder.projectId })))
+          .changes,
+      }))
+      .filter(({ changes }) => changes > 0)
+      .map(({ projectId, changes }) => `${projectId}:${changes}`)
+      .join(" ");
+  });
 });
 
 /**
  * What waits on a person in some projects of one environment, for the strip above the board,
  * whether or not each has a board. It re-reads only on the window coming back into view, a change
- * in the projects' pending requests and every snapshot of their boards, and never polls, so a flag
- * a sweep raises shows on the next of those.
+ * in the projects' pending requests and every snapshot of their boards after the first, and never
+ * polls, so a flag a sweep raises shows on the next of those.
  */
 const kanbanProjectsAttention = createKanbanProjectsAttentionAtomFamily(connectionAtomRuntime, {
   boards: ({ environmentId, input }) =>
@@ -361,14 +402,19 @@ const kanbanBoardAttentionFamily = Atom.family((key: string) => {
 
 /**
  * A strip row's title on the board: its thread's (the shared formatter names an untitled one),
- * else the project it is about, or every project for a policy of the whole environment.
+ * else the project it is about, or every project for a policy of the whole environment, with that
+ * environment's label (`environmentLabel`, undefined unless the board spans several, as on cards).
  */
 export function boardAttentionTitle(
   row: KanbanAttentionStripRow<BoardAttentionRow>,
   projectLabel: (ref: ScopedProjectRef) => string | undefined,
+  environmentLabel: (environmentId: EnvironmentId) => string | undefined,
 ): string {
   if (row.threadId !== null) return row.title;
-  if (row.projectId === null) return "Every project";
+  if (row.projectId === null) {
+    const environment = environmentLabel(row.environmentId);
+    return environment === undefined ? "Every project" : `Every project · ${environment}`;
+  }
   return projectLabel({ environmentId: row.environmentId, projectId: row.projectId }) ?? row.title;
 }
 

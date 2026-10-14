@@ -1,5 +1,5 @@
 import { kanbanAttentionStripRows } from "@t3tools/client-runtime/plugins/kanban";
-import type { ScopedProjectRef } from "@t3tools/contracts";
+import type { EnvironmentId, ScopedProjectRef } from "@t3tools/contracts";
 import { useNavigate } from "@tanstack/react-router";
 import { FlagIcon, MessageCircleQuestionMarkIcon, ShieldAlertIcon } from "lucide-react";
 
@@ -12,15 +12,18 @@ import { attentionResumeTarget, boardAttentionTitle, type BoardAttentionRow } fr
  * Everything in the board's projects waiting on a person, above the columns, oldest first:
  * questions and permission requests agents are waiting on, and flags other plugins raised. A row
  * about a project rather than a thread names the project, or every project for a policy of the
- * whole environment. There is no dismiss; a row leaves once its cause clears. Hidden while
- * nothing waits.
+ * whole environment, with that environment once the board spans several. There is no dismiss; a
+ * row leaves once its cause clears. Hidden while nothing waits.
  */
 export function AttentionStrip({
   rows: attention,
   projectLabel,
+  environmentLabel,
 }: {
   readonly rows: ReadonlyArray<BoardAttentionRow>;
   readonly projectLabel: (ref: ScopedProjectRef) => string | undefined;
+  /** Names an environment-wide row's environment; undefined unless the board spans several. */
+  readonly environmentLabel: (environmentId: EnvironmentId) => string | undefined;
 }) {
   const navigate = useNavigate();
   const rows = kanbanAttentionStripRows(attention);
@@ -52,7 +55,7 @@ export function AttentionStrip({
             : row.kind === "permission"
               ? ShieldAlertIcon
               : FlagIcon;
-        const title = boardAttentionTitle(row, projectLabel);
+        const title = boardAttentionTitle(row, projectLabel, environmentLabel);
         return (
           <Alert
             key={`${row.environmentId}:${row.id}`}

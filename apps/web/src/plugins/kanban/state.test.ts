@@ -6,6 +6,7 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   attentionResumeTarget,
   boardAttentionTitle,
+  boardChanges,
   buildIssuePrompt,
   findDecisionSearch,
   validateBoardSearch,
@@ -175,11 +176,14 @@ describe("boardAttentionTitle", () => {
   const environmentId = EnvironmentId.make("local");
   const projectId = ProjectId.make("project-1");
   const projectLabel = () => "app";
-  const title = (fields: {
-    threadId: string | null;
-    threadTitle: string | null;
-    projectId: ProjectId | null;
-  }) => {
+  const title = (
+    fields: {
+      threadId: string | null;
+      threadTitle: string | null;
+      projectId: ProjectId | null;
+    },
+    environmentLabel: (id: EnvironmentId) => string | undefined = () => undefined,
+  ) => {
     const [row] = kanbanAttentionStripRows([
       {
         source: "flag" as const,
@@ -194,7 +198,7 @@ describe("boardAttentionTitle", () => {
         environmentId,
       },
     ]);
-    return boardAttentionTitle(row!, projectLabel);
+    return boardAttentionTitle(row!, projectLabel, environmentLabel);
   };
 
   it("keeps a thread row a thread row, untitled or not", () => {
@@ -205,6 +209,28 @@ describe("boardAttentionTitle", () => {
   it("names the project for a project row, and every project for an environment's policy", () => {
     expect(title({ threadId: null, threadTitle: null, projectId })).toBe("app");
     expect(title({ threadId: null, threadTitle: null, projectId: null })).toBe("Every project");
+  });
+
+  it("names the environment of a policy row once the board spans several, as cards do", () => {
+    const spans = (id: EnvironmentId) => (id === environmentId ? "Laptop" : "Server");
+    expect(title({ threadId: null, threadTitle: null, projectId: null }, spans)).toBe(
+      "Every project · Laptop",
+    );
+    expect(title({ threadId: null, threadTitle: null, projectId }, spans)).toBe("app");
+    expect(title({ threadId: "thread-1", threadTitle: "Fix login", projectId: null }, spans)).toBe(
+      "Fix login",
+    );
+  });
+});
+
+describe("boardChanges", () => {
+  it("counts no change for a board's first snapshot or the same one again, and one per later one", () => {
+    const [first, second, third] = [{ n: 1 }, { n: 2 }, { n: 3 }];
+    let state = boardChanges<{ n: number }>({ snapshot: undefined, changes: 0 }, undefined);
+    const counts = [first, first, second, undefined, second, third].map(
+      (snapshot) => (state = boardChanges(state, snapshot)).changes,
+    );
+    expect(counts).toEqual([0, 0, 1, 1, 1, 2]);
   });
 });
 

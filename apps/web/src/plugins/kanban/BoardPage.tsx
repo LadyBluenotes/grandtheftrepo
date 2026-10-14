@@ -713,6 +713,8 @@ export function BoardPage({ search }: { readonly search: BoardSearch }) {
   // Cards say which project they are in once the scope covers more than one.
   const places = scoped.length > 1 ? labels : null;
   const showsEnvironments = environments.length > 1;
+  const environmentLabel = (environmentId: EnvironmentId) =>
+    showsEnvironments ? environmentLabels.get(environmentId) : undefined;
   const off = environments.filter((environment) => environment.active === false);
   const notices = [
     ...(off.length === 0 || off.length === environments.length
@@ -925,7 +927,11 @@ export function BoardPage({ search }: { readonly search: BoardSearch }) {
           )
         ) : (
           <>
-            <AttentionStrip rows={attention} projectLabel={projectLabel} />
+            <AttentionStrip
+              rows={attention}
+              projectLabel={projectLabel}
+              environmentLabel={environmentLabel}
+            />
             <DndContext sensors={sensors} onDragEnd={onDragEnd}>
               <div className="flex min-h-0 flex-1 gap-3 overflow-x-auto px-5 pt-4 pb-5 sm:px-6">
                 {KANBAN_STATUSES.map((status) => (
