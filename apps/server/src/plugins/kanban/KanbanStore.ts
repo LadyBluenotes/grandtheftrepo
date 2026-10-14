@@ -185,10 +185,9 @@ const search = (decisions: ReadonlyArray<KanbanDecision>, query: string) => {
 
 /**
  * Sets every decision's `supersedes` to the decisions whose `supersededBy` names it. The superseded
- * side is the record of a link: a write saves the replacement's file first and the superseded
- * decision's last, so one that failed between the two, or a file edited by hand, reads as the
- * superseded side says. A `supersededBy` naming no decision is kept: the state and the revisions
- * still say what replaced it.
+ * side is the record of a link: a write saves its file first and the replacement's after, so one
+ * that failed between the two, or a file edited by hand, reads as the superseded side says. A
+ * `supersededBy` naming no decision is kept: the state and the revisions still say what replaced it.
  */
 const relink = (decisions: Map<string, Array<KanbanDecision>>) => {
   const claims = new Map<string, Array<string>>();
@@ -486,33 +485,46 @@ const make = Effect.gen(function* () {
       revisions: [...next.revisions, { at, by: actor, change }],
     });
     /**
-     * Saves a decision and, when a supersession link changes with it, the decision on the other
-     * end: that one's file first and this one's last, so a failure between them leaves this
-     * decision as it was and `relink` reads the link that way.
+     * Saves a change to a supersession link: `own`, the superseded side and the record of the link,
+     * first, then the replacement `ref` names, built by `change` from the index after the first
+     * save. Only once the link has landed is the replacement's revision written, so a failure
+     * between the two leaves the link as `own` says and the replacement's revision missing, never
+     * a revision for a link that did not take. One file holding both is written once.
      */
     const saveLinked = (
-      own: { readonly category: string; readonly index: number; readonly next: KanbanDecision },
-      other: {
+      own: {
         readonly category: string;
         readonly index: number;
         readonly next: KanbanDecision;
       } | null,
+      other: {
+        readonly ref: string;
+        readonly change: (found: KanbanDecision) => KanbanDecision;
+      } | null,
     ) =>
       Effect.gen(function* () {
-        const listOf = (category: string) => state.decisions.get(category) ?? [];
-        if (other !== null && other.category === own.category)
+        const shared = own === null || other === null ? null : findRef(other.ref);
+        if (own !== null && other !== null && shared?.category === own.category)
           return yield* saveDecisions(
             state,
             own.category,
-            listOf(own.category).with(other.index, other.next).with(own.index, own.next),
+            shared.list
+              .with(own.index, own.next)
+              .with(shared.index, other.change(shared.list[shared.index]!)),
           );
-        if (other !== null)
+        if (own !== null)
           yield* saveDecisions(
             state,
-            other.category,
-            listOf(other.category).with(other.index, other.next),
+            own.category,
+            (state.decisions.get(own.category) ?? []).with(own.index, own.next),
           );
-        yield* saveDecisions(state, own.category, listOf(own.category).with(own.index, own.next));
+        const found = other === null ? null : findRef(other.ref);
+        if (other !== null && found !== null)
+          yield* saveDecisions(
+            state,
+            found.category,
+            found.list.with(found.index, other.change(found.list[found.index]!)),
+          );
       });
     const touch = (current: KanbanIssue, patch: Partial<KanbanIssue>): KanbanIssue => ({
       ...current,
@@ -774,8 +786,6 @@ const make = Effect.gen(function* () {
         const replacement = current.supersededBy;
         const ref = Files.decisionRef(current);
         // Leaving superseded unlinks both sides, so the replacement no longer claims it.
-        const other = replacement === null ? null : findRef(replacement);
-        const found = other === null ? null : other.list[other.index]!;
         yield* saveLinked(
           {
             category,
@@ -787,15 +797,15 @@ const make = Effect.gen(function* () {
               }`,
             ),
           },
-          other === null || found === null
+          replacement === null
             ? null
             : {
-                category: other.category,
-                index: other.index,
-                next: revised(
-                  { ...found, supersedes: found.supersedes.filter((r) => r !== ref) },
-                  `no longer supersedes ${ref}`,
-                ),
+                ref: replacement,
+                change: (found) =>
+                  revised(
+                    { ...found, supersedes: found.supersedes.filter((r) => r !== ref) },
+                    `no longer supersedes ${ref}`,
+                  ),
               },
         );
         return { id: current.id };
@@ -806,7 +816,7 @@ const make = Effect.gen(function* () {
         const current = list[index]!;
         const ref = Files.decisionRef(current);
         if (by === ref) return yield* invalid("A decision cannot supersede itself.");
-        if (current.state === "superseded")
+        if (current.state === "superseded" && current.supersededBy !== by)
           return yield* invalid(
             `${ref} is already superseded by ${current.supersededBy ?? "another"}.`,
           );
@@ -817,26 +827,34 @@ const make = Effect.gen(function* () {
           return yield* invalid(
             `${by} is itself superseded by ${replacement.supersededBy ?? "another"}; supersede with that.`,
           );
+        // A retry after the replacement's file failed: the link holds, its revision may not.
+        const linked = current.state === "superseded";
+        const recorded =
+          replacement.revisions.findLast(
+            (r) => r.change === `supersedes ${ref}` || r.change === `no longer supersedes ${ref}`,
+          )?.change === `supersedes ${ref}`;
+        if (linked && recorded) return { id: current.id };
         yield* saveLinked(
-          {
-            category,
-            index,
-            next: revised(
-              { ...current, state: "superseded", supersededBy: by },
-              `state: ${current.state} → superseded by ${by}`,
-            ),
-          },
-          {
-            category: other.category,
-            index: other.index,
-            next: revised(
-              {
-                ...replacement,
-                supersedes: [...replacement.supersedes.filter((r) => r !== ref), ref],
+          linked
+            ? null
+            : {
+                category,
+                index,
+                next: revised(
+                  { ...current, state: "superseded", supersededBy: by },
+                  `state: ${current.state} → superseded by ${by}`,
+                ),
               },
-              `supersedes ${ref}`,
-            ),
-          },
+          recorded
+            ? null
+            : {
+                ref: by,
+                change: (found) =>
+                  revised(
+                    { ...found, supersedes: [...found.supersedes.filter((r) => r !== ref), ref] },
+                    `supersedes ${ref}`,
+                  ),
+              },
         );
         return { id: current.id };
       }

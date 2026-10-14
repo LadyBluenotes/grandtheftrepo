@@ -727,7 +727,8 @@ it.layer(layerTest)("KanbanStore decisions", (it) => {
       assert.deepStrictEqual(now.get(b)?.supersedes, [`cache/${a}`]);
       assert.strictEqual(now.get(b)?.state, "accepted");
 
-      // Neither side can be superseded into a cycle or twice, nor deleted while linked.
+      // Superseding again with the same replacement changes nothing (the revisions below show it);
+      // neither side can be superseded into a cycle or by another, nor deleted while linked.
       const supersede = (id: string, by: string) =>
         failureCode(
           store.write(projectId, "user", {
@@ -737,7 +738,9 @@ it.layer(layerTest)("KanbanStore decisions", (it) => {
             by,
           }),
         );
-      assert.strictEqual(yield* supersede(a, `cache/${b}`), "invalid");
+      assert.strictEqual(yield* supersede(a, `cache/${b}`), "ok");
+      const c = (yield* create("Cache on disk")).id;
+      assert.strictEqual(yield* supersede(a, `cache/${c}`), "invalid");
       assert.strictEqual(yield* supersede(b, `cache/${a}`), "invalid");
       assert.strictEqual(yield* supersede(b, `cache/${b}`), "invalid");
       assert.strictEqual(yield* supersede(b, "cache/missing"), "not_found");
@@ -996,7 +999,7 @@ const layerFailingWrites = (failing: Set<string>) =>
   );
 
 describe("decision writes across two files", () => {
-  it.effect("change nothing when either file fails, and take effect once both land", () =>
+  it.effect("write the superseded side first and record the replacement only once it holds", () =>
     Effect.scoped(
       Effect.gen(function* () {
         const failing = new Set<string>();
@@ -1014,62 +1017,81 @@ describe("decision writes across two files", () => {
           id: a,
           by: `new/${b}`,
         });
+        const unlink = store.write(projectId, "user", {
+          action: "decision.setState",
+          category: "old",
+          id: a,
+          state: "accepted",
+        });
         // Keyed by decision: a reload reads the files in the directory's order.
         const links = Effect.map(store.listDecisions({ projectId }), (list) =>
           Object.fromEntries(
-            list.map((d) => [`${d.category}/${d.id}`, [d.state, d.supersededBy, d.supersedes]]),
+            list.map((d) => [
+              `${d.category}/${d.id}`,
+              [d.state, d.supersededBy, d.supersedes, d.revisions.map((r) => r.change)],
+            ]),
           ),
         );
-        const unlinked = {
-          [`old/${a}`]: ["accepted", null, []],
-          [`new/${b}`]: ["accepted", null, []],
-        };
-        const linked = {
-          [`old/${a}`]: ["superseded", `new/${b}`, []],
-          [`new/${b}`]: ["accepted", null, [`old/${a}`]],
-        };
         const { directory } = yield* store.board(projectId);
         const onDisk = (category: string) =>
           Effect.map(
             fs.readFileString(path.join(directory, "decisions", `${category}.yaml`)),
-            (text) => parseDecisions(category, text)?.map((d) => [d.supersededBy, d.supersedes]),
+            (text) => parseDecisions(category, text)?.map((d) => d.revisions.map((r) => r.change)),
           );
+        const created = ["created: accepted"];
+        const superseded = [...created, `state: accepted → superseded by new/${b}`];
 
-        // The replacement's file is written first: when it fails, neither file nor the index moved.
+        // The superseded side is written first: when it fails, nothing changed anywhere.
+        failing.add("old.yaml");
+        assert.strictEqual(yield* failureCode(supersede), "io");
+        assert.deepStrictEqual(yield* links, {
+          [`old/${a}`]: ["accepted", null, [], created],
+          [`new/${b}`]: ["accepted", null, [], created],
+        });
+        assert.deepStrictEqual(yield* onDisk("new"), [created]);
+
+        // When only the replacement's file fails, the link holds from the superseded side and the
+        // replacement has no revision for it yet: missing, never false.
+        failing.clear();
         failing.add("new.yaml");
         assert.strictEqual(yield* failureCode(supersede), "io");
-        assert.deepStrictEqual(yield* links, unlinked);
-        assert.deepStrictEqual(yield* onDisk("new"), [[null, []]]);
-
-        // The superseded decision's file is written last: when only it fails, the replacement's
-        // file claims a link the other side never took, and it is read as not there.
-        failing.clear();
-        failing.add("old.yaml");
-        assert.strictEqual(yield* failureCode(supersede), "io");
-        assert.deepStrictEqual(yield* onDisk("new"), [[null, [`old/${a}`]]]);
-        assert.deepStrictEqual(yield* links, unlinked);
-        // So it is after a reload from disk too.
+        const held = {
+          [`old/${a}`]: ["superseded", `new/${b}`, [], superseded],
+          [`new/${b}`]: ["accepted", null, [`old/${a}`], created],
+        };
+        assert.deepStrictEqual(yield* links, held);
+        assert.deepStrictEqual(yield* onDisk("new"), [created]);
+        // So it reads after a reload from disk too.
         yield* store.setDirectory({ projectId, directory: null });
-        assert.deepStrictEqual(yield* links, unlinked);
+        assert.deepStrictEqual(yield* links, held);
 
+        // A retry records the replacement's revision once; another retry changes nothing.
         failing.clear();
         yield* supersede;
+        yield* supersede;
+        const linked = {
+          [`old/${a}`]: ["superseded", `new/${b}`, [], superseded],
+          [`new/${b}`]: ["accepted", null, [`old/${a}`], [...created, `supersedes old/${a}`]],
+        };
         assert.deepStrictEqual(yield* links, linked);
-        // Unlinking with the superseded side failing leaves the link standing on both sides.
+
+        // Unlinking: the superseded side failing leaves both as they were.
         failing.add("old.yaml");
-        assert.strictEqual(
-          yield* failureCode(
-            store.write(projectId, "user", {
-              action: "decision.setState",
-              category: "old",
-              id: a,
-              state: "accepted",
-            }),
-          ),
-          "io",
-        );
-        assert.deepStrictEqual(yield* onDisk("new"), [[null, []]]);
+        assert.strictEqual(yield* failureCode(unlink), "io");
         assert.deepStrictEqual(yield* links, linked);
+        // The replacement failing leaves the link gone and no false revision.
+        failing.clear();
+        failing.add("new.yaml");
+        assert.strictEqual(yield* failureCode(unlink), "io");
+        assert.deepStrictEqual(yield* links, {
+          [`old/${a}`]: [
+            "accepted",
+            null,
+            [],
+            [...superseded, `state: superseded → accepted; no longer superseded by new/${b}`],
+          ],
+          [`new/${b}`]: ["accepted", null, [], [...created, `supersedes old/${a}`]],
+        });
       }),
     ),
   );
