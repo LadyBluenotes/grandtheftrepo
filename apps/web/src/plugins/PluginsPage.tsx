@@ -4,10 +4,12 @@ import {
   squashAtomCommandFailure,
 } from "@t3tools/client-runtime/state/runtime";
 import type { EnvironmentId } from "@t3tools/contracts";
+import { Link } from "@tanstack/react-router";
 import type { ReactNode } from "react";
 
 import { SettingsRow, SettingsSection } from "~/components/settings/settingsLayout";
 import { Badge } from "~/components/ui/badge";
+import { Button } from "~/components/ui/button";
 import { Empty, EmptyDescription, EmptyHeader } from "~/components/ui/empty";
 import { ScrollArea } from "~/components/ui/scroll-area";
 import { SidebarInset } from "~/components/ui/sidebar";
@@ -132,6 +134,7 @@ function PluginsList() {
                     key={status.id}
                     id={pluginRowId(status.id)}
                     title={title}
+                    description={entry?.summary}
                     status={
                       <div className="max-w-full overflow-hidden">
                         <Badge size="sm" variant={badge.variant} title={badge.label}>
@@ -140,12 +143,25 @@ function PluginsList() {
                       </div>
                     }
                     control={
-                      <Switch
-                        aria-label={`Enable ${title}`}
-                        checked={status.enabled}
-                        disabled={!canWrite}
-                        onCheckedChange={(enabled) => void toggle(status.id, enabled)}
-                      />
+                      <div className="flex items-center gap-3">
+                        {status.active && entry?.Screen !== undefined ? (
+                          <Button
+                            size="xs"
+                            variant="outline"
+                            render={
+                              <Link to="/plugins/$pluginId" params={{ pluginId: status.id }} />
+                            }
+                          >
+                            Open
+                          </Button>
+                        ) : null}
+                        <Switch
+                          aria-label={`Enable ${title}`}
+                          checked={status.enabled}
+                          disabled={!canWrite}
+                          onCheckedChange={(enabled) => void toggle(status.id, enabled)}
+                        />
+                      </div>
                     }
                   >
                     {SettingsPanel ? <SettingsPanel status={status} /> : null}

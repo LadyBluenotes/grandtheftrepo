@@ -11,9 +11,12 @@ import {
 } from "lucide-react";
 import { lazy, type ComponentType, type LazyExoticComponent } from "react";
 
-import { SettingsPanel as CavemanSettingsPanel } from "./caveman/SettingsPanel";
 import { SettingsPanel as RoutingSettingsPanel } from "./routing/SettingsPanel";
 import { TelemetrySettingsPanel } from "./telemetry/SettingsPanel";
+
+const CavemanScreen = lazy(() =>
+  import("./caveman/CavemanScreen").then((module) => ({ default: module.CavemanScreen })),
+);
 
 const LearningScreen = lazy(() =>
   import("./learning/LearningScreen").then((module) => ({ default: module.LearningScreen })),
@@ -28,6 +31,8 @@ export interface PluginEntry {
   readonly id: string;
   readonly title: string;
   readonly icon: LucideIcon;
+  /** One line for the Plugins page: what the plugin is for. */
+  readonly summary?: string;
   readonly Screen?: LazyExoticComponent<ComponentType>;
   readonly SettingsPanel?: ComponentType<{ readonly status: PluginStatus }>;
 }
@@ -43,7 +48,13 @@ export const pluginRegistry: ReadonlyArray<PluginEntry> = [
   },
   { id: "routing", title: "Routing", icon: RouteIcon, SettingsPanel: RoutingSettingsPanel },
   { id: "learning", title: "Learning", icon: GraduationCapIcon, Screen: LearningScreen },
-  { id: "caveman", title: "Caveman", icon: ShrinkIcon, SettingsPanel: CavemanSettingsPanel },
+  {
+    id: "caveman",
+    title: "Caveman",
+    icon: ShrinkIcon,
+    summary: "Routes Claude Code and Codex through a local proxy and shows where your tokens go.",
+    Screen: CavemanScreen,
+  },
   {
     id: "policy",
     title: "Policies",

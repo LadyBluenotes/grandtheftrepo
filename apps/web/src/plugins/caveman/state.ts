@@ -67,11 +67,11 @@ export function useCavemanSetRoute() {
   };
 }
 
-/** The newest `caveman learn` plan on the Plugins page's environment, with its top `limit` sinks and the scan's state. */
-export function useCavemanLearnPlan(limit: number) {
+/** The newest `caveman learn` plan on the Plugins page's environment, with every sink and the scan's state. */
+export function useCavemanLearnPlan() {
   const environmentId = usePluginEnvironmentId();
   return useEnvironmentQuery(
-    environmentId === null ? null : cavemanLearnPlan({ environmentId, input: { limit } }),
+    environmentId === null ? null : cavemanLearnPlan({ environmentId, input: {} }),
   );
 }
 
