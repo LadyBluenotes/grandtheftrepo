@@ -40,9 +40,9 @@ same file, so any plugin can raise one without depending on the plugin that show
 above the kanban board and a project's weekly report list a flag whose key is not a thread when the
 key ends in `:<projectId>`, has the project id between colons, or starts with `policy:*:`
 (`plugins/attentionKeys.ts`); a flag keyed by none of these is on no board and in no report. A
-flag's resume action leads to its thread, the board, the Plugins page, or a plugin's screen with an
-optional tab and record (`AttentionResumeAction`); mobile has no plugin screens, so there a row
-with a plugin target stays on the board.
+flag's resume action leads to its thread, the board, the Plugins page, or a plugin's screen on the
+board's project with an optional tab and record (`AttentionResumeAction`); mobile has no plugin
+screens, so there a row with a plugin target stays on the board.
 
 A plugin says what it needs to do its work through `ServerPlugin.readiness`: checks, each `ready`,
 `attention` or `off`, with one sentence and where a person fixes it. `PluginHost.readiness` runs

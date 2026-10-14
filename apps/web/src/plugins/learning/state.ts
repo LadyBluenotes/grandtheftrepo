@@ -103,7 +103,8 @@ export function useLearningItem(environmentId: EnvironmentId | null, id: number 
 
 /**
  * The Learning screen's project: the one a person picked, else the environment's first (null),
- * until an item the URL opens names its own. `followed` is the open item's project once loaded.
+ * until an item or prompt the URL opens names its own. `followed` is the open record's project
+ * once loaded.
  */
 export interface LearningProjectChoice {
   readonly projectId: string | null;
@@ -113,9 +114,9 @@ export interface LearningProjectChoice {
 export const NO_PROJECT_CHOICE: LearningProjectChoice = { projectId: null, followed: undefined };
 
 /**
- * The choice once the open item's project is known, or once it closes (`undefined`). Every item
- * the URL opens, from a link or the browser's history, selects its project when it loads; a
- * person's pick while it stays open is kept.
+ * The choice once the open item's or prompt's project is known, or once it closes (`undefined`).
+ * Every record the URL opens, from a link or the browser's history, selects its project when it
+ * loads; a person's pick while it stays open is kept.
  */
 export function followOpenItem(
   choice: LearningProjectChoice,

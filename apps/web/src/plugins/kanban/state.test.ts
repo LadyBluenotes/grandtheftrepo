@@ -127,7 +127,7 @@ describe("attentionResumeTarget", () => {
     expect(attentionResumeTarget(row("thread"), board)).toBeNull();
   });
 
-  it("opens a plugin's screen on the board's environment, with the tab and record named", () => {
+  it("opens a plugin's screen on the board's environment and project, with the tab and record named", () => {
     const plugin = (patch: { readonly tab?: string; readonly recordId?: string }) =>
       ({
         kind: "budget_breach",
@@ -137,13 +137,13 @@ describe("attentionResumeTarget", () => {
     expect(attentionResumeTarget(plugin({ tab: "items", recordId: "12" }), board)).toEqual({
       to: "/plugins/$pluginId",
       params: { pluginId: "learning" },
-      search: { machine: "remote", tab: "items", recordId: "12" },
+      search: { machine: "remote", projectId: "project-1", tab: "items", recordId: "12" },
     });
-    // Without a tab or record the screen opens as it would from the sidebar.
+    // Without a tab or record the screen opens on its default tab, on the board's project.
     expect(attentionResumeTarget(plugin({}), board)).toStrictEqual({
       to: "/plugins/$pluginId",
       params: { pluginId: "learning" },
-      search: { machine: "remote" },
+      search: { machine: "remote", projectId: "project-1" },
     });
   });
 });
