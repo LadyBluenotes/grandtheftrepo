@@ -1,7 +1,7 @@
 import {
   createKanbanActiveAtomFamily,
-  createKanbanAttentionAtomFamily,
   createKanbanBoardAtomFamily,
+  createKanbanProjectsAttentionAtomFamily,
 } from "@t3tools/client-runtime/plugins/kanban";
 import {
   createPluginRpcCommand,
@@ -9,19 +9,29 @@ import {
 } from "@t3tools/client-runtime/plugins/rpc";
 import { scopeThreadRef } from "@t3tools/client-runtime/environment";
 import {
+  parseProjectRefCollectionKey,
+  projectRefCollectionKey,
+} from "@t3tools/client-runtime/state/entities";
+import {
   KANBAN_METHODS,
   type EnvironmentId,
   type KanbanAttentionRow,
+  type KanbanBoard,
   type KanbanDecision,
   type KanbanIssue,
+  type KanbanProjectAttentionRow,
   type ProjectId,
+  type ScopedProjectRef,
 } from "@t3tools/contracts";
-import { Atom } from "effect/reactivity";
+import * as Option from "effect/Option";
+import { AsyncResult, Atom } from "effect/reactivity";
 
 import { connectionAtomRuntime } from "~/connection/runtime";
 import { environmentSummaries } from "~/state/presentation";
+import { formatEnvironmentQueryError } from "~/state/query";
 import { environmentThreadShells } from "~/state/threads";
 import { buildThreadRouteParams } from "~/threadRoutes";
+import type { BoardEnvironment } from "./boardScope";
 
 export const kanbanBoard = createKanbanBoardAtomFamily(connectionAtomRuntime);
 
@@ -68,24 +78,24 @@ export const kanbanStopClear = createPluginRpcCommand(connectionAtomRuntime, {
 });
 
 /**
- * What waits on a person in a project, for the strip above the board. It re-reads only on the
- * window coming back into view, a change in the project's pending requests and every board
- * snapshot, and never polls, so a flag a sweep raises shows on the next of those.
+ * What waits on a person in some projects of one environment, for the strip above the board. It
+ * re-reads only on the window coming back into view, a change in the projects' pending requests
+ * and every board snapshot, and never polls, so a flag a sweep raises shows on the next of those.
  */
-export const kanbanAttention = createKanbanAttentionAtomFamily(connectionAtomRuntime, {
+const kanbanProjectsAttention = createKanbanProjectsAttentionAtomFamily(connectionAtomRuntime, {
   board: kanbanBoard,
   threadShells: environmentThreadShells.threadShellsForProjectRefsAtom,
   focus: Atom.windowFocusSignal,
 });
 
 /**
- * Where a strip row's button leads, always on the board's environment: the row's thread, the
+ * Where a strip row's button leads, always on the row's environment: the row's thread, the
  * board, or that environment's Plugins page, where budgets and other plugin settings live. Null
  * when a thread row has no thread.
  */
 export function attentionResumeTarget(
   row: Pick<KanbanAttentionRow, "resumeAction" | "threadId">,
-  board: { readonly environmentId: EnvironmentId; readonly projectId: ProjectId },
+  board: { readonly environmentId: EnvironmentId; readonly projectId: ProjectId | null },
 ) {
   switch (row.resumeAction.target) {
     case "thread":
@@ -96,13 +106,129 @@ export function attentionResumeTarget(
             params: buildThreadRouteParams(scopeThreadRef(board.environmentId, row.threadId)),
           } as const);
     case "board":
-      return { to: "/board", search: board } as const;
+      return {
+        to: "/board",
+        search:
+          board.projectId === null
+            ? {}
+            : { environmentId: board.environmentId, projectId: board.projectId },
+      } as const;
     case "settings":
       return { to: "/plugins", search: { machine: board.environmentId } } as const;
   }
 }
 
 export const kanbanActiveAtom = createKanbanActiveAtomFamily(connectionAtomRuntime);
+
+/**
+ * Bumped after a write that may have started a board (a project's first card, or a new folder),
+ * so `kanbanBoardEnvironments` reads which projects have one again.
+ */
+export const kanbanBoardsChanged = Atom.make(0).pipe(Atom.keepAlive);
+
+const boardsSignal = Atom.make((get) => [get(Atom.windowFocusSignal), get(kanbanBoardsChanged)]);
+
+/**
+ * Of some projects of one environment, the ones with a board. Creates nothing. Nothing pushes a
+ * new board, so it re-reads when the window comes back into view and after `kanbanBoardsChanged`.
+ */
+const kanbanBoardProjects = createPluginRpcQueryAtomFamily(connectionAtomRuntime, {
+  label: "environment-data:kanban:boards",
+  method: KANBAN_METHODS.boards,
+  refreshTrigger: () => boardsSignal,
+});
+
+const failureMessage = (result: AsyncResult.AsyncResult<unknown, unknown>) =>
+  result._tag === "Failure" ? formatEnvironmentQueryError(result.cause) : null;
+
+/** Project ids per environment, sorted, so the same projects make the same read in any order. */
+const byEnvironment = (refs: ReadonlyArray<ScopedProjectRef>) => {
+  const grouped = new Map<EnvironmentId, Array<ProjectId>>();
+  for (const ref of refs)
+    grouped.set(ref.environmentId, [...(grouped.get(ref.environmentId) ?? []), ref.projectId]);
+  return [...grouped].map(
+    ([environmentId, projectIds]) => [environmentId, projectIds.toSorted()] as const,
+  );
+};
+
+const kanbanBoardEnvironmentsFamily = Atom.family((key: string) => {
+  const environments = byEnvironment(parseProjectRefCollectionKey(key));
+  return Atom.make((get): ReadonlyArray<BoardEnvironment> =>
+    environments.map(([environmentId, projectIds]) => {
+      const active = get(kanbanActiveAtom(environmentId));
+      if (active !== true) return { environmentId, active, boards: null, error: null };
+      const result = get(kanbanBoardProjects({ environmentId, input: { projectIds } }));
+      return {
+        environmentId,
+        active,
+        boards: Option.getOrNull(AsyncResult.value(result)),
+        error: failureMessage(result),
+      };
+    }),
+  ).pipe(Atom.withLabel(`kanban:board-environments:${key}`));
+});
+
+/** Per environment of `refs`: whether it runs kanban and, once known, which projects have a board. */
+export const kanbanBoardEnvironments = (refs: ReadonlyArray<ScopedProjectRef>) =>
+  kanbanBoardEnvironmentsFamily(projectRefCollectionKey(refs));
+
+export interface LoadedBoard extends ScopedProjectRef {
+  readonly board: KanbanBoard | null;
+  readonly error: string | null;
+}
+
+const kanbanBoardsFamily = Atom.family((key: string) => {
+  const refs = parseProjectRefCollectionKey(key);
+  return Atom.make((get): ReadonlyArray<LoadedBoard> =>
+    refs.map((ref) => {
+      const result = get(
+        kanbanBoard({ environmentId: ref.environmentId, input: { projectId: ref.projectId } }),
+      );
+      return {
+        ...ref,
+        board: Option.getOrNull(AsyncResult.value(result)),
+        error: failureMessage(result),
+      };
+    }),
+  ).pipe(Atom.withLabel(`kanban:boards:${key}`));
+});
+
+/**
+ * One live board per ref, each its own subscription, so a change re-sends only its project's
+ * board. Pass only projects that have one: subscribing loads a board, which creates its folder.
+ */
+export const kanbanBoards = (refs: ReadonlyArray<ScopedProjectRef>) =>
+  kanbanBoardsFamily(projectRefCollectionKey(refs));
+
+// Every `since` is an ISO instant, so instants sort as strings.
+const order = (left: string, right: string) => (left < right ? -1 : left > right ? 1 : 0);
+
+/** A strip row with the environment it was read from. */
+export type BoardAttentionRow = KanbanProjectAttentionRow & {
+  readonly environmentId: EnvironmentId;
+};
+
+const kanbanBoardAttentionFamily = Atom.family((key: string) => {
+  const environments = byEnvironment(parseProjectRefCollectionKey(key));
+  return Atom.make((get): ReadonlyArray<BoardAttentionRow> =>
+    environments
+      .flatMap(([environmentId, projectIds]) =>
+        (
+          Option.getOrNull(
+            AsyncResult.value(
+              get(kanbanProjectsAttention({ environmentId, input: { projectIds } })),
+            ),
+          ) ?? []
+        ).map((row) => ({ ...row, environmentId })),
+      )
+      // Each environment's rows are oldest first already; merging keeps that across them.
+      .toSorted((left, right) => order(left.since, right.since) || order(left.id, right.id)),
+  ).pipe(Atom.withLabel(`kanban:board-attention:${key}`));
+});
+
+/** What waits on a person in the boards of `refs`: one read per environment, oldest first. */
+export const kanbanBoardAttention = (refs: ReadonlyArray<ScopedProjectRef>) =>
+  kanbanBoardAttentionFamily(projectRefCollectionKey(refs));
 
 /** Any connected environment runs the plugin, so the Board entry points show. */
 export const kanbanSupportedAtom = Atom.make((get) =>

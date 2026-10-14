@@ -2,8 +2,11 @@
 
 The board holds the work that is not a thread yet: bugs an agent found, ideas you want to get to,
 and the decisions you made along the way. Open it from **Board** in the sidebar's utility row or
-with **Open board** in the command palette (`Cmd/Ctrl+K`). Pick a project at the top; the board
-remembers your last one.
+with **Open board** in the command palette (`Cmd/Ctrl+K`). It shows the cards of every project
+that has a board, each card naming its project, and its environment when you work on more than
+one. Pick a project at the top to see only its cards; this is the same project filter as the
+sidebar's, so the two stay in step, and **All projects** goes back. A project gets a board when
+you add its first card.
 
 ## Columns
 
@@ -33,13 +36,14 @@ you can unarchive or delete an archived card.
 
 ## Waiting on you
 
-A strip above the columns lists what in the project is waiting on you, oldest first: questions and
-permission requests agents are waiting on, and flags other plugins raise, such as two agents
-writing the project at once, a stale review, a budget breach, a policy block or knowledge file that
-was edited or deleted outside T3 Code, or a thread that ran another model than routing recommended
-in the past seven days. A policy for the whole environment affects every project, so its flag is on
-every board. Each row names its thread, or the project for a budget or a policy or knowledge file,
-and has a button that takes you there, or to the Plugins page for those.
+A strip above the columns lists what in the board's projects is waiting on you, oldest first:
+questions and permission requests agents are waiting on, and flags other plugins raise, such as
+two agents writing one project at once, a stale review, a budget breach, a policy block or
+knowledge file that was edited or deleted outside T3 Code, or a thread that ran another model than
+routing recommended in the past seven days. A policy for the whole environment affects every
+project, so its flag is listed once, as about every project. Each row names its thread, or the
+project for a budget or a policy or knowledge file, and has a button that takes you there, or to
+the Plugins page for those.
 Rows cannot be dismissed: a row leaves on its own once its request is answered or its cause clears.
 Requests on settled or archived threads are not listed. A new flag shows up when you come back to
 the window or the board changes, and the strip is hidden while nothing waits.
@@ -56,14 +60,16 @@ as they hold, and the card cannot move to Done while one is open, whether you dr
 settles. A new thread started from the card sees the checklist. The **tier** (cheap, standard,
 strong) records the model class you expect the work to need.
 
-Create a card with the **+** in a column header. Cards you create start in that column; cards an
-agent files start in Triage.
+Create a card with the **+** in a column header. When the board shows more than one project, pick
+the card's project there; it starts at the one you used last. Cards you create start in that
+column; cards an agent files start in Triage.
 
 ## Decisions
 
-**Decisions** at the top switches the board to the project's decisions: calls made for or against
-something, with the reason and the tickets they concern. They are grouped into categories you name,
-such as `auth` or `performance`, and filterable by category. Record one from the decisions view or
+**Decisions** at the top switches the board to a project's decisions, with a project picker when
+the board shows more than one: calls made for or against something, with the reason and the
+tickets they concern. They are grouped into categories you name, such as `auth` or `performance`,
+and filterable by category. Record one from the decisions view or
 from a card's panel, and edit or delete it later.
 
 A new thread started from a card is told which decisions concern its ticket and which categories
@@ -71,9 +77,10 @@ exist, so the agent can look them up instead of relitigating them.
 
 ## On mobile
 
-In the mobile app, **Board** on a project's overview in Settings lists its tickets grouped by
-column, read-only: tap a ticket to open its thread, and pull down to refresh. The row appears only
-when the server runs the board, and a ticket with no thread yet cannot be opened. The same
+In the mobile app, **Board** on a project's overview in Settings lists that project's tickets
+grouped by column, read-only; the phone has no all-projects board. Tap a ticket to open its
+thread, and pull down to refresh. The row appears only when the server runs the board, and a
+ticket with no thread yet cannot be opened. The same
 [Waiting on you](#waiting-on-you) rows sit above the columns, oldest first; tap one to open its
 thread, while a row about the whole project, such as a budget breach, only shows its text. Nothing
 can be dismissed from the phone either.

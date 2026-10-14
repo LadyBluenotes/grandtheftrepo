@@ -27,6 +27,7 @@ import { v2Now, v2ThreadShell } from "../state/orchestrationV2TestFixtures.ts";
 import {
   createKanbanActiveAtomFamily,
   createKanbanAttentionAtomFamily,
+  createKanbanProjectsAttentionAtomFamily,
   kanbanAttentionStripRows,
 } from "./kanban.ts";
 
@@ -321,6 +322,55 @@ describe("createKanbanAttentionAtomFamily", () => {
       expect(harness.reads).toHaveLength(3);
     } finally {
       harness.dispose();
+    }
+  });
+});
+
+describe("createKanbanProjectsAttentionAtomFamily", () => {
+  it("reads several projects at once, and again on a snapshot of any of their boards", async () => {
+    const other = ProjectId.make("project-2");
+    const reads: unknown[] = [];
+    const waiters: Array<{ readonly count: number; readonly resolve: () => void }> = [];
+    const asked = (count: number) =>
+      new Promise<void>((resolve) => {
+        if (reads.length >= count) return resolve();
+        waiters.push({ count, resolve });
+      });
+    const boards = new Map([
+      [projectId, Atom.make(0)],
+      [other, Atom.make(0)],
+    ]);
+    const attention = createKanbanProjectsAttentionAtomFamily(
+      connectedRuntime({
+        [PLUGIN_GATEWAY_WS_METHODS.read]: (call) =>
+          Effect.sync(() => {
+            reads.push(call);
+            for (const waiter of waiters) if (reads.length >= waiter.count) waiter.resolve();
+            return [];
+          }),
+      }),
+      {
+        board: ({ input }) => boards.get(input.projectId)!,
+        threadShells: () => Atom.make<ReadonlyArray<EnvironmentThreadShell>>([]),
+      },
+    );
+    const registry = AtomRegistry.make();
+    const atom = attention({ environmentId: env, input: { projectIds: [projectId, other] } });
+    const unmount = registry.subscribe(atom, () => undefined, { immediate: true });
+    try {
+      await asked(1);
+      expect(reads).toEqual([
+        {
+          method: KANBAN_METHODS.attentionListProjects.method,
+          input: { projectIds: [projectId, other] },
+        },
+      ]);
+      registry.set(boards.get(other)!, 1);
+      await asked(2);
+      expect(reads).toHaveLength(2);
+    } finally {
+      unmount();
+      registry.dispose();
     }
   });
 });

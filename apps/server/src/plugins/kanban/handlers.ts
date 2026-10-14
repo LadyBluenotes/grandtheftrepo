@@ -41,6 +41,9 @@ export const table = PluginRpc.defineHandlers(KANBAN_METHODS)({
   ticketSpecify: (input) => Effect.flatMap(spec, (s) => s.specify(input)),
   specGet: (input) => Effect.flatMap(spec, (s) => s.latest(input)),
   attentionList: ({ projectId }) => Effect.flatMap(attention, (rows) => rows.list(projectId)),
+  attentionListProjects: ({ projectIds }) =>
+    Effect.flatMap(attention, (rows) => rows.listProjects(projectIds)),
+  boards: ({ projectIds }) => Effect.flatMap(store, (s) => s.boardProjects(projectIds)),
 });
 
 /** Stream RPCs keep their own tag; spread into the WebSocket handlers through `PluginHost.handlers`. */

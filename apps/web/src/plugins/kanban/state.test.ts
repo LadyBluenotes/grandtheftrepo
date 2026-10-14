@@ -104,6 +104,13 @@ describe("attentionResumeTarget", () => {
     expect(attentionResumeTarget(row("board"), board)).toEqual({ to: "/board", search: board });
   });
 
+  it("opens the board without a project for a row about every project", () => {
+    expect(attentionResumeTarget(row("board"), { ...board, projectId: null })).toEqual({
+      to: "/board",
+      search: {},
+    });
+  });
+
   it("has nowhere to go for a thread action without a thread", () => {
     expect(attentionResumeTarget(row("thread"), board)).toBeNull();
   });

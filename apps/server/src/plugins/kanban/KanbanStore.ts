@@ -126,6 +126,13 @@ export class KanbanStore extends Context.Service<
     readonly board: (projectId: ProjectId) => Effect.Effect<KanbanBoard, KanbanError>;
     /** The project's base folder as the board resolves it; unlike `board`, nothing is loaded or created. */
     readonly directory: (projectId: ProjectId) => Effect.Effect<string, KanbanError>;
+    /**
+     * The projects of `projectIds` that have a board: loaded, or with their folder on disk, in the
+     * given order. Nothing is created or loaded, so a project without one gets no folder or watcher.
+     */
+    readonly boardProjects: (
+      projectIds: ReadonlyArray<ProjectId>,
+    ) => Effect.Effect<ReadonlyArray<ProjectId>, KanbanError>;
     /** The loaded project holding an issue that links `threadId`, if any. No disk or database read. */
     readonly linkedProject: (threadId: ThreadId) => Effect.Effect<ProjectId | undefined>;
   }
@@ -232,12 +239,26 @@ const make = Effect.gen(function* () {
       Effect.forkIn(state.scope),
     );
 
+  const readProject = (projectId: ProjectId) =>
+    projects.getById(projectId).pipe(Effect.catch(io("Could not read the project.")));
+
   /** The override from `kanban.json`, else `<T3 home>/wiki/<project-slug>`. */
+  const directoryOf = (
+    projectId: ProjectId,
+    title: string,
+    overrides: typeof Overrides.Type,
+  ): { readonly slug: string; readonly directory: string } => {
+    const slug = Files.slugOf(title);
+    return {
+      slug,
+      directory: overrides.directories[projectId] ?? path.join(config.baseDir, "wiki", slug),
+    };
+  };
+
   const resolveDirectory = Effect.fn("KanbanStore.resolveDirectory")(function* (
     projectId: ProjectId,
   ) {
-    const project = yield* projects.getById(projectId).pipe(
-      Effect.catch(io("Could not read the project.")),
+    const project = yield* readProject(projectId).pipe(
       Effect.flatMap(
         Option.match({
           onNone: () => notFound("The project was not found."),
@@ -245,13 +266,24 @@ const make = Effect.gen(function* () {
         }),
       ),
     );
-    const slug = Files.slugOf(project.title);
-    const overrides = yield* readOverrides;
-    return {
-      slug,
-      directory: overrides.directories[projectId] ?? path.join(config.baseDir, "wiki", slug),
-    };
+    return directoryOf(projectId, project.title, yield* readOverrides);
   });
+
+  /** Whether the project is loaded or its folder exists. Nothing is created or loaded. */
+  const hasBoard = (projectId: ProjectId, overrides: typeof Overrides.Type) =>
+    loaded.has(projectId)
+      ? Effect.succeed(true)
+      : readProject(projectId).pipe(
+          Effect.flatMap(
+            Option.match({
+              onNone: () => Effect.succeed(false),
+              onSome: (project) =>
+                fs
+                  .exists(directoryOf(projectId, project.title, overrides).directory)
+                  .pipe(Effect.orElseSucceed(() => false)),
+            }),
+          ),
+        );
 
   const load = Effect.fn("KanbanStore.load")(function* (projectId: ProjectId) {
     const existing = loaded.get(projectId);
@@ -670,10 +702,7 @@ const make = Effect.gen(function* () {
   const advance: KanbanStore["Service"]["advance"] = Effect.fn("KanbanStore.advance")(
     function* (projectId, threadId, status) {
       // Thread events arrive for every project; only one with a board folder is worth loading.
-      if (!loaded.has(projectId)) {
-        const { directory } = yield* resolveDirectory(projectId);
-        if (!(yield* fs.exists(directory).pipe(Effect.orElseSucceed(() => false)))) return;
-      }
+      if (!loaded.has(projectId) && !(yield* hasBoard(projectId, yield* readOverrides))) return;
       const state = yield* load(projectId);
       const linked = Array.from(state.issues.values()).filter(
         (issue) =>
@@ -801,6 +830,13 @@ const make = Effect.gen(function* () {
     }).pipe(Effect.catch((cause) => Effect.logWarning("kanban: archive sweep failed", { cause }))),
     board: (projectId) => Effect.map(load(projectId), board),
     directory: (projectId) => Effect.map(resolveDirectory(projectId), ({ directory }) => directory),
+    boardProjects: Effect.fn("KanbanStore.boardProjects")(function* (projectIds) {
+      const overrides = yield* readOverrides;
+      const withBoard = yield* Effect.forEach(projectIds, (id) => hasBoard(id, overrides), {
+        concurrency: 8,
+      });
+      return projectIds.filter((_, index) => withBoard[index]);
+    }),
     linkedProject: (threadId) =>
       Effect.sync(() => {
         for (const [projectId, state] of loaded)

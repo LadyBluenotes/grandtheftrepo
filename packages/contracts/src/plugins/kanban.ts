@@ -218,6 +218,8 @@ export class KanbanError extends Schema.TaggedError<KanbanError>()("KanbanError"
 }) {}
 
 const KanbanProjectInput = Schema.Struct({ projectId: ProjectId });
+/** Several projects of one environment, read together. */
+const KanbanProjectsInput = Schema.Struct({ projectIds: Schema.Array(ProjectId) });
 export const KanbanGetIssueInput = Schema.Struct({ projectId: ProjectId, id: KanbanSlug });
 export type KanbanGetIssueInput = typeof KanbanGetIssueInput.Type;
 export const KanbanListDecisionsInput = Schema.Struct({
@@ -359,6 +361,14 @@ export const KanbanAttentionRow = Schema.Struct({
 });
 export type KanbanAttentionRow = typeof KanbanAttentionRow.Type;
 
+/** A row read for several projects at once, with the project it is about. */
+export const KanbanProjectAttentionRow = Schema.Struct({
+  ...KanbanAttentionRow.fields,
+  /** Null for a policy of the whole environment, which every project lists. */
+  projectId: Schema.NullOr(ProjectId),
+});
+export type KanbanProjectAttentionRow = typeof KanbanProjectAttentionRow.Type;
+
 export const KANBAN_METHODS = definePluginMethods({
   getIssue: {
     method: "kanban.getIssue",
@@ -436,6 +446,28 @@ export const KANBAN_METHODS = definePluginMethods({
     gateway: "read",
     input: KanbanProjectInput,
     output: Schema.Array(KanbanAttentionRow),
+    error: KanbanError,
+  },
+  /**
+   * What waits on a person in several projects, oldest first, from one read of the open flags. A
+   * row that more than one of them lists, a `policy:*` flag, is there once.
+   */
+  attentionListProjects: {
+    method: "kanban.attention.listProjects",
+    gateway: "read",
+    input: KanbanProjectsInput,
+    output: Schema.Array(KanbanProjectAttentionRow),
+    error: KanbanError,
+  },
+  /**
+   * The projects of `projectIds` that have a board, in the given order. Nothing is created, so a
+   * client can show every board without starting one for each project.
+   */
+  boards: {
+    method: "kanban.boards",
+    gateway: "read",
+    input: KanbanProjectsInput,
+    output: Schema.Array(ProjectId),
     error: KanbanError,
   },
 });

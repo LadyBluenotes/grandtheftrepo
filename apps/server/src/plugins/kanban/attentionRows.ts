@@ -1,5 +1,6 @@
 import type {
   KanbanAttentionRow,
+  KanbanProjectAttentionRow,
   OrchestrationV2PendingRuntimeRequestSummary,
   OrchestrationV2ThreadShell,
   ProjectId,
@@ -8,7 +9,7 @@ import type {
 import * as DateTime from "effect/DateTime";
 
 import type * as Attention from "../Attention.ts";
-import { flagKeyedToProject } from "../attentionKeys.ts";
+import { flagKeyedToEveryProject, flagKeyedToProject } from "../attentionKeys.ts";
 
 const OPEN_THREAD = { label: "Open thread", target: "thread" } as const;
 
@@ -33,6 +34,19 @@ const REQUESTS: Record<
 const isSettled = (thread: OrchestrationV2ThreadShell) =>
   thread.settledOverride === "settled" || thread.settledAt !== null;
 
+const flagRowId = (flag: Attention.OpenFlag) => `flag:${flag.id}`;
+
+// Every `since` comes from `DateTime.formatIso`, so instants sort as strings.
+const order = (left: string, right: string) => (left < right ? -1 : left > right ? 1 : 0);
+const oldestFirst = (left: KanbanAttentionRow, right: KanbanAttentionRow) =>
+  order(left.since, right.since) || order(left.id, right.id);
+
+interface ProjectSources {
+  readonly projectId: ProjectId;
+  readonly threads: ReadonlyArray<OrchestrationV2ThreadShell>;
+  readonly mismatches: ReadonlyArray<RoutingMismatch>;
+}
+
 /**
  * One project's attention rows, oldest first, from three sources:
  *
@@ -43,12 +57,9 @@ const isSettled = (thread: OrchestrationV2ThreadShell) =>
  *   left out;
  * - routing mismatches on one of its unarchived threads.
  */
-export const attentionRows = (input: {
-  readonly projectId: ProjectId;
-  readonly threads: ReadonlyArray<OrchestrationV2ThreadShell>;
-  readonly flags: ReadonlyArray<Attention.OpenFlag>;
-  readonly mismatches: ReadonlyArray<RoutingMismatch>;
-}): ReadonlyArray<KanbanAttentionRow> => {
+export const attentionRows = (
+  input: ProjectSources & { readonly flags: ReadonlyArray<Attention.OpenFlag> },
+): ReadonlyArray<KanbanAttentionRow> => {
   const active = input.threads.filter(
     (thread) => thread.archivedAt === null && thread.deletedAt === null,
   );
@@ -81,7 +92,7 @@ export const attentionRows = (input: {
     return [
       {
         source: "flag",
-        id: `flag:${flag.id}`,
+        id: flagRowId(flag),
         threadId: thread?.id ?? null,
         threadTitle: thread?.title ?? null,
         kind: flag.kind,
@@ -110,9 +121,27 @@ export const attentionRows = (input: {
         ];
   });
 
-  // Every `since` comes from `DateTime.formatIso`, so instants sort as strings.
-  const order = (left: string, right: string) => (left < right ? -1 : left > right ? 1 : 0);
-  return [...requests, ...flags, ...mismatches].toSorted(
-    (left, right) => order(left.since, right.since) || order(left.id, right.id),
+  return [...requests, ...flags, ...mismatches].toSorted(oldestFirst);
+};
+
+/**
+ * Several projects' rows, oldest first, each with its project. A `policy:*` flag matches every
+ * project, so it is listed once, with no project.
+ */
+export const projectsAttentionRows = (input: {
+  readonly projects: ReadonlyArray<ProjectSources>;
+  readonly flags: ReadonlyArray<Attention.OpenFlag>;
+}): ReadonlyArray<KanbanProjectAttentionRow> => {
+  const everyProject = new Set(
+    input.flags.filter((flag) => flagKeyedToEveryProject(flag.threadId)).map(flagRowId),
   );
+  const rows = new Map<string, KanbanProjectAttentionRow>();
+  for (const project of input.projects)
+    for (const row of attentionRows({ ...project, flags: input.flags }))
+      if (!rows.has(row.id))
+        rows.set(row.id, {
+          ...row,
+          projectId: everyProject.has(row.id) ? null : project.projectId,
+        });
+  return [...rows.values()].toSorted(oldestFirst);
 };

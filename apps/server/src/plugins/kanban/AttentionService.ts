@@ -1,4 +1,9 @@
-import { KanbanError, type KanbanAttentionRow, type ProjectId } from "@t3tools/contracts";
+import {
+  KanbanError,
+  type KanbanAttentionRow,
+  type KanbanProjectAttentionRow,
+  type ProjectId,
+} from "@t3tools/contracts";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -8,7 +13,7 @@ import * as Option from "effect/Option";
 import * as ThreadManagementService from "../../orchestration-v2/ThreadManagementService.ts";
 import * as Attention from "../Attention.ts";
 import * as AdherenceService from "../routing/AdherenceService.ts";
-import { attentionRows } from "./attentionRows.ts";
+import { attentionRows, projectsAttentionRows } from "./attentionRows.ts";
 
 /**
  * What waits on a person in a project, for the strip above the board: live requests from the
@@ -22,6 +27,10 @@ export class AttentionService extends Context.Service<
     readonly list: (
       projectId: ProjectId,
     ) => Effect.Effect<ReadonlyArray<KanbanAttentionRow>, KanbanError>;
+    /** `list` for several projects, reading the open flags once; a `policy:*` flag is there once. */
+    readonly listProjects: (
+      projectIds: ReadonlyArray<ProjectId>,
+    ) => Effect.Effect<ReadonlyArray<KanbanProjectAttentionRow>, KanbanError>;
   }
 >()("t3/plugins/kanban/AttentionService") {}
 
@@ -57,21 +66,39 @@ const make = Effect.gen(function* () {
   const threads = yield* ThreadManagementService.ThreadManagementService;
   const attention = yield* Attention.Attention;
 
-  const list = Effect.fn("AttentionService.list")(function* (projectId: ProjectId) {
-    const [shells, flags, mismatches] = yield* Effect.all(
-      [
-        threads
+  const openFlags = attention.listAllOpen.pipe(
+    Effect.catch(io("Could not read the attention flags.")),
+  );
+  const projectSources = (projectId: ProjectId) =>
+    Effect.all(
+      {
+        projectId: Effect.succeed(projectId),
+        threads: threads
           .listProjectThreads({ projectId, includeSubagents: true })
           .pipe(Effect.catch(io("Could not read the project's threads."))),
-        attention.listAllOpen.pipe(Effect.catch(io("Could not read the attention flags."))),
-        routingMismatches(projectId),
-      ],
+        mismatches: routingMismatches(projectId),
+      },
       { concurrency: "unbounded" },
     );
-    return attentionRows({ projectId, threads: shells, flags, mismatches });
+
+  const list = Effect.fn("AttentionService.list")(function* (projectId: ProjectId) {
+    const [sources, flags] = yield* Effect.all([projectSources(projectId), openFlags], {
+      concurrency: "unbounded",
+    });
+    return attentionRows({ ...sources, flags });
   });
 
-  return AttentionService.of({ list });
+  const listProjects = Effect.fn("AttentionService.listProjects")(function* (
+    projectIds: ReadonlyArray<ProjectId>,
+  ) {
+    const [projects, flags] = yield* Effect.all(
+      [Effect.forEach(projectIds, projectSources, { concurrency: 8 }), openFlags],
+      { concurrency: "unbounded" },
+    );
+    return projectsAttentionRows({ projects, flags });
+  });
+
+  return AttentionService.of({ list, listProjects });
 });
 
 export const layer = Layer.effect(AttentionService, make);

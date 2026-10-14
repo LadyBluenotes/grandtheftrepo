@@ -8,7 +8,7 @@ import {
   type DragEndEvent,
 } from "@dnd-kit/core";
 import { CSS } from "@dnd-kit/utilities";
-import { useAtomValue } from "@effect/atom-react";
+import { useAtomSet, useAtomValue } from "@effect/atom-react";
 import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
@@ -20,6 +20,7 @@ import {
   type KanbanIssueSummary,
   type KanbanStatus,
   type ProjectId,
+  type ScopedProjectRef,
 } from "@t3tools/contracts";
 import { useNavigate } from "@tanstack/react-router";
 import {
@@ -57,21 +58,49 @@ import { SidebarInset } from "~/components/ui/sidebar";
 import { stackedThreadToast, toastManager } from "~/components/ui/toast";
 import { Toggle } from "~/components/ui/toggle";
 import { isElectron } from "~/env";
+import { useClientSettings } from "~/hooks/useSettings";
 import { useEscapeToGoBack } from "~/hooks/useNavigateBack";
+import { selectProjectGroupingSettings } from "~/logicalProject";
 import { cn } from "~/lib/utils";
+import {
+  buildSidebarProjectSnapshots,
+  resolveSidebarProjectScopeKey,
+} from "~/sidebarProjectGrouping";
 import { useProjects } from "~/state/entities";
-import { useEnvironmentQuery } from "~/state/query";
+import { useEnvironments, usePrimaryEnvironmentId } from "~/state/environments";
 import { useAtomCommand } from "~/state/use-atom-command";
+import { useUiStateStore } from "~/uiStateStore";
 import { AttentionStrip } from "./AttentionStrip";
+import {
+  boardFanOut,
+  boardProjectKey,
+  pickBoardProject,
+  scopedBoardProjects,
+  type BoardProject,
+} from "./boardScope";
 import { DecisionsView } from "./DecisionsView";
 import { IssuePanel } from "./IssuePanel";
+import { ProjectSelect } from "./ProjectSelect";
 import { ReopenDialog } from "./ReopenDialog";
 import { StopBanner } from "./StopBanner";
-import { kanbanActiveAtom, kanbanBoard, kanbanSetDirectory, kanbanWrite } from "./state";
+import {
+  kanbanBoardAttention,
+  kanbanBoardEnvironments,
+  kanbanBoards,
+  kanbanBoardsChanged,
+  kanbanSetDirectory,
+  kanbanWrite,
+  type LoadedBoard,
+} from "./state";
 
 export interface BoardSearch {
+  /**
+   * With `projectId`, the project in hand: the open issue's, the decisions view's, and the default
+   * for a new card. Which projects the board shows is the sidebar's project scope.
+   */
   readonly environmentId?: EnvironmentId;
   readonly projectId?: ProjectId;
+  /** The open issue's slug, unique only within the project above. */
   readonly issue?: string;
   readonly view?: "decisions";
   readonly category?: string;
@@ -88,9 +117,10 @@ export const STATUS_LABEL: Record<KanbanStatus, string> = {
   done: "Done",
 };
 
+/** The project a card was last filed in or picked for; what asks for a project defaults to it. */
 const LAST_PROJECT_KEY = "t3code:kanban:last-project";
 
-function readLastProject(): { environmentId: EnvironmentId; projectId: ProjectId } | null {
+function readLastProject(): ScopedProjectRef | null {
   try {
     const raw = window.localStorage.getItem(LAST_PROJECT_KEY);
     const parsed: unknown = raw === null ? null : JSON.parse(raw);
@@ -138,15 +168,34 @@ const PRIORITY_VARIANT: Record<KanbanIssueSummary["priority"], "error" | "warnin
     p5: "secondary",
   };
 
+/** A card on the board with the project it lives in: slugs are unique per project only. */
+interface BoardCard extends ScopedProjectRef {
+  readonly key: string;
+  readonly issue: KanbanIssueSummary;
+}
+
+const sameProject = (left: ScopedProjectRef) => (right: ScopedProjectRef) =>
+  left.environmentId === right.environmentId && left.projectId === right.projectId;
+
+const cardKey = (ref: ScopedProjectRef, id: string) =>
+  `${ref.environmentId}\u0000${ref.projectId}\u0000${id}`;
+
+// Props stay the board's own objects and strings, so a change in one project's board leaves the
+// other projects' cards as they were.
 const Card = memo(function Card({
   issue,
+  environmentId,
+  projectId,
+  place,
   onOpen,
-}: {
+}: ScopedProjectRef & {
   readonly issue: KanbanIssueSummary;
-  readonly onOpen: (id: string) => void;
+  /** The card's project, while the board shows more than one. */
+  readonly place: string | null;
+  readonly onOpen: (ref: ScopedProjectRef, id: string) => void;
 }) {
   const { attributes, listeners, setNodeRef, transform, isDragging } = useDraggable({
-    id: issue.id,
+    id: cardKey({ environmentId, projectId }, issue.id),
   });
   return (
     <button
@@ -157,10 +206,13 @@ const Card = memo(function Card({
         isDragging && "z-10 opacity-80 shadow-lg",
       )}
       style={{ transform: CSS.Translate.toString(transform) }}
-      onClick={() => onOpen(issue.id)}
+      onClick={() => onOpen({ environmentId, projectId }, issue.id)}
       {...listeners}
       {...attributes}
     >
+      {place === null ? null : (
+        <span className="truncate text-xs text-muted-foreground">{place}</span>
+      )}
       <div className="flex items-start gap-2">
         <span className="min-w-0 flex-1 leading-snug">{issue.title}</span>
         {issue.blocked !== null ? (
@@ -204,23 +256,32 @@ const Card = memo(function Card({
 
 function Column({
   status,
-  issues,
+  cards,
+  places,
+  projects,
+  defaultProject,
   onOpen,
   onCreate,
 }: {
   readonly status: KanbanStatus;
-  readonly issues: ReadonlyArray<KanbanIssueSummary>;
-  readonly onOpen: (id: string) => void;
-  readonly onCreate: (status: KanbanStatus, title: string) => Promise<void>;
+  readonly cards: ReadonlyArray<BoardCard>;
+  readonly places: ReadonlyMap<string, string> | null;
+  /** Where a new card can go; asked for when there is more than one. */
+  readonly projects: ReadonlyArray<BoardProject>;
+  readonly defaultProject: BoardProject | null;
+  readonly onOpen: (ref: ScopedProjectRef, id: string) => void;
+  readonly onCreate: (status: KanbanStatus, title: string, project: BoardProject) => Promise<void>;
 }) {
   const { setNodeRef, isOver } = useDroppable({ id: status });
   const [adding, setAdding] = useState(false);
   const [title, setTitle] = useState("");
+  const [picked, setPicked] = useState<BoardProject | null>(null);
+  const project = picked ?? defaultProject;
   const submit = async (event: FormEvent) => {
     event.preventDefault();
     const trimmed = title.trim();
-    if (trimmed.length === 0) return;
-    await onCreate(status, trimmed);
+    if (trimmed.length === 0 || project === null) return;
+    await onCreate(status, trimmed, project);
     setTitle("");
     setAdding(false);
   };
@@ -235,13 +296,17 @@ function Column({
     >
       <header className="flex items-center gap-2 px-3 py-2">
         <h2 className="text-sm font-medium">{STATUS_LABEL[status]}</h2>
-        <span className="text-xs text-muted-foreground">{issues.length}</span>
+        <span className="text-xs text-muted-foreground">{cards.length}</span>
         <Button
           className="ml-auto"
           size="icon-xs"
           variant="ghost-muted"
           aria-label={`New issue in ${STATUS_LABEL[status]}`}
-          onClick={() => setAdding(true)}
+          disabled={defaultProject === null}
+          onClick={() => {
+            setPicked(null);
+            setAdding(true);
+          }}
         >
           <PlusIcon />
         </Button>
@@ -249,20 +314,46 @@ function Column({
       <ScrollArea className="min-h-0 flex-1">
         <div className="flex flex-col gap-2 px-2 pb-2">
           {adding ? (
-            <form onSubmit={submit}>
+            <form className="flex flex-col gap-1.5" onSubmit={submit}>
               <Input
                 autoFocus
                 size="sm"
                 placeholder="Issue title"
                 value={title}
                 onChange={(event) => setTitle(event.target.value)}
-                onBlur={() => title.trim().length === 0 && setAdding(false)}
+                onBlur={(event) => {
+                  // Picking the project moves focus to its select without leaving the form.
+                  const next = event.relatedTarget;
+                  if (next instanceof Node && event.currentTarget.form?.contains(next)) return;
+                  if (title.trim().length === 0) setAdding(false);
+                }}
                 onKeyDown={(event) => event.key === "Escape" && setAdding(false)}
               />
+              {projects.length > 1 ? (
+                // The select's own hidden input would stop Enter submitting a form with no button.
+                <div className="flex items-center gap-1.5">
+                  <ProjectSelect
+                    className="min-w-0 flex-1"
+                    projects={projects}
+                    value={project}
+                    onChange={setPicked}
+                  />
+                  <Button type="submit" size="sm" disabled={title.trim().length === 0}>
+                    Add
+                  </Button>
+                </div>
+              ) : null}
             </form>
           ) : null}
-          {issues.map((issue) => (
-            <Card key={issue.id} issue={issue} onOpen={onOpen} />
+          {cards.map((card) => (
+            <Card
+              key={card.key}
+              issue={card.issue}
+              environmentId={card.environmentId}
+              projectId={card.projectId}
+              place={places?.get(boardProjectKey(card)) ?? null}
+              onOpen={onOpen}
+            />
           ))}
         </div>
       </ScrollArea>
@@ -270,30 +361,169 @@ function Column({
   );
 }
 
-const byPriorityThenAge = (a: KanbanIssueSummary, b: KanbanIssueSummary) =>
+/**
+ * The issues folder of one project, which the board can change. Over several projects it asks
+ * which, starting from the project in hand.
+ */
+function FolderPopover({
+  projects,
+  defaultProject,
+  boards,
+  onSaved,
+}: {
+  readonly projects: ReadonlyArray<BoardProject>;
+  readonly defaultProject: BoardProject | null;
+  readonly boards: ReadonlyArray<LoadedBoard>;
+  readonly onSaved: () => void;
+}) {
+  const setDirectory = useAtomCommand(kanbanSetDirectory, { reportFailure: false });
+  const [picked, setPicked] = useState<BoardProject | null>(null);
+  const [draft, setDraft] = useState("");
+  const project = picked ?? defaultProject;
+  const canSave = useAtomValue(kanbanSetDirectory.permissionAtom(project?.environmentId ?? null));
+  // A project without a board has no folder to show yet; the server falls back to the default.
+  const directoryOf = (ref: ScopedProjectRef | null) =>
+    ref === null ? undefined : boards.find(sameProject(ref))?.board?.directory;
+  return (
+    <Popover
+      onOpenChange={(open) => {
+        if (!open) return;
+        setPicked(null);
+        setDraft(directoryOf(defaultProject) ?? "");
+      }}
+    >
+      <PopoverTrigger
+        render={<Button size="icon-sm" variant="ghost-muted" aria-label="Issues folder" />}
+      >
+        <FolderIcon />
+      </PopoverTrigger>
+      <PopoverPopup side="bottom" align="end" className="w-96">
+        <form
+          className="flex flex-col gap-2"
+          onSubmit={async (event) => {
+            event.preventDefault();
+            if (project === null) return;
+            const directory = draft.trim();
+            const result = await setDirectory({
+              environmentId: project.environmentId,
+              input: {
+                projectId: project.projectId,
+                directory: directory.length === 0 ? null : directory,
+              },
+            });
+            reportFailure("Could not change the folder", result);
+            if (result._tag === "Success") onSaved();
+          }}
+        >
+          <p className="text-xs text-muted-foreground">
+            Issues and decisions live as files in this folder on the environment. Leave it empty to
+            use the default under the T3 home.
+          </p>
+          {projects.length > 1 ? (
+            <ProjectSelect
+              projects={projects}
+              value={project}
+              onChange={(next) => {
+                setPicked(next);
+                setDraft(directoryOf(next) ?? "");
+              }}
+            />
+          ) : null}
+          <Input
+            size="sm"
+            value={draft}
+            onChange={(event) => setDraft(event.target.value)}
+            placeholder={directoryOf(project)}
+            spellCheck={false}
+          />
+          <div className="flex justify-end gap-2">
+            <Button type="submit" size="xs" disabled={!canSave || project === null}>
+              Save
+            </Button>
+          </div>
+        </form>
+      </PopoverPopup>
+    </Popover>
+  );
+}
+
+const byPriorityThenAge = ({ issue: a }: BoardCard, { issue: b }: BoardCard) =>
   a.priority.localeCompare(b.priority) || a.createdAt.localeCompare(b.createdAt);
+
+const ALL_PROJECTS = "all";
+
+/** The sidebar's project groups, built as the sidebar builds them so its scope keys match. */
+function useBoardProjectGroups() {
+  const projects = useProjects();
+  const settings = useClientSettings(selectProjectGroupingSettings);
+  const primaryEnvironmentId = usePrimaryEnvironmentId();
+  const { environments } = useEnvironments();
+  return useMemo(() => {
+    const environmentLabels = new Map(
+      environments.map((environment) => [environment.environmentId, environment.label] as const),
+    );
+    const groups = buildSidebarProjectSnapshots({
+      projects,
+      settings,
+      groupScratchProjects: true,
+      primaryEnvironmentId,
+      resolveEnvironmentLabel: (id) => environmentLabels.get(id) ?? null,
+    }).toSorted((a, b) => a.displayName.localeCompare(b.displayName));
+    return { groups, settings, environmentLabels };
+  }, [environments, primaryEnvironmentId, projects, settings]);
+}
 
 export function BoardPage({ search }: { readonly search: BoardSearch }) {
   const navigate = useNavigate();
-  const projects = useProjects();
-  const selected = useMemo(() => {
-    const fromSearch =
-      search.environmentId !== undefined && search.projectId !== undefined
-        ? projects.find(
-            (p) => p.environmentId === search.environmentId && p.id === search.projectId,
-          )
-        : undefined;
-    if (fromSearch !== undefined) return fromSearch;
-    const remembered = readLastProject();
-    return (
-      projects.find(
-        (p) => p.environmentId === remembered?.environmentId && p.id === remembered?.projectId,
-      ) ?? projects[0]
-    );
-  }, [projects, search.environmentId, search.projectId]);
-  const environmentId = selected?.environmentId ?? null;
-  const projectId = selected?.id ?? null;
-  const active = useAtomValue(kanbanActiveAtom(environmentId ?? ("" as EnvironmentId)));
+  const { groups, settings, environmentLabels } = useBoardProjectGroups();
+  const persistedScope = useUiStateStore((store) => store.sidebarProjectScopeKey);
+  const setScope = useUiStateStore((store) => store.setSidebarProjectScopeKey);
+  const scopeKey = useMemo(
+    () => resolveSidebarProjectScopeKey({ groups, key: persistedScope, settings }),
+    [groups, persistedScope, settings],
+  );
+  const scopedGroup = groups.find((group) => group.projectKey === scopeKey) ?? null;
+  const scoped = useMemo(() => scopedBoardProjects(groups, scopeKey), [groups, scopeKey]);
+  const environments = useAtomValue(kanbanBoardEnvironments(scoped));
+  const { writable, shown } = useMemo(
+    () => boardFanOut(scoped, environments),
+    [scoped, environments],
+  );
+  const boards = useAtomValue(kanbanBoards(shown));
+  const attention = useAtomValue(kanbanBoardAttention(shown));
+  const labels = useMemo(
+    () => new Map(scoped.map((project) => [boardProjectKey(project), project.label] as const)),
+    [scoped],
+  );
+  const projectLabel = useCallback(
+    (ref: ScopedProjectRef) => labels.get(boardProjectKey(ref)),
+    [labels],
+  );
+
+  const [lastUsed, setLastUsed] = useState(readLastProject);
+  const remember = useCallback((project: ScopedProjectRef) => {
+    const ref = { environmentId: project.environmentId, projectId: project.projectId };
+    try {
+      window.localStorage.setItem(LAST_PROJECT_KEY, JSON.stringify(ref));
+    } catch {
+      // Remembering the project is a convenience; the select still shows the one in use.
+    }
+    setLastUsed(ref);
+  }, []);
+  const inHand =
+    search.environmentId !== undefined && search.projectId !== undefined
+      ? { environmentId: search.environmentId, projectId: search.projectId }
+      : null;
+  const newCardProject = pickBoardProject(writable, inHand, lastUsed);
+  const viewProject = pickBoardProject(shown, inHand, lastUsed);
+  // The open issue is in the URL's project even outside the scope; the panel stays mounted to close.
+  const panelProject = inHand ?? viewProject;
+  const canWritePanel = useAtomValue(
+    kanbanWrite.permissionAtom(panelProject?.environmentId ?? null),
+  );
+  const canWriteView = useAtomValue(kanbanWrite.permissionAtom(viewProject?.environmentId ?? null));
+  const categoriesOf = (ref: ScopedProjectRef | null) =>
+    (ref === null ? undefined : boards.find(sameProject(ref))?.board?.decisionCategories) ?? [];
 
   const setSearch = useCallback(
     (
@@ -314,66 +544,103 @@ export function BoardPage({ search }: { readonly search: BoardSearch }) {
   const closePanel = useCallback(() => setSearch({ issue: undefined }), [setSearch]);
   useEscapeToGoBack(search.issue === undefined ? undefined : closePanel);
 
-  const board = useEnvironmentQuery(
-    environmentId !== null && projectId !== null && active === true
-      ? kanbanBoard({ environmentId, input: { projectId } })
-      : null,
-  );
   const write = useAtomCommand(kanbanWrite, { reportFailure: false });
-  const setDirectory = useAtomCommand(kanbanSetDirectory, { reportFailure: false });
-  const canWrite = useAtomValue(kanbanWrite.permissionAtom(environmentId));
+  const bumpBoards = useAtomSet(kanbanBoardsChanged);
+  const boardsChanged = useCallback(() => bumpBoards((count) => count + 1), [bumpBoards]);
 
+  const cards = useMemo(
+    () =>
+      boards.flatMap(({ environmentId, projectId, board }) =>
+        (board?.issues ?? []).map((issue): BoardCard => ({
+          key: cardKey({ environmentId, projectId }, issue.id),
+          environmentId,
+          projectId,
+          issue,
+        })),
+      ),
+    [boards],
+  );
   const columns = useMemo(() => {
-    const grouped = new Map<KanbanStatus, Array<KanbanIssueSummary>>(
+    const grouped = new Map<KanbanStatus, Array<BoardCard>>(
       KANBAN_STATUSES.map((status) => [status, []]),
     );
-    for (const issue of board.data?.issues ?? []) {
-      if (issue.archivedAt !== null && search.archived !== true) continue;
-      if (search.needsYou === true && issue.blocked === null) continue;
-      grouped.get(issue.status)?.push(issue);
+    for (const card of cards) {
+      if (card.issue.archivedAt !== null && search.archived !== true) continue;
+      if (search.needsYou === true && card.issue.blocked === null) continue;
+      grouped.get(card.issue.status)?.push(card);
     }
     for (const list of grouped.values()) list.sort(byPriorityThenAge);
     return grouped;
-  }, [board.data, search.archived, search.needsYou]);
+  }, [cards, search.archived, search.needsYou]);
   const needsYouCount = useMemo(
-    () =>
-      (board.data?.issues ?? []).filter((i) => i.blocked !== null && i.archivedAt === null).length,
-    [board.data],
+    () => cards.filter(({ issue }) => issue.blocked !== null && issue.archivedAt === null).length,
+    [cards],
   );
 
-  const [reopen, setReopen] = useState<{ id: string; status: KanbanStatus } | null>(null);
+  const [reopen, setReopen] = useState<{ card: BoardCard; status: KanbanStatus } | null>(null);
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 6 } }));
   const onDragEnd = useCallback(
     async (event: DragEndEvent) => {
-      if (environmentId === null || projectId === null || event.over === null) return;
+      if (event.over === null) return;
       const status = event.over.id as KanbanStatus;
-      const id = String(event.active.id);
-      const from = board.data?.issues.find((issue) => issue.id === id)?.status;
-      if (from === status) return;
-      if (from === "done") {
-        setReopen({ id, status });
+      const card = cards.find((candidate) => candidate.key === String(event.active.id));
+      if (card === undefined || card.issue.status === status) return;
+      if (card.issue.status === "done") {
+        setReopen({ card, status });
         return;
       }
       reportFailure(
         "Could not move the issue",
-        await write({ environmentId, input: { projectId, action: "issue.move", id, status } }),
+        await write({
+          environmentId: card.environmentId,
+          input: { projectId: card.projectId, action: "issue.move", id: card.issue.id, status },
+        }),
       );
     },
-    [board.data, environmentId, projectId, write],
+    [cards, setReopen, write],
   );
   const onCreate = useCallback(
-    async (status: KanbanStatus, title: string) => {
-      if (environmentId === null || projectId === null) return;
-      reportFailure(
-        "Could not create the issue",
-        await write({ environmentId, input: { projectId, action: "issue.create", title, status } }),
-      );
+    async (status: KanbanStatus, title: string, project: BoardProject) => {
+      remember(project);
+      const result = await write({
+        environmentId: project.environmentId,
+        input: { projectId: project.projectId, action: "issue.create", title, status },
+      });
+      reportFailure("Could not create the issue", result);
+      // A project's first card starts its board, which the board then has to subscribe to.
+      if (result._tag === "Success" && !shown.some(sameProject(project))) boardsChanged();
     },
-    [environmentId, projectId, write],
+    [boardsChanged, remember, shown, write],
   );
-  const openIssue = useCallback((id: string) => void setSearch({ issue: id }), [setSearch]);
+  const openIssue = useCallback(
+    ({ environmentId, projectId }: ScopedProjectRef, id: string) =>
+      void setSearch({ environmentId, projectId, issue: id }),
+    [setSearch],
+  );
 
-  const [directoryDraft, setDirectoryDraft] = useState<string | null>(null);
+  // Cards say which project they are in once the scope covers more than one.
+  const places = scoped.length > 1 ? labels : null;
+  const showsEnvironments = environments.length > 1;
+  const off = environments.filter((environment) => environment.active === false);
+  const notices = [
+    ...(off.length === 0 || off.length === environments.length
+      ? []
+      : [
+          `Kanban is off on ${off.map((e) => environmentLabels.get(e.environmentId) ?? e.environmentId).join(", ")}, so the board leaves out ${off.length === 1 ? "its" : "their"} projects.`,
+        ]),
+    ...environments.flatMap((environment) =>
+      environment.error === null
+        ? []
+        : [
+            `Could not read the boards on ${environmentLabels.get(environment.environmentId) ?? environment.environmentId}: ${environment.error}`,
+          ],
+    ),
+    ...boards.flatMap((board) =>
+      board.error === null
+        ? []
+        : [`Could not load the board of ${projectLabel(board) ?? board.projectId}: ${board.error}`],
+    ),
+  ];
 
   return (
     <SidebarInset className="h-dvh min-h-0 overflow-hidden overscroll-y-none isolate">
@@ -389,31 +656,27 @@ export function BoardPage({ search }: { readonly search: BoardSearch }) {
             <WorkspaceBreadcrumbSeparator />
             <WorkspaceBreadcrumbItem current className="min-w-10 shrink">
               <Select
-                value={
-                  selected === undefined ? null : `${selected.environmentId}\u0000${selected.id}`
-                }
+                value={scopedGroup?.projectKey ?? ALL_PROJECTS}
                 onValueChange={(value) => {
                   if (typeof value !== "string") return;
-                  const [env, id] = value.split("\u0000");
-                  const next = { environmentId: env as EnvironmentId, projectId: id as ProjectId };
-                  try {
-                    window.localStorage.setItem(LAST_PROJECT_KEY, JSON.stringify(next));
-                  } catch {
-                    // Remembering the project is a convenience; the URL still carries it.
-                  }
-                  void setSearch({ ...next, issue: undefined, category: undefined });
+                  // The sidebar's scope: the thread list follows, and the choice persists.
+                  setScope(value === ALL_PROJECTS ? null : value);
+                  void setSearch({
+                    environmentId: undefined,
+                    projectId: undefined,
+                    issue: undefined,
+                    category: undefined,
+                  });
                 }}
               >
                 <SelectTrigger size="xs" variant="ghost" aria-label="Project">
-                  <SelectValue placeholder="Pick a project">{selected?.title}</SelectValue>
+                  <SelectValue>{scopedGroup?.displayName ?? "All projects"}</SelectValue>
                 </SelectTrigger>
                 <SelectPopup>
-                  {projects.map((project) => (
-                    <SelectItem
-                      key={`${project.environmentId}:${project.id}`}
-                      value={`${project.environmentId}\u0000${project.id}`}
-                    >
-                      {project.title}
+                  <SelectItem value={ALL_PROJECTS}>All projects</SelectItem>
+                  {groups.map((group) => (
+                    <SelectItem key={group.projectKey} value={group.projectKey}>
+                      {group.displayName}
                     </SelectItem>
                   ))}
                 </SelectPopup>
@@ -457,101 +720,106 @@ export function BoardPage({ search }: { readonly search: BoardSearch }) {
               <ScaleIcon />
               Decisions
             </Toggle>
-            <Popover
-              onOpenChange={(open) => open && setDirectoryDraft(board.data?.directory ?? "")}
-            >
-              <PopoverTrigger
-                render={<Button size="icon-sm" variant="ghost-muted" aria-label="Issues folder" />}
-              >
-                <FolderIcon />
-              </PopoverTrigger>
-              <PopoverPopup side="bottom" align="end" className="w-96">
-                <form
-                  className="flex flex-col gap-2"
-                  onSubmit={async (event) => {
-                    event.preventDefault();
-                    if (environmentId === null || projectId === null) return;
-                    const directory = (directoryDraft ?? "").trim();
-                    reportFailure(
-                      "Could not change the folder",
-                      await setDirectory({
-                        environmentId,
-                        input: { projectId, directory: directory.length === 0 ? null : directory },
-                      }),
-                    );
-                  }}
-                >
-                  <p className="text-xs text-muted-foreground">
-                    Issues and decisions live as files in this folder on the environment. Leave it
-                    empty to use the default under the T3 home.
-                  </p>
-                  <Input
-                    size="sm"
-                    value={directoryDraft ?? ""}
-                    onChange={(event) => setDirectoryDraft(event.target.value)}
-                    placeholder={board.data?.directory}
-                    spellCheck={false}
-                  />
-                  <div className="flex justify-end gap-2">
-                    <Button type="submit" size="xs" disabled={!canWrite}>
-                      Save
-                    </Button>
-                  </div>
-                </form>
-              </PopoverPopup>
-            </Popover>
+            <FolderPopover
+              projects={writable}
+              defaultProject={newCardProject}
+              boards={boards}
+              onSaved={boardsChanged}
+            />
           </div>
         </WorkspacePageHeader>
 
-        {environmentId !== null && active === true ? (
-          <StopBanner environmentId={environmentId} />
+        {environments.map((environment) =>
+          environment.active === true ? (
+            <StopBanner
+              key={environment.environmentId}
+              environmentId={environment.environmentId}
+              environmentLabel={
+                showsEnvironments
+                  ? (environmentLabels.get(environment.environmentId) ?? null)
+                  : null
+              }
+            />
+          ) : null,
+        )}
+        {notices.length > 0 ? (
+          <div className="flex flex-col gap-0.5 px-5 pt-3 text-xs text-muted-foreground sm:px-6">
+            {notices.map((notice) => (
+              <p key={notice}>{notice}</p>
+            ))}
+          </div>
         ) : null}
 
-        {selected === undefined ? (
+        {groups.length === 0 ? (
           <Empty className="m-auto">
             <EmptyHeader>
               <EmptyTitle>No project</EmptyTitle>
               <EmptyDescription>Add a project to start a board for it.</EmptyDescription>
             </EmptyHeader>
           </Empty>
-        ) : active === false ? (
+        ) : environments.length > 0 && off.length === environments.length ? (
           <Empty className="m-auto">
             <EmptyHeader>
-              <EmptyTitle>Kanban is off on this environment</EmptyTitle>
+              <EmptyTitle>
+                Kanban is off on {off.length === 1 ? "this environment" : "these environments"}
+              </EmptyTitle>
               <EmptyDescription>
-                Enable the <code>kanban</code> plugin in that server&apos;s plugins.json and restart
-                it.
+                Enable the <code>kanban</code> plugin in{" "}
+                {off.length === 1 ? "that server's" : "each server's"} plugins.json and restart it.
               </EmptyDescription>
             </EmptyHeader>
           </Empty>
-        ) : board.error !== null ? (
-          <Empty className="m-auto">
-            <EmptyHeader>
-              <EmptyTitle>Could not load the board</EmptyTitle>
-              <EmptyDescription>{board.error}</EmptyDescription>
-            </EmptyHeader>
-          </Empty>
-        ) : search.view === "decisions" && environmentId !== null && projectId !== null ? (
-          <DecisionsView
-            environmentId={environmentId}
-            projectId={projectId}
-            category={search.category}
-            categories={board.data?.decisionCategories ?? []}
-            onCategoryChange={(category) => void setSearch({ category })}
-            canWrite={canWrite}
-          />
+        ) : search.view === "decisions" ? (
+          viewProject === null ? (
+            <Empty className="m-auto">
+              <EmptyHeader>
+                <EmptyTitle>No board yet</EmptyTitle>
+                <EmptyDescription>
+                  Add a card to a project to start its board and record its decisions.
+                </EmptyDescription>
+              </EmptyHeader>
+            </Empty>
+          ) : (
+            <DecisionsView
+              key={boardProjectKey(viewProject)}
+              environmentId={viewProject.environmentId}
+              projectId={viewProject.projectId}
+              category={search.category}
+              categories={categoriesOf(viewProject)}
+              onCategoryChange={(category) => void setSearch({ category })}
+              canWrite={canWriteView}
+              projectSelect={
+                shown.length > 1 ? (
+                  <ProjectSelect
+                    className="w-56 min-w-0"
+                    projects={shown}
+                    value={viewProject}
+                    onChange={(project) => {
+                      remember(project);
+                      void setSearch({
+                        environmentId: project.environmentId,
+                        projectId: project.projectId,
+                        category: undefined,
+                      });
+                    }}
+                  />
+                ) : null
+              }
+            />
+          )
         ) : (
           <>
-            {environmentId !== null && projectId !== null && active === true ? (
-              <AttentionStrip environmentId={environmentId} projectId={projectId} />
-            ) : null}
+            <AttentionStrip rows={attention} projectLabel={projectLabel} />
             <DndContext sensors={sensors} onDragEnd={onDragEnd}>
               <div className="flex min-h-0 flex-1 gap-3 overflow-x-auto px-5 pt-4 pb-5 sm:px-6">
                 {KANBAN_STATUSES.map((status) => (
                   <Column
                     key={status}
                     status={status}
-                    issues={columns.get(status) ?? []}
+                    cards={columns.get(status) ?? []}
+                    places={places}
+                    projects={writable}
+                    defaultProject={newCardProject}
                     onOpen={openIssue}
                     onCreate={onCreate}
                   />
@@ -567,15 +835,15 @@ export function BoardPage({ search }: { readonly search: BoardSearch }) {
         onPick={async (reason) => {
           const target = reopen;
           setReopen(null);
-          if (target === null || environmentId === null || projectId === null) return;
+          if (target === null) return;
           reportFailure(
             "Could not reopen the issue",
             await write({
-              environmentId,
+              environmentId: target.card.environmentId,
               input: {
-                projectId,
+                projectId: target.card.projectId,
                 action: "issue.move",
-                id: target.id,
+                id: target.card.issue.id,
                 status: target.status,
                 reopenReason: reason,
               },
@@ -583,13 +851,13 @@ export function BoardPage({ search }: { readonly search: BoardSearch }) {
           );
         }}
       />
-      {environmentId !== null && projectId !== null ? (
+      {panelProject !== null ? (
         <IssuePanel
-          environmentId={environmentId}
-          projectId={projectId}
+          environmentId={panelProject.environmentId}
+          projectId={panelProject.projectId}
           issueId={search.issue ?? null}
-          categories={board.data?.decisionCategories ?? []}
-          canWrite={canWrite}
+          categories={categoriesOf(panelProject)}
+          canWrite={canWritePanel}
           onClose={closePanel}
         />
       ) : null}

@@ -1,5 +1,5 @@
 import type { EnvironmentId, KanbanDecision, KanbanStance, ProjectId } from "@t3tools/contracts";
-import { useState, type FormEvent } from "react";
+import { useState, type FormEvent, type ReactNode } from "react";
 
 import { Badge } from "~/components/ui/badge";
 import { Button } from "~/components/ui/button";
@@ -218,11 +218,14 @@ export function DecisionsView({
   categories,
   onCategoryChange,
   canWrite,
+  projectSelect,
 }: Scope & {
   readonly category: string | undefined;
   readonly categories: Categories;
   readonly onCategoryChange: (category: string | undefined) => void;
   readonly canWrite: boolean;
+  /** Picks the project whose decisions show, when the board covers more than one. */
+  readonly projectSelect?: ReactNode;
 }) {
   const decisions = useEnvironmentQuery(
     kanbanDecisions({
@@ -236,6 +239,7 @@ export function DecisionsView({
     <ScrollArea className="min-h-0 flex-1">
       <div className="mx-auto flex w-full max-w-3xl flex-col gap-3 px-5 pt-4 pb-12 sm:px-6">
         <div className="flex items-center gap-2">
+          {projectSelect}
           <Select
             value={category ?? ""}
             onValueChange={(value) => onCategoryChange(value ? String(value) : undefined)}

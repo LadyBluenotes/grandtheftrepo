@@ -581,3 +581,46 @@ describe("watcher refresh", () => {
     ),
   );
 });
+
+describe("boardProjects", () => {
+  const otherId = ProjectId.make("project-2");
+  const layerTwoProjects = Layer.empty.pipe(
+    Layer.provideMerge(KanbanStore.layer),
+    Layer.provideMerge(
+      Layer.mock(ProjectService.ProjectService)({
+        getById: (id) =>
+          Effect.succeed(
+            id === projectId
+              ? Option.some(project)
+              : id === otherId
+                ? Option.some({ ...project, id: otherId, title: "Other Repo" })
+                : Option.none(),
+          ),
+      }),
+    ),
+    Layer.provideMerge(
+      Layer.fresh(ServerConfig.layerTest(process.cwd(), { prefix: "t3code-kanban-test-" })),
+    ),
+    Layer.provideMerge(NodeServices.layer),
+  );
+
+  it.effect("lists the projects with a board and creates nothing for the rest", () =>
+    Effect.gen(function* () {
+      const store = yield* KanbanStore.KanbanStore;
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const { baseDir } = yield* ServerConfig.ServerConfig;
+      const gone = ProjectId.make("project-gone");
+
+      assert.deepEqual(yield* store.boardProjects([projectId, otherId, gone]), []);
+      // A folder another client or the user made counts before anything loads it.
+      yield* fs.makeDirectory(path.join(baseDir, "wiki", "other-repo"), { recursive: true });
+      assert.deepEqual(yield* store.boardProjects([projectId, otherId, gone]), [otherId]);
+      assert.isFalse(yield* fs.exists(path.join(baseDir, "wiki", "grand-theft-repo")));
+
+      // Filing the first card starts the project's board.
+      yield* store.write(projectId, "user", { action: "issue.create", title: "First" });
+      assert.deepEqual(yield* store.boardProjects([otherId, projectId]), [otherId, projectId]);
+    }).pipe(Effect.provide(layerTwoProjects)),
+  );
+});
