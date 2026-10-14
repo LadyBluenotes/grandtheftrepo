@@ -366,7 +366,7 @@ const make = Effect.gen(function* () {
     );
     const ladder = yield* acceptedLadder;
     const commandId = CommandId.make(
-      `kanban-spec:${yield* crypto.randomUUIDv4.pipe(Effect.orDie)}`,
+      `kanban-spec:${yield* crypto.randomUUIDv4().pipe(Effect.orDie)}`,
     );
     const childThreadId = ThreadId.make(commandId);
     // `mechanical` work with no earlier runs is routing's cheap tier.
