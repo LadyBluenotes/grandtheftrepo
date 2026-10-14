@@ -22,7 +22,7 @@ import {
 import { toolKey } from "./toolOutput.ts";
 
 /*
- * Repeated deterministic work: tool calls, or runs of them, that runs of several threads repeat,
+ * Repeated deterministic work: tool calls, or sequences of them, that several threads repeat,
  * which a script, a hook, a server tool, a scheduled task, a context file or a skill could do
  * without model tokens. Everything here is a pure function of the window's rows.
  */
@@ -207,7 +207,7 @@ interface Occurrence {
   readonly start: number;
 }
 
-/** Shapes in a row that runs of at least three threads hold, from one list of shapes. */
+/** Shapes in a row that runs in at least three threads hold, from one list of shapes. */
 interface Found {
   readonly steps: ReadonlyArray<string>;
   readonly key: string;
@@ -219,7 +219,7 @@ const stepsAt = ({ run, start }: Occurrence, length: number) =>
   run.steps.slice(start, start + length);
 
 /**
- * Every window of one to six shapes in a row, from each run's `list` shapes, that runs of at
+ * Every window of one to six shapes in a row, from each run's `list` shapes, that runs in at
  * least three threads hold. A window is counted only when both windows one shape shorter were
  * found, since it cannot be in more threads than either.
  */
@@ -283,15 +283,23 @@ const longest = (found: ReadonlyArray<Found>) => {
   return found.filter((window) => !held.has(window.key));
 };
 
-/** Whether a slot window's occurrences have more than one exact shape between them. */
-const varies = (window: Found) =>
-  new Set(
-    window.occurrences.map((occurrence) =>
-      stepsAt(occurrence, window.steps.length)
-        .map((step) => step.exact)
-        .join(SEPARATOR),
-    ),
-  ).size > 1;
+/**
+ * Whether a slot window is a varying candidate: the steps whose path or pattern differs between
+ * its occurrences are at least two different steps, such as `Grep <pattern> <path>` then
+ * `Read <path>`. One step with a different path or pattern each time, alone, repeated or next to
+ * fixed steps, is the agent choosing one call's input, which no extraction takes over; `Read
+ * <path>` alone would be a candidate in almost any project and outweigh every procedure.
+ */
+const varies = (window: Found) => {
+  const differing = new Set<string>();
+  window.steps.forEach((slot, index) => {
+    const exact = new Set(
+      window.occurrences.map(({ run, start }) => run.steps[start + index]!.exact),
+    );
+    if (exact.size > 1) differing.add(slot);
+  });
+  return differing.size > 1;
+};
 
 /** Occurrences whose raw inputs match the most common ones, over all occurrences. */
 const deterministicRatio = (window: Found) => {
@@ -382,9 +390,9 @@ interface RepeatedWork {
 const mined = new WeakMap<MeasureInput, RepeatedWork>();
 
 /**
- * The window's candidates: every exact window that runs of three threads repeat, and every slot
- * window whose occurrences differ in a path or pattern. A slot window whose occurrences all share
- * one exact shape is that exact window again, and is dropped.
+ * The window's candidates: every exact window that three threads repeat, and every slot window
+ * that `varies`. A slot window whose occurrences all share one exact shape is that exact window
+ * again, and is dropped.
  */
 const repeatedWork = (input: MeasureInput): RepeatedWork => {
   const cached = mined.get(input);

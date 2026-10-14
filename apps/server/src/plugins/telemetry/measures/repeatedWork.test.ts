@@ -368,8 +368,6 @@ it("names reads of the same two files that open three threads a context file", (
     ),
   );
   assert.deepEqual(candidates.map(summary), [
-    // Every read, whichever file: one tool could hand over what they gather.
-    { kind: "step", steps: ["Read <path>"], threads: 3, occurrences: 6, form: "mcp_tool" },
     {
       kind: "procedure",
       steps: ["Read AGENTS.md", "Read docs/fork.md"],
@@ -380,24 +378,70 @@ it("names reads of the same two files that open three threads a context file", (
   ]);
 });
 
-it("names Grep with a different pattern in each of three threads one varying mcp_tool candidate", () => {
+it("names Grep then Read with a different pattern and file in each of three threads one varying mcp_tool procedure", () => {
+  const hooks = ["useEffect", "useMemo", "useState"];
   const candidates = candidatesOf(
     windowOf(
-      ["useEffect", "useMemo", "useState"].flatMap((pattern, index) =>
-        inThread(index + 1, grepOf(pattern, "/work/acme/src")),
+      hooks.flatMap((pattern, index) =>
+        inThread(
+          index + 1,
+          grepOf(pattern, "/work/acme/src"),
+          readOf(`/work/acme/src/${pattern}.ts`),
+        ),
       ),
     ),
   );
   assert.deepEqual(candidates.map(summary), [
     {
-      kind: "step",
-      steps: ["Grep <pattern> <path>"],
+      kind: "procedure",
+      steps: ["Grep <pattern> <path>", "Read <path>"],
       threads: 3,
       occurrences: 3,
       form: "mcp_tool",
     },
   ]);
   assert.closeTo(candidates[0]?.deterministicRatio ?? 0, 1 / 3, 0.01);
+
+  // Grep alone is one call whose pattern the agent chose each time: nothing to extract.
+  const alone = windowOf(
+    hooks.flatMap((pattern, index) => inThread(index + 1, grepOf(pattern, "/work/acme/src"))),
+  );
+  assert.deepEqual(
+    [extractionCandidates(alone).value, deterministicWorkShare(alone).value],
+    [0, 0],
+  );
+});
+
+it("lists a two-step procedure and none of the reads of different files around it", () => {
+  const procedure = [1, 2, 3];
+  const window = windowOf(
+    [1, 2, 3, 4, 5, 6].flatMap((n) =>
+      inThread(
+        n,
+        // Reads back to back, then an edit, which is no step, so the last read sits right
+        // before the procedure.
+        ...["a", "b", "c"].map((file) => ({
+          ...readOf(`/work/acme/src/${n}/${file}.ts`),
+          output_tokens: 500,
+        })),
+        edited(`/work/acme/src/${n}/a.ts`),
+        ...(procedure.includes(n) ? [sh("pnpm lint"), sh("pnpm test")] : []),
+      ),
+    ),
+  );
+  // `Read <path>`, twice and three times in a row, and three reads then the procedure, used to
+  // be four varying candidates, each costing more than the procedure.
+  assert.deepEqual(candidatesOf(window).map(summary), [
+    {
+      kind: "procedure",
+      steps: ["command:pnpm lint", "command:pnpm test"],
+      threads: 3,
+      occurrences: 3,
+      form: "script",
+    },
+  ]);
+  // Its 660 of the 18 reads' 9,180 tokens and its own.
+  assert.strictEqual(deterministicWorkShare(window).value, 660 / 9840);
 });
 
 it("names a command run once a day on five days a scheduled task, and not when two share a day", () => {
@@ -512,12 +556,12 @@ it("answers unavailable for an empty window and for one of two threads", () => {
 });
 
 it("lists the first candidates for the MCP tool, or none with the reason", () => {
-  const window = windowOf(
-    [1, 2, 3].flatMap((n) =>
-      inThread(n, readOf("/work/acme/AGENTS.md"), readOf("/work/acme/docs/fork.md")),
-    ),
-  );
+  const window = windowOf([
+    ...[1, 2, 3].flatMap((n) => inThread(n, sh("pnpm lint"), sh("pnpm test"))),
+    ...inThread(4, sh("pnpm lint")),
+  ]);
   const measures = [extractionCandidates(window)];
+  assert.strictEqual(candidatesOf(window).length, 2);
   assert.deepEqual(extractionCandidatesOf(measures, 1), {
     candidates: candidatesOf(window).slice(0, 1),
     missingReason: null,
