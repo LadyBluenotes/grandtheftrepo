@@ -174,9 +174,10 @@ alone or in a sequence, and sequences of different steps whose files or patterns
 Everyday reads and searches of different files count only inside such a sequence. Lower is better.
 
 The weekly report lists the top five candidates under Efficiency, and an agent can list up to
-twenty, each with an example thread, with the `telemetry_extraction_candidates` tool. Nothing is
-changed for you; a candidate is a suggestion. A window with fewer than three threads has no
-candidates.
+twenty, each with an example thread, with the `telemetry_extraction_candidates` tool. A window with
+fewer than three threads has no candidates. With the learning plugin on, a weekly review turns up to
+five of them into drafts you accept or dismiss on its **Deterministic** tab (see
+[Learning](./learning.md#deterministic)); nothing is applied until you accept it.
 
 ## Subscription usage widget
 

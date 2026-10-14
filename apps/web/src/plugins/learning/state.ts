@@ -113,9 +113,10 @@ export interface LearningProjectChoice {
 export const NO_PROJECT_CHOICE: LearningProjectChoice = { projectId: null, followed: undefined };
 
 /**
- * The choice once the open item's project is known, or once it closes (`undefined`). Every item
- * the URL opens, from a link or the browser's history, selects its project when it loads; a
- * person's pick while it stays open is kept.
+ * The choice once the open record's project is known, or once it closes (`undefined`): an item's
+ * project once it loads, or on the Deterministic tab the project the record names. Every record
+ * the URL opens, from a link or the browser's history, selects its project; a person's pick while
+ * it stays open is kept.
  */
 export function followOpenItem(
   choice: LearningProjectChoice,

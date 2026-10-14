@@ -26,7 +26,7 @@ import * as Targets from "./targets.ts";
 const MIN_DETERMINISTIC_RATIO = 0.8;
 const MIN_THREADS = 3;
 /** The most proposals a project gets in one week. */
-export const WEEKLY_LIMIT = 5;
+const WEEKLY_LIMIT = 5;
 
 interface Row {
   readonly id: number;

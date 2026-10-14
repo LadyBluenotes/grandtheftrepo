@@ -22,6 +22,7 @@ import { WorkspacePageHeader } from "~/components/WorkspacePageHeader";
 import { isElectron } from "~/env";
 import { useProjects } from "~/state/entities";
 import { CorrectionsTable } from "./CorrectionsTable";
+import { DeterministicTable } from "./DeterministicTable";
 import { ItemsTable } from "./ItemsTable";
 import { PromptsTable } from "./PromptsTable";
 import { ReviewsTable } from "./ReviewsTable";
@@ -36,31 +37,35 @@ import { PluginNotice } from "../PluginsPage";
 import { usePluginScreenSearch } from "../pluginScreenSearch";
 import { usePluginEnvironmentId, usePluginStatuses } from "../pluginState";
 
-const TABS = ["items", "corrections", "prompts", "reviews"] as const;
+const TABS = ["items", "corrections", "prompts", "deterministic", "reviews"] as const;
 type Tab = (typeof TABS)[number];
 const isTab = (value: unknown): value is Tab => (TABS as ReadonlyArray<unknown>).includes(value);
 
 /**
  * `/plugins/learning`: one project's learning items, the corrections behind them, its prompt
- * library and, while the review plugin runs, one thread's verdicts and requests. The tab and the
- * open item, by `recordId`, are in the URL. The project is the environment's first until a person
- * picks another, or an item the URL opens selects its own; picking one resets the tabs' filters and the
- * open item.
+ * library, its proposals to do repeated work without a model and, while the review plugin runs,
+ * one thread's verdicts and requests. The tab and the open item, by `recordId`, are in the URL; on
+ * the Deterministic tab the record is the project, which is how its attention flag opens it. The
+ * project is the environment's first until a person picks another, or the record the URL opens
+ * selects its own; picking one resets the tabs' filters and the open record.
  */
 export function LearningScreen() {
   const environmentId = usePluginEnvironmentId();
   const { statuses } = usePluginStatuses();
   const reviewsOn = pluginActive(statuses, "review");
   const search = usePluginScreenSearch();
-  const openId = learningItemId(search.recordId);
+  const tab: Tab = isTab(search.tab) ? search.tab : "items";
+  const view: Tab = tab === "reviews" && !reviewsOn ? "items" : tab;
+  const openId = view === "items" ? learningItemId(search.recordId) : null;
   const itemProjectId = useLearningItem(environmentId, openId).data?.item.projectId;
   const projects = useProjects().filter((project) => project.environmentId === environmentId);
   const [choice, setChoice] = useState(NO_PROJECT_CHOICE);
-  const followed = followOpenItem(choice, itemProjectId);
+  const followed = followOpenItem(
+    choice,
+    view === "deterministic" ? search.recordId : itemProjectId,
+  );
   if (followed !== choice) setChoice(followed);
   const selected = projects.find((project) => project.id === followed.projectId) ?? projects[0];
-  const tab: Tab = isTab(search.tab) ? search.tab : "items";
-  const view: Tab = tab === "reviews" && !reviewsOn ? "items" : tab;
   useRelativeTimeTick(60_000);
 
   return (
@@ -110,6 +115,7 @@ export function LearningScreen() {
               <Toggle value="items">Items</Toggle>
               <Toggle value="corrections">Corrections</Toggle>
               <Toggle value="prompts">Prompts</Toggle>
+              <Toggle value="deterministic">Deterministic</Toggle>
               {reviewsOn ? <Toggle value="reviews">Reviews</Toggle> : null}
             </ToggleGroup>
           </div>
@@ -134,6 +140,12 @@ export function LearningScreen() {
                 />
               ) : view === "prompts" ? (
                 <PromptsTable
+                  key={`${environmentId}:${selected.id}`}
+                  environmentId={environmentId}
+                  projectId={selected.id}
+                />
+              ) : view === "deterministic" ? (
+                <DeterministicTable
                   key={`${environmentId}:${selected.id}`}
                   environmentId={environmentId}
                   projectId={selected.id}

@@ -158,6 +158,8 @@ it.effect(
         expect(tools).toContain('"learning_item"');
         expect(tools).toContain('"learning_promotion_review"');
         expect(tools).toContain('"learning_promotion_rollback"');
+        expect(tools).toContain('"learning_deterministic_proposals"');
+        expect(tools).toContain('"learning_deterministic_dismiss"');
 
         const added = decodeCorrection(
           resultText(
