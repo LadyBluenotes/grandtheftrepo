@@ -1212,15 +1212,19 @@ const make = Effect.gen(function* () {
 
   const setCapture: KanbanStore["Service"]["setCapture"] = Effect.fn("KanbanStore.setCapture")(
     function* ({ projectId, enabled }) {
-      yield* updateOverrides(
-        (overrides) => {
-          const others = (overrides.capture ?? []).filter((id) => id !== projectId);
-          return { ...overrides, capture: enabled ? [...others, projectId] : others };
-        },
-        Effect.sync(() => {
-          const state = loaded.get(projectId);
-          if (state !== undefined) state.capture = enabled;
-        }),
+      // Under `loadLock` too, so a first load can't read the old value and cache it after this write.
+      // Lock order is `loadLock` then `overridesLock`; nothing takes them the other way round.
+      yield* loadLock.withPermits(1)(
+        updateOverrides(
+          (overrides) => {
+            const others = (overrides.capture ?? []).filter((id) => id !== projectId);
+            return { ...overrides, capture: enabled ? [...others, projectId] : others };
+          },
+          Effect.sync(() => {
+            const state = loaded.get(projectId);
+            if (state !== undefined) state.capture = enabled;
+          }),
+        ),
       );
       yield* publish(projectId);
     },
