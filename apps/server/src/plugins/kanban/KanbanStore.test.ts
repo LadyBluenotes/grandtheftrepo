@@ -644,6 +644,29 @@ describe("boardProjects", () => {
     }).pipe(Effect.provide(layerTwoProjects(KanbanStore.layer))),
   );
 
+  it.effect(
+    "keeps a board a board when its folder moves, and starts none for a project without",
+    () =>
+      Effect.gen(function* () {
+        const store = yield* KanbanStore.KanbanStore;
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const { baseDir } = yield* ServerConfig.ServerConfig;
+        yield* store.write(projectId, "user", { action: "issue.create", title: "First" });
+
+        // The new folder does not exist yet; it does once the move returns.
+        const moved = path.join(baseDir, "elsewhere", "board");
+        yield* store.setDirectory({ projectId, directory: moved });
+        assert.deepEqual(yield* store.boardProjects([projectId, otherId]), [projectId]);
+        assert.isTrue(yield* fs.exists(path.join(moved, "issues")));
+
+        const unused = path.join(baseDir, "elsewhere", "other");
+        yield* store.setDirectory({ projectId: otherId, directory: unused });
+        assert.deepEqual(yield* store.boardProjects([projectId, otherId]), [projectId]);
+        assert.isFalse(yield* fs.exists(unused));
+      }).pipe(Effect.provide(layerTwoProjects(KanbanStore.layer))),
+  );
+
   it.effect("fails, rather than leaving the project out, when its folder cannot be inspected", () =>
     Effect.gen(function* () {
       const store = yield* KanbanStore.KanbanStore;

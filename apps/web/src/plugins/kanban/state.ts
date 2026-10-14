@@ -33,7 +33,7 @@ import { environmentThreadShells } from "~/state/threads";
 import { buildThreadRouteParams } from "~/threadRoutes";
 import type { BoardEnvironment } from "./boardScope";
 
-export const kanbanBoard = createKanbanBoardAtomFamily(connectionAtomRuntime);
+const kanbanBoard = createKanbanBoardAtomFamily(connectionAtomRuntime);
 
 /** One issue with its body and log; re-read whenever the board changes. */
 export const kanbanIssue = createPluginRpcQueryAtomFamily(connectionAtomRuntime, {
@@ -118,7 +118,7 @@ export function attentionResumeTarget(
   }
 }
 
-export const kanbanActiveAtom = createKanbanActiveAtomFamily(connectionAtomRuntime);
+const kanbanActiveAtom = createKanbanActiveAtomFamily(connectionAtomRuntime);
 
 /**
  * Bumped after a write that may have started a board (a project's first card, or a new folder),

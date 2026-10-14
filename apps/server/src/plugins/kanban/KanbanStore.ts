@@ -96,6 +96,7 @@ export class KanbanStore extends Context.Service<
       actor: KanbanActor,
       write: KanbanWrite,
     ) => Effect.Effect<KanbanWriteResult, KanbanError>;
+    /** Moves the project's board, which is loaded in the new folder before this returns. */
     readonly setDirectory: (input: KanbanSetDirectoryInput) => Effect.Effect<void, KanbanError>;
     /**
      * Admits an issue from Triage or Inbox to Todo as `by`, in one write, with `criteria` as its
@@ -787,7 +788,10 @@ const make = Effect.gen(function* () {
   )(function* ({ projectId, directory }) {
     if (directory !== null && !path.isAbsolute(directory))
       return yield* invalid("The issues folder must be an absolute path.");
-    const directories: Record<string, string> = { ...(yield* readOverrides).directories };
+    const overrides = yield* readOverrides;
+    // A board keeps being one in its new folder; a project without one gets none from a move.
+    const hadBoard = yield* hasBoard(projectId, overrides);
+    const directories: Record<string, string> = { ...overrides.directories };
     if (directory === null) delete directories[projectId];
     else directories[projectId] = directory;
     const contents = yield* encodeOverrides({ directories }).pipe(
@@ -803,6 +807,9 @@ const make = Effect.gen(function* () {
       loaded.delete(projectId);
       yield* Scope.close(previous.scope, Exit.void);
     }
+    // Loaded before this returns, so a client that asks `boardProjects` next still finds the
+    // board, and does not drop the subscription that would have created its new folder.
+    if (hadBoard) yield* load(projectId);
     yield* publish(projectId);
   });
 
