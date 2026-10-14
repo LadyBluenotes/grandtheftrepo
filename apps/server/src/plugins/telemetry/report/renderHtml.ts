@@ -67,6 +67,18 @@ const topCandidates = (measure: TelemetryMeasure) => {
     : `<table><thead><tr><th>Repeated steps</th><th>Threads</th><th>Tokens</th><th>Form</th></tr></thead><tbody>${rows.join("")}</tbody></table>`;
 };
 
+/** How many listed proposals each decision has, with their estimated tokens a week. */
+const proposalTotals = (items: TelemetryReport["deterministic"]["items"]) => {
+  const tally = (states: ReadonlyArray<string>) => {
+    const listed = items.filter((item) => states.includes(item.state));
+    return [listed.length, listed.reduce((total, item) => total + item.estimatedTokens, 0)];
+  };
+  const [accepted, saved] = tally(["accepted"]);
+  const [undecided, open] = tally(["pending", "waiting"]);
+  const [dismissed, left] = tally(["dismissed"]);
+  return `<p class="muted">Accepted: ${accepted}, saving about ${saved} estimated tokens a week. Undecided: ${undecided}, about ${open}. Dismissed: ${dismissed}, about ${left}.</p>`;
+};
+
 const STYLE = [
   "body{color:var(--foreground);font-family:var(--font-sans)}",
   "h1{font-size:1.25rem;margin:0 0 4px}",
@@ -79,7 +91,10 @@ const STYLE = [
   "a{color:var(--accent)}",
 ].join("");
 
-/** One section: a heading, then a table, or why there is none. Cells arrive escaped. */
+/**
+ * One section: a heading, then a table, or why there is none. Cells and `lead`, a line above the
+ * table, arrive escaped.
+ */
 const section = <Item>(
   heading: string,
   part: {
@@ -90,6 +105,7 @@ const section = <Item>(
   },
   headers: ReadonlyArray<string>,
   row: (item: Item) => ReadonlyArray<string>,
+  lead = "",
 ) => {
   const title = `<h2>${heading} <span class="muted">${part.count}</span></h2>`;
   const note =
@@ -110,7 +126,7 @@ const section = <Item>(
     part.count > part.items.length
       ? `<p class="muted">Showing ${part.items.length} of ${part.count}.</p>`
       : "";
-  return `<section>${title}${note}<div class="scroll"><table><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table></div>${more}</section>`;
+  return `<section>${title}${note}${lead}<div class="scroll"><table><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table></div>${more}</section>`;
 };
 
 /**
@@ -189,5 +205,17 @@ export const renderHtml = (report: TelemetryReport) =>
       String(item.sampleSize),
       escape(item.missingReason ?? "") + largestResults(item) + topCandidates(item),
     ]),
+    section(
+      "Could be deterministic",
+      report.deterministic,
+      ["Repeated work", "Form", "State", "Tokens a week"],
+      (item) => [
+        escape(item.title),
+        escape(item.form),
+        escape(item.dismissReason === null ? item.state : `${item.state}: ${item.dismissReason}`),
+        `~${item.estimatedTokens}`,
+      ],
+      proposalTotals(report.deterministic.items),
+    ),
     "</body></html>",
   ].join("");

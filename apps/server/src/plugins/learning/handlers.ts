@@ -1,9 +1,15 @@
-import { LEARNING_METHODS, LearningError, PROMPT_METHODS } from "@t3tools/contracts";
+import {
+  DETERMINISTIC_METHODS,
+  LEARNING_METHODS,
+  LearningError,
+  PROMPT_METHODS,
+} from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 
 import * as PluginRpc from "../PluginRpc.ts";
 import * as CorrectionStore from "./CorrectionStore.ts";
+import * as ProposalStore from "./deterministic/ProposalStore.ts";
 import * as ItemStore from "./items/ItemStore.ts";
 import * as PromptStore from "./prompts/PromptStore.ts";
 
@@ -19,6 +25,7 @@ const running = <A>(service: Option.Option<A>) =>
 const corrections = Effect.flatMap(Effect.serviceOption(CorrectionStore.CorrectionStore), running);
 const items = Effect.flatMap(Effect.serviceOption(ItemStore.ItemStore), running);
 const prompts = Effect.flatMap(Effect.serviceOption(PromptStore.PromptStore), running);
+const proposals = Effect.flatMap(Effect.serviceOption(ProposalStore.ProposalStore), running);
 
 /** Merged into the host's dispatch table through `PluginHost.handlers`. A save over RPC is a person's. */
 export const table = {
@@ -42,5 +49,10 @@ export const table = {
     archive: ({ id }) => Effect.flatMap(prompts, (s) => s.archive(id)),
     unarchive: ({ id }) => Effect.flatMap(prompts, (s) => s.unarchive(id)),
     use: ({ id }) => Effect.flatMap(prompts, (s) => s.use(id)),
+  }),
+  ...PluginRpc.defineHandlers(DETERMINISTIC_METHODS)({
+    list: (input) => Effect.flatMap(proposals, (s) => s.list(input)),
+    accept: ({ id }) => Effect.flatMap(proposals, (s) => s.accept(id)),
+    dismiss: (input) => Effect.flatMap(proposals, (s) => s.dismiss(input, "user")),
   }),
 };

@@ -11,6 +11,7 @@ import {
   INSIDE,
   item,
   LATER,
+  proposal,
   pullRequest,
   thread,
   TO,
@@ -29,6 +30,7 @@ const SECTIONS = [
   "unresolved",
   "attention",
   "efficiency",
+  "deterministic",
 ] as const;
 
 it("the same rows always give the same report, in whatever order they were loaded", () => {
@@ -46,12 +48,13 @@ it("the same rows always give the same report, in whatever order they were loade
       corrections: input.learning.corrections.toReversed(),
       items: input.learning.items.toReversed(),
       promotions: input.learning.promotions.toReversed(),
+      proposals: input.learning.proposals.toReversed(),
     },
   });
   assert.deepEqual(shuffled, report);
 });
 
-it("a full week fills all ten sections", () => {
+it("a full week fills all eleven sections", () => {
   const report = foldReport(fullInput());
   assert.deepEqual(
     SECTIONS.map((name) => [name, report[name].state, report[name].count]),
@@ -66,6 +69,7 @@ it("a full week fills all ten sections", () => {
       ["unresolved", "ok", 2],
       ["attention", "ok", 2],
       ["efficiency", "ok", 2],
+      ["deterministic", "ok", 3],
     ],
   );
 });
@@ -215,11 +219,10 @@ it("failures: the range's corrections by kind, leaving out the one at `to`", () 
 it("learning off: its sections are unavailable, naming the plugin", () => {
   const report = foldReport({ ...fullInput(), learning: undefined });
   assert.deepEqual(
-    (["decisions", "knowledgeChanges", "prompts", "failures"] as const).map((name) => [
-      report[name].state,
-      report[name].missingReason,
-    ]),
-    Array.from({ length: 4 }, () => ["unavailable", "The learning plugin is not running."]),
+    (["decisions", "knowledgeChanges", "prompts", "failures", "deterministic"] as const).map(
+      (name) => [report[name].state, report[name].missingReason],
+    ),
+    Array.from({ length: 5 }, () => ["unavailable", "The learning plugin is not running."]),
   );
   // Pull requests still answer; the learning items they would sit beside are named as missing.
   assert.deepEqual(
@@ -339,6 +342,7 @@ it("while telemetry replays, the sections built from its thread rows are unavail
       ["unresolved", "unavailable", reason],
       ["attention", "ok", null],
       ["efficiency", "ok", null],
+      ["deterministic", "ok", null],
     ],
   );
   // Once the rows are complete, the same input answers every section.
@@ -391,6 +395,40 @@ it("attention: open flags on this project's threads and on the project, such as 
 it("efficiency: the measures as telemetry answers them", () => {
   const input = fullInput();
   assert.deepEqual(foldReport(input).efficiency.items, input.measures);
+});
+
+it("could be deterministic: decided in the range or still undecided, accepted first, costliest first", () => {
+  const input = fullInput();
+  const report = foldReport({
+    ...input,
+    learning: input.learning && {
+      ...input.learning,
+      proposals: [
+        ...input.learning.proposals,
+        proposal(5, { state: "waiting", waitingReason: "The kanban plugin is off." }),
+        // Proposed after the range: not yet there.
+        proposal(6, { createdAt: TO }),
+      ],
+    },
+  });
+  assert.deepEqual(
+    report.deterministic.items.map((item) => [
+      item.proposalId,
+      item.state,
+      item.estimatedTokens,
+      item.dismissReason,
+    ]),
+    [
+      [1, "accepted", 1000, null],
+      [2, "pending", 2000, null],
+      [5, "waiting", 5000, null],
+      [3, "dismissed", 3000, "Noise."],
+    ],
+  );
+  assert.include(
+    renderHtml(report),
+    "Accepted: 1, saving about 1000 estimated tokens a week. Undecided: 2, about 7000. Dismissed: 1, about 3000.",
+  );
 });
 
 it("a section lists at most 20 items and counts all of them", () => {

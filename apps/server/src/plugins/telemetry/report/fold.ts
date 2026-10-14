@@ -1,4 +1,6 @@
 import type {
+  DeterministicProposal,
+  DeterministicProposalState,
   LearningCorrection,
   LearningItem,
   LearningOwnerKind,
@@ -84,6 +86,8 @@ export interface ReportInput {
         readonly promotions: ReadonlyArray<LearningPromotion>;
         /** Owner kinds a plugin hands items to. */
         readonly promoters: ReadonlyArray<LearningOwnerKind>;
+        /** Proposals decided in the range, and those created before `to` and still undecided. */
+        readonly proposals: ReadonlyArray<DeterministicProposal>;
       }
     | undefined;
 }
@@ -127,6 +131,13 @@ const byKeys =
   };
 
 const STATE_ORDER: Record<PullRequestState, number> = { open: 0, merged: 1, closed: 2 };
+
+const PROPOSAL_ORDER: Record<DeterministicProposalState, number> = {
+  accepted: 0,
+  pending: 1,
+  waiting: 2,
+  dismissed: 3,
+};
 
 /**
  * The range a report covers, as normalized ISO instants: the one given, or with neither bound
@@ -405,5 +416,32 @@ export const foldReport = (input: ReportInput): TelemetryReport => {
         }),
     ),
     efficiency: ok(input.measures),
+    deterministic:
+      learning === undefined
+        ? unavailable(notRunning("learning"))
+        : ok(
+            learning.proposals
+              .filter((proposal) =>
+                proposal.decidedAt === null
+                  ? proposal.createdAt < input.to
+                  : inRange(proposal.decidedAt),
+              )
+              .toSorted(
+                byKeys(
+                  (proposal) => PROPOSAL_ORDER[proposal.state],
+                  (proposal) => -proposal.estimatedTokens,
+                  (proposal) => proposal.id,
+                ),
+              )
+              .map((proposal) => ({
+                proposalId: proposal.id,
+                form: proposal.form,
+                title: proposal.title,
+                state: proposal.state,
+                estimatedTokens: proposal.estimatedTokens,
+                decidedAt: proposal.decidedAt,
+                dismissReason: proposal.dismissReason,
+              })),
+          ),
   };
 };

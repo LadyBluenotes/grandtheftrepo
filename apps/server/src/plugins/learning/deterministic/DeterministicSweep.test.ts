@@ -1,0 +1,563 @@
+import * as NodeServices from "@effect/platform-node/NodeServices";
+import { assert, it } from "@effect/vitest";
+import {
+  type KanbanIssue,
+  KanbanError,
+  type KnowledgeEntry,
+  type OrchestrationProjectShell,
+  type TelemetryExtractionCandidate,
+  type TelemetryMeasuresInput,
+  ThreadId,
+} from "@t3tools/contracts";
+import * as Context from "effect/Context";
+import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
+import * as Ref from "effect/Ref";
+import * as SqlClient from "effect/sql/SqlClient";
+import * as TestClock from "effect/testing/TestClock";
+
+import * as ProjectService from "../../../project/ProjectService.ts";
+import * as ServerSettings from "../../../serverSettings.ts";
+import * as Attention from "../../Attention.ts";
+import * as HostDatabase from "../../HostDatabase.ts";
+import * as KanbanStore from "../../kanban/KanbanStore.ts";
+import * as KnowledgeStore from "../../knowledge/KnowledgeStore.ts";
+import * as PluginDatabase from "../../PluginDatabase.ts";
+import { fakeCore, MODEL, project } from "../../telemetry/report/testkit.ts";
+import * as Telemetry from "../../telemetry/Telemetry.ts";
+import { migrations } from "../migrations.ts";
+import * as PromptStore from "../prompts/PromptStore.ts";
+import * as DeterministicSweep from "./DeterministicSweep.ts";
+import * as ProposalStore from "./ProposalStore.ts";
+
+/** Wednesday 14 October 2026, so the week reviewed is Monday 5 to Monday 12 October. */
+const NOW = Date.UTC(2026, 9, 14, 15, 30);
+const WEEK_1 = "2026-10-05T00:00:00.000Z";
+const WEEK_2 = "2026-10-12T00:00:00.000Z";
+const WEEK_3 = "2026-10-19T00:00:00.000Z";
+
+const projectA = project("project:a");
+const projectB = project("project:b");
+
+/** A candidate as telemetry answers it: a command and an inline script, found in three threads. */
+const candidate = (
+  id: string,
+  overrides: Partial<TelemetryExtractionCandidate> = {},
+): TelemetryExtractionCandidate => ({
+  id,
+  kind: "procedure",
+  steps: ["command:vp test run src/a.test.ts", "script:node:0123456789ab"],
+  threads: 3,
+  occurrences: 4,
+  deterministicRatio: 1,
+  estimatedTokens: 1000,
+  form: "script",
+  example: { threadId: "thread:example", runId: "run:example", itemIds: ["item:a", "item:b"] },
+  ...overrides,
+});
+
+const skill = (id: string, estimatedTokens: number) =>
+  candidate(id, {
+    steps: ["Grep <pattern> <path>", "Read <path>"],
+    form: "skill",
+    estimatedTokens,
+  });
+
+/**
+ * The proposal store and the sweep over fresh learning and host databases, as the plugin's layer
+ * builds them, with `projects` listed and a fake telemetry plugin that answers each window's
+ * extraction candidates as `weeks` sets them by the window's first day. `tick` runs the sweep with
+ * telemetry on and `services` beside it, as siblings a running plugin would add.
+ */
+const setup = (projects: ReadonlyArray<OrchestrationProjectShell> = [projectA]) =>
+  Effect.gen(function* () {
+    yield* TestClock.setTime(NOW);
+    const { sql } = yield* PluginDatabase.open({
+      id: "learning",
+      filename: ":memory:",
+      migrations,
+    });
+    const host = yield* PluginDatabase.open({
+      id: "_host",
+      filename: ":memory:",
+      migrations: HostDatabase.migrations,
+    });
+    const context = yield* Layer.build(
+      Layer.mergeAll(
+        ProposalStore.layer,
+        Attention.layer.pipe(Layer.provide(Layer.succeed(HostDatabase.HostDatabase, host.sql))),
+      ).pipe(
+        Layer.provideMerge(PromptStore.layer),
+        Layer.provideMerge(
+          Layer.mergeAll(
+            Layer.succeed(SqlClient.SqlClient, sql),
+            NodeServices.layer,
+            Layer.mock(ProjectService.ProjectService)({
+              listShells: () => Effect.succeed(projects),
+              getShell: (projectId) =>
+                Effect.succeed(Option.fromNullishOr(projects.find((p) => p.id === projectId))),
+            }),
+          ),
+        ),
+      ),
+    );
+    const sweep = yield* DeterministicSweep.sweep.pipe(Effect.provide(context));
+    const weeks = new Map<string, ReadonlyArray<TelemetryExtractionCandidate>>();
+    const requests: Array<TelemetryMeasuresInput> = [];
+    const telemetry = Telemetry.Telemetry.of({
+      measures: (input) =>
+        Effect.sync(() => {
+          requests.push(input);
+          const candidates = weeks.get(input.from) ?? [];
+          return [
+            {
+              measure: "extraction_candidates",
+              state: "ok" as const,
+              value: candidates.length,
+              unit: "count" as const,
+              direction: "lower_is_better" as const,
+              sampleSize: 3,
+              missingReason: null,
+              provenance: [],
+              detail: { candidates },
+            },
+          ];
+        }),
+    });
+    const store = Context.get(context, ProposalStore.ProposalStore);
+    return {
+      weeks,
+      requests,
+      store,
+      prompts: Context.get(context, PromptStore.PromptStore),
+      tick: (services: Context.Context<never> = Context.empty(), dryRun = false) =>
+        sweep
+          .run({ dryRun })
+          .pipe(Effect.provideService(Telemetry.Telemetry, telemetry), Effect.provide(services)),
+      /** A project's proposals as `[candidate, state, tokens, week]`, newest first. */
+      proposals: (projectId = projectA.id) =>
+        store
+          .list({ projectId })
+          .pipe(
+            Effect.map((list) =>
+              list.map((p) => [p.candidateId, p.state, p.estimatedTokens, p.windowFrom]),
+            ),
+          ),
+      /** Every flag ever raised, open or cleared, oldest first. */
+      flags: host.sql<{
+        readonly thread_id: string;
+        readonly kind: string;
+        readonly text: string;
+        readonly resume_action: string;
+        readonly cleared_at: string | null;
+      }>`SELECT thread_id, kind, text, resume_action, cleared_at FROM attention ORDER BY id`,
+    };
+  });
+
+it.effect(
+  "a script candidate in three threads becomes one draft project script, once across two weeks",
+  () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const world = yield* setup();
+        world.weeks.set(WEEK_1, [candidate("c0ffee0000000001")]);
+
+        // Reviewed, recorded, drafted and flagged in one tick.
+        assert.deepEqual(yield* world.tick(), { examined: 2, acted: 3, flags: 1 });
+        const [proposal] = yield* world.store.list({ projectId: projectA.id });
+        assert.deepInclude(proposal, {
+          state: "pending",
+          form: "script",
+          title: "vp test run src/a.test.ts → script:node:0123456789ab",
+          estimatedTokens: 1000,
+          windowFrom: WEEK_1,
+          waitingReason: null,
+        });
+        // The command is the stored shape; a script's text is never kept, so its line names the
+        // program and the item to copy it from.
+        assert.deepEqual(proposal?.draft, {
+          kind: "script",
+          script: {
+            id: "repeated-c0ffee000000",
+            name: "Repeated: vp test run src/a.test.ts",
+            command: [
+              "vp test run src/a.test.ts",
+              "# Paste the node script from item item:b in thread thread:example here.",
+            ].join("\n"),
+            icon: "play",
+            runOnWorktreeCreate: false,
+          },
+        });
+
+        // The same week again reviews nothing.
+        assert.deepEqual(yield* world.tick(), { examined: 0, acted: 0, flags: 1 });
+
+        // The next week finds the same candidate, costlier, and proposes nothing new.
+        yield* TestClock.adjust("7 days");
+        world.weeks.set(WEEK_2, [candidate("c0ffee0000000001", { estimatedTokens: 1500 })]);
+        assert.deepEqual(yield* world.tick(), { examined: 1, acted: 0, flags: 1 });
+        assert.deepEqual(yield* world.proposals(), [["c0ffee0000000001", "pending", 1000, WEEK_1]]);
+        assert.deepEqual(
+          world.requests.map((request) => [request.from, request.to]),
+          [
+            [WEEK_1, WEEK_2],
+            [WEEK_2, WEEK_3],
+          ],
+        );
+
+        // One flag for the project, opening the list on the Learning screen.
+        const [flag, ...rest] = yield* world.flags;
+        assert.deepEqual(rest, []);
+        assert.deepInclude(flag, {
+          thread_id: "deterministic:project:a",
+          kind: "deterministic_proposals",
+          text: "1 proposal to do repeated work without a model waits for review.",
+          cleared_at: null,
+        });
+        assert.deepEqual(JSON.parse(flag!.resume_action), {
+          label: "Review",
+          target: "plugin",
+          pluginId: "learning",
+          tab: "deterministic",
+          recordId: "project:a",
+        });
+      }),
+    ),
+);
+
+it.effect("a skill candidate becomes one proposed prompt in the library", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const world = yield* setup();
+      world.weeks.set(WEEK_1, [skill("5c111a0000000001", 4000)]);
+      yield* world.tick();
+      yield* TestClock.adjust("7 days");
+      world.weeks.set(WEEK_2, [skill("5c111a0000000001", 4000)]);
+      yield* world.tick();
+
+      const prompts = yield* world.prompts.list({ projectId: projectA.id });
+      assert.deepEqual(
+        prompts.map((p) => [p.kind, p.state, p.origin, p.title]),
+        [
+          [
+            "workflow",
+            "proposed",
+            "repeated_work",
+            "Repeated: Grep <pattern> <path> → Read <path>",
+          ],
+        ],
+      );
+      const [proposal] = yield* world.store.list({ projectId: projectA.id });
+      assert.deepEqual(proposal?.draft, { kind: "prompt", promptId: prompts[0]!.id });
+      const { prompt } = yield* world.prompts.get(prompts[0]!.id);
+      assert.include(prompt.body, "Grep <pattern> <path>\nRead <path>");
+      assert.include(prompt.body, "thread thread:example");
+    }),
+  ),
+);
+
+it.effect("a dismissed candidate is not proposed again until its weekly cost doubles", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const world = yield* setup();
+      world.weeks.set(WEEK_1, [skill("d15a110000000001", 1000)]);
+      yield* world.tick();
+      const [first] = yield* world.store.list({ projectId: projectA.id });
+
+      const dismissed = yield* world.store.dismiss({ id: first!.id, reason: "Noise." }, "user");
+      assert.deepInclude(dismissed, {
+        state: "dismissed",
+        decidedBy: "user",
+        dismissReason: "Noise.",
+      });
+      // Its draft is withdrawn, and the flag clears once nothing is undecided.
+      const [archived] = yield* world.prompts.list({ projectId: projectA.id });
+      assert.strictEqual(archived?.state, "archived");
+      assert.deepEqual(yield* world.tick(), { examined: 0, acted: 1, flags: 0 });
+      assert.isNotNull((yield* world.flags)[0]?.cleared_at);
+
+      // Not quite twice the cost: nothing.
+      yield* TestClock.adjust("7 days");
+      world.weeks.set(WEEK_2, [skill("d15a110000000001", 1999)]);
+      assert.deepEqual(yield* world.tick(), { examined: 1, acted: 0, flags: 0 });
+
+      // Twice the cost: proposed again, with a new draft beside the archived one.
+      yield* TestClock.adjust("7 days");
+      world.weeks.set(WEEK_3, [skill("d15a110000000001", 2000)]);
+      yield* world.tick();
+      assert.deepEqual(yield* world.proposals(), [
+        ["d15a110000000001", "pending", 2000, WEEK_3],
+        ["d15a110000000001", "dismissed", 1000, WEEK_1],
+      ]);
+      assert.deepEqual(
+        (yield* world.prompts.list({ projectId: projectA.id })).map((p) => p.state),
+        ["proposed", "archived"],
+      );
+      // A decided proposal is not decided again.
+      const again = yield* Effect.flip(world.store.dismiss({ id: first!.id, reason: "x" }, "user"));
+      assert.strictEqual(again.code, "invalid");
+    }),
+  ),
+);
+
+it.effect("a project gets at most five proposals a week, the costliest eligible first", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const world = yield* setup([projectA, projectB]);
+      const eligible = [100, 600, 300, 500, 200, 400].map((tokens) =>
+        candidate(`e1191b1e0000${tokens}`, { estimatedTokens: tokens }),
+      );
+      const week = [
+        ...eligible,
+        // Costlier, but not deterministic enough, or in too few threads.
+        candidate("1e55000000000001", { estimatedTokens: 9000, deterministicRatio: 0.79 }),
+        candidate("1e55000000000002", { estimatedTokens: 8000, threads: 2 }),
+      ];
+      world.weeks.set(WEEK_1, week);
+      yield* world.tick();
+      for (const projectId of [projectA.id, projectB.id]) {
+        assert.deepEqual(
+          (yield* world.proposals(projectId)).map(([, , tokens]) => tokens),
+          [200, 300, 400, 500, 600],
+        );
+      }
+      assert.strictEqual(
+        (yield* world.flags).find((flag) => flag.thread_id === "deterministic:project:b")?.text,
+        "5 proposals to do repeated work without a model wait for review.",
+      );
+
+      // The next week proposes only the one left.
+      yield* TestClock.adjust("7 days");
+      world.weeks.set(WEEK_2, week);
+      yield* world.tick();
+      assert.deepEqual((yield* world.proposals()).slice(0, 2), [
+        ["e1191b1e0000100", "pending", 100, WEEK_2],
+        ["e1191b1e0000200", "pending", 200, WEEK_1],
+      ]);
+    }),
+  ),
+);
+
+/** An in-memory knowledge plugin with no pages, recording what it was asked. */
+const fakeKnowledge = Effect.gen(function* () {
+  const pages = yield* Ref.make<ReadonlyArray<KnowledgeEntry>>([]);
+  const layer = Layer.mock(KnowledgeStore.KnowledgeStore)({
+    list: ({ projectId }) =>
+      Effect.map(Ref.get(pages), (all) => all.filter((page) => page.projectId === projectId)),
+    propose: (input, source) =>
+      Ref.modify(pages, (all) => {
+        const page: KnowledgeEntry = {
+          id: all.length + 1,
+          ...input,
+          state: "draft",
+          source,
+          createdAt: WEEK_2,
+          acceptedAt: null,
+          retiredAt: null,
+        };
+        return [page, [...all, page]];
+      }),
+  });
+  return { context: yield* Layer.build(layer), pages: Ref.get(pages) };
+});
+
+it.effect("a context file waits while the knowledge plugin is off, then becomes a draft page", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const world = yield* setup();
+      world.weeks.set(WEEK_1, [
+        candidate("c0de000000000001", { steps: ["Read docs/arch.md"], form: "context_file" }),
+      ]);
+      // Recorded and flagged, but with no draft.
+      assert.deepEqual(yield* world.tick(), { examined: 2, acted: 2, flags: 1 });
+      const [waiting] = yield* world.store.list({ projectId: projectA.id });
+      assert.deepInclude(waiting, {
+        state: "waiting",
+        draft: null,
+        waitingReason: "The knowledge plugin is off.",
+      });
+
+      const knowledge = yield* fakeKnowledge;
+      assert.deepEqual(yield* world.tick(knowledge.context), { examined: 1, acted: 1, flags: 1 });
+      const [page] = yield* knowledge.pages;
+      assert.deepInclude(page, {
+        key: "repeated-c0de000000000001",
+        title: "What runs read first: Read docs/arch.md",
+        state: "draft",
+        source: { kind: "agent", threadId: ThreadId.make("thread:example") },
+      });
+      const [pending] = yield* world.store.list({ projectId: projectA.id });
+      assert.deepInclude(pending, { state: "pending", draft: { kind: "knowledge", pageId: 1 } });
+    }),
+  ),
+);
+
+it.effect("a scheduled task is a paused draft on the project's default model", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const modelless = project("project:modelless", null);
+      const world = yield* setup([projectA, modelless]);
+      const core = yield* fakeCore({ projects: [projectA, modelless] });
+      world.weeks.set(WEEK_1, [
+        candidate("7a5c000000000001", { steps: ["command:vp run audit"], form: "scheduled_task" }),
+      ]);
+      yield* world.tick(yield* Layer.build(core.layer));
+
+      const [task] = yield* core.tasks;
+      const [proposal] = yield* world.store.list({ projectId: projectA.id });
+      assert.deepInclude(task, {
+        title: "Repeated: vp run audit",
+        enabled: false,
+        projectId: projectA.id,
+        modelSelection: MODEL,
+        runtimeMode: "approval-required",
+      });
+      assert.deepEqual(proposal?.draft, { kind: "scheduled_task", taskId: task!.id });
+      // A project without a default model has nothing for the task to run on.
+      const [waiting] = yield* world.store.list({ projectId: modelless.id });
+      assert.deepInclude(waiting, {
+        state: "waiting",
+        waitingReason: "The project has no default model for a task to run on.",
+      });
+    }),
+  ),
+);
+
+/** An in-memory board, which files and moves cards. */
+const fakeKanban = Effect.gen(function* () {
+  const issues = yield* Ref.make<ReadonlyArray<KanbanIssue>>([]);
+  const find = (id: string | undefined) =>
+    Effect.flatMap(Ref.get(issues), (all) => {
+      const issue = all.find((entry) => entry.id === id);
+      return issue === undefined
+        ? Effect.fail(new KanbanError({ code: "not_found", message: `No issue ${id}.` }))
+        : Effect.succeed(issue);
+    });
+  const save = (issue: KanbanIssue) =>
+    Ref.update(issues, (all) => [...all.filter((entry) => entry.id !== issue.id), issue]);
+  const layer = Layer.mock(KanbanStore.KanbanStore)({
+    board: () =>
+      Effect.map(Ref.get(issues), (all) => ({
+        directory: "/wiki/project-a",
+        issues: all.map(({ criteria: _c, description: _d, log: _l, ...issue }) => ({
+          ...issue,
+          criteriaOpen: 0,
+          criteriaTotal: 0,
+        })),
+        decisionCategories: [],
+      })),
+    getIssue: ({ id }) => find(id),
+    write: (_projectId, actor, write) =>
+      Effect.gen(function* () {
+        if (write.action === "issue.create") {
+          const id = `card-${(yield* Ref.get(issues)).length + 1}`;
+          yield* save({
+            id,
+            title: write.title ?? "",
+            status: write.status ?? "triage",
+            priority: "p3",
+            labels: write.labels ?? [],
+            verification: "unverified",
+            tier: null,
+            blocked: null,
+            reopened: null,
+            threads: [],
+            createdAt: WEEK_2,
+            createdBy: actor,
+            updatedAt: WEEK_2,
+            doneAt: null,
+            archivedAt: null,
+            criteria: [],
+            description: write.description ?? "",
+            log: [],
+          });
+          return { id };
+        }
+        const issue = yield* find(write.id);
+        yield* save(
+          write.action === "issue.archive"
+            ? { ...issue, archivedAt: WEEK_2 }
+            : { ...issue, status: write.status ?? issue.status },
+        );
+        return { id: issue.id };
+      }),
+  });
+  return { context: yield* Layer.build(layer), issues: Ref.get(issues) };
+});
+
+it.effect(
+  "work that needs code is a Triage card labeled deterministic; dismissing archives it",
+  () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const world = yield* setup();
+        const kanban = yield* fakeKanban;
+        world.weeks.set(WEEK_1, [
+          candidate("4007000000000001", { steps: ["command:vp fmt <path>"], form: "hook" }),
+        ]);
+        yield* world.tick(kanban.context);
+        const [card] = yield* kanban.issues;
+        assert.deepInclude(card, {
+          title: "Could be deterministic: vp fmt <path>",
+          status: "triage",
+          labels: ["deterministic"],
+          createdBy: "system",
+        });
+        assert.include(card!.description, "a hook the provider runs after an edit");
+
+        const [proposal] = yield* world.store.list({ projectId: projectA.id });
+        yield* world.store
+          .dismiss({ id: proposal!.id, reason: "We format on save." }, "user")
+          .pipe(Effect.provide(kanban.context));
+        assert.isNotNull((yield* kanban.issues)[0]?.archivedAt);
+      }),
+    ),
+);
+
+it.effect("accepting a draft script adds it to the project's scripts, once", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const world = yield* setup();
+      world.weeks.set(WEEK_1, [candidate("acce970000000001")]);
+      yield* world.tick();
+      const [proposal] = yield* world.store.list({ projectId: projectA.id });
+      const settings = yield* Layer.build(ServerSettings.layerTest());
+
+      const accepted = yield* world.store.accept(proposal!.id).pipe(Effect.provide(settings));
+      assert.deepInclude(accepted, { state: "accepted", decidedBy: "user" });
+      const saved = yield* Effect.provide(
+        ServerSettings.ServerSettingsService.pipe(Effect.flatMap((s) => s.getSettings)),
+        settings,
+      );
+      assert.deepEqual(
+        saved.projectSettingsOverrides[projectA.id]?.defaultProjectScripts?.map((s) => s.id),
+        ["repeated-acce97000000"],
+      );
+      // Accepted once: a second accept is refused, and the flag clears on the next tick.
+      const again = yield* Effect.flip(
+        world.store.accept(proposal!.id).pipe(Effect.provide(settings)),
+      );
+      assert.strictEqual(again.code, "invalid");
+      assert.deepEqual(yield* world.tick(), { examined: 0, acted: 1, flags: 0 });
+    }),
+  ),
+);
+
+it.effect("a dry run counts what it would propose and writes nothing", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const world = yield* setup();
+      world.weeks.set(WEEK_1, [candidate("d040000000000001")]);
+      assert.deepEqual(yield* world.tick(Context.empty(), true), {
+        examined: 1,
+        acted: 1,
+        flags: 0,
+      });
+      assert.deepEqual(yield* world.proposals(), []);
+      assert.deepEqual(yield* world.flags, []);
+      // The real run still reviews the week.
+      assert.deepEqual(yield* world.tick(), { examined: 2, acted: 3, flags: 1 });
+    }),
+  ),
+);

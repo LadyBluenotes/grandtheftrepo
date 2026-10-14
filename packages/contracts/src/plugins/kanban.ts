@@ -399,6 +399,7 @@ export const KanbanAttentionKind = Schema.Literals([
   "promotion_settled",
   "decision_conflict",
   "promotion_review",
+  "deterministic_proposals",
 ]);
 export type KanbanAttentionKind = typeof KanbanAttentionKind.Type;
 
@@ -420,6 +421,7 @@ export const KANBAN_ATTENTION_KIND_LABELS: Record<KanbanAttentionKind, string> =
   promotion_settled: "Handover settled",
   decision_conflict: "Decision conflict",
   promotion_review: "Handover review",
+  deterministic_proposals: "Could be deterministic",
 };
 
 /**

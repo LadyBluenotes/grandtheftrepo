@@ -23,6 +23,7 @@ import * as ProjectService from "../../../project/ProjectService.ts";
 import * as Attention from "../../Attention.ts";
 import { flagKeyedToProject } from "../../attentionKeys.ts";
 import * as CorrectionStore from "../../learning/CorrectionStore.ts";
+import * as ProposalStore from "../../learning/deterministic/ProposalStore.ts";
 import * as ItemStore from "../../learning/items/ItemStore.ts";
 import * as Promoter from "../../learning/Promoter.ts";
 import * as VerdictStore from "../../review/VerdictStore.ts";
@@ -157,8 +158,12 @@ export const make = Effect.fn("ReportService.make")(function* (
       const corrections = yield* Effect.serviceOption(CorrectionStore.CorrectionStore);
       const items = yield* Effect.serviceOption(ItemStore.ItemStore);
       const promoters = yield* Effect.serviceOption(Promoter.PromoterRegistry);
+      const proposals = yield* Effect.serviceOption(ProposalStore.ProposalStore);
       const learning =
-        Option.isSome(corrections) && Option.isSome(items) && Option.isSome(promoters)
+        Option.isSome(corrections) &&
+        Option.isSome(items) &&
+        Option.isSome(promoters) &&
+        Option.isSome(proposals)
           ? {
               corrections: yield* corrections.value.list({ projectId, from, to }),
               items: yield* items.value.list({ projectId }),
@@ -169,6 +174,7 @@ export const make = Effect.fn("ReportService.make")(function* (
                 to,
               }),
               promoters: yield* promoters.value.ownerKinds,
+              proposals: yield* proposals.value.inRange({ projectId, from, to }),
             }
           : undefined;
 
@@ -198,7 +204,9 @@ export const make = Effect.fn("ReportService.make")(function* (
       Effect.catchTags({
         SqlError: failWith("The telemetry or attention database could not be read."),
         ProjectOperationError: failWith("The project could not be read."),
-        LearningError: failWith("The learning plugin's corrections or items could not be read."),
+        LearningError: failWith(
+          "The learning plugin's corrections, items or proposals could not be read.",
+        ),
         ReviewVerdictError: failWith("The review plugin's verdicts could not be read."),
       }),
     );
