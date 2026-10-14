@@ -15,7 +15,7 @@ import { Tool, Toolkit } from "effect/ai";
 
 import * as McpInvocationContext from "../../../mcp/McpInvocationContext.ts";
 import * as McpToolAccess from "../../../mcp/McpToolAccess.ts";
-import { readCaller, resolveProjectId } from "../../../mcp/threadAccess.ts";
+import { type Caller, readCaller, resolveProjectId } from "../../../mcp/threadAccess.ts";
 import * as ThreadManagementService from "../../../orchestration-v2/ThreadManagementService.ts";
 import { failure } from "../mcp.ts";
 import * as FindingService from "./FindingService.ts";
@@ -109,8 +109,7 @@ const threadCaller = Effect.flatMap(readCaller(), (context) =>
 );
 
 /** `thread:<id>` for an agent in a thread, `agent` for a client outside one, as `kanban_write`. */
-const actorOf = ({ caller }: Effect.Success<ReturnType<typeof readCaller>>) =>
-  caller === undefined ? "agent" : `thread:${caller.id}`;
+const actorOf = ({ caller }: Caller) => (caller === undefined ? "agent" : `thread:${caller.id}`);
 
 /** Read when the handlers are built, as the kanban tools read the store. */
 export const handlers = McpToolAccess.toLayer(

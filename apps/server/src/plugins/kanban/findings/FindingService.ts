@@ -290,7 +290,8 @@ const make = Effect.gen(function* () {
           updatedAt: at,
           log: [...from.log, { at, by, kind: "finding", text: `${id} moved to ${to.id}` }],
         };
-        return { result: { projectId, issueId: to.id, finding }, save: [left, to] };
+        // Added before it is removed: a failed second write leaves it on both issues, not neither.
+        return { result: { projectId, issueId: to.id, finding }, save: [to, left] };
       }),
     );
 
