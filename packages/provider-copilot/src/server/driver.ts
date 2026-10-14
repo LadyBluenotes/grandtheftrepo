@@ -245,6 +245,16 @@ export const CopilotDriver: ProviderDriver<CopilotSettings, CopilotDriverEnv, Pa
           ),
         );
 
+      // Seed the catalog once at startup so the picker lists models before any thread
+      // runs. A failure (signed out, offline) leaves the default entry and manual refresh.
+      if (effectiveConfig.enabled) {
+        yield* refreshModels().pipe(
+          Effect.flatMap(() => snapshot.refresh),
+          Effect.ignore,
+          Effect.forkIn(scope),
+        );
+      }
+
       const snapshotForCwd = (workspaceCwd: string) =>
         !effectiveConfig.enabled
           ? snapshot.getSnapshot

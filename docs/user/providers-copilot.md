@@ -38,7 +38,7 @@ the CLI is configured with (`COPILOT_MODEL` or its `settings.json`). After signi
 in, use **Refresh provider status** with models in **Settings → Providers**, or
 **Refresh models** in the thread settings on mobile: T3 Code opens a short
 Copilot session, reads its catalog, and closes it. The list also fills in on its
-own the first time a Copilot thread runs. Switching models or options applies on the
+own when T3 Code starts, or the first time a Copilot thread runs if you were signed out. Switching models or options applies on the
 next message in the same session. Model IDs Copilot does not list can still be
 added under **Custom models**.
 
