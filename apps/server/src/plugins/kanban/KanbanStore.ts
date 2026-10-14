@@ -38,6 +38,7 @@ import * as NodeCrypto from "node:crypto";
 
 import * as ServerConfig from "../../config.ts";
 import * as ProjectService from "../../project/ProjectService.ts";
+import { recordTicketReopen } from "../learning/producers/ticketReopens.ts";
 import * as Files from "./KanbanFiles.ts";
 
 /**
@@ -441,11 +442,12 @@ const make = Effect.gen(function* () {
   const gated = (actor: KanbanActor, from: KanbanStatus | null, to: KanbanStatus) =>
     actor !== "user" && (from === null || HOLDING.has(from)) && !HOLDING.has(to);
 
+  /** Applies one write; `reopened` is the issue when the write brought it back out of Done. */
   const applyWrite = Effect.fn("KanbanStore.applyWrite")(function* (
     state: Loaded,
     actor: KanbanActor,
     w: KanbanWrite,
-  ) {
+  ): Effect.fn.Return<KanbanWriteResult & { readonly reopened?: KanbanIssue }, KanbanError> {
     const at = yield* nowIso;
     const need = <T>(value: T | undefined, name: string): Effect.Effect<T, KanbanError> =>
       value === undefined
@@ -594,7 +596,8 @@ const make = Effect.gen(function* () {
         if (status === "done" && current.status !== "done" && open > 0)
           return yield* invalid(`${open} acceptance criteria are still open.`);
         let next = moved(current, status, actor, at);
-        if (current.status === "done" && status !== "done") {
+        const reopening = current.status === "done" && status !== "done";
+        if (reopening) {
           if (w.reopenReason === undefined)
             return yield* invalid(
               "A completed issue needs a reopen reason: defect or scope_change.",
@@ -606,7 +609,7 @@ const make = Effect.gen(function* () {
           };
         }
         yield* saveIssue(state, next);
-        return { id: current.id };
+        return reopening ? { id: current.id, reopened: next } : { id: current.id };
       }
       case "criterion.add": {
         const current = yield* issue();
@@ -917,8 +920,10 @@ const make = Effect.gen(function* () {
   const write: KanbanStore["Service"]["write"] = Effect.fn("KanbanStore.write")(
     function* (projectId, actor, w) {
       const state = yield* load(projectId);
-      const result = yield* state.lock.withPermits(1)(applyWrite(state, actor, w));
+      const { reopened, ...result } = yield* state.lock.withPermits(1)(applyWrite(state, actor, w));
       yield* publish(projectId);
+      // A done issue coming back is a correction for the learning plugin, recorded outside the lock.
+      if (reopened !== undefined) yield* recordTicketReopen(projectId, reopened);
       return result;
     },
   );

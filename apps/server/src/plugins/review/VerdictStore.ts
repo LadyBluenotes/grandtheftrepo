@@ -2,7 +2,7 @@ import {
   PONYTAIL_RUNG_IDS,
   PonytailRungId,
   type CheckpointId,
-  type LearningDeclaredMode,
+  type ReviewFailureMode,
   type LearningError,
   type ProjectId,
   type ReviewOutcome,
@@ -35,7 +35,7 @@ interface Row {
   readonly reviewer_thread_id: ThreadId;
   readonly checkpoint_id: CheckpointId;
   readonly outcome: ReviewOutcome;
-  readonly failure_mode: LearningDeclaredMode | null;
+  readonly failure_mode: ReviewFailureMode | null;
   readonly summary: string;
   readonly correction_id: number | null;
   readonly created_at: string;

@@ -201,8 +201,14 @@ them half-evaluated. The host hands `toolkitRegistration` to `ServerPlugin.mcp` 
   `packages/contracts/src/plugins/routing.ts`. Web: `apps/web/src/plugins/routing/`.
 - **learning**: a record of corrections, visible instances of work going wrong, taken from
   events the server already emits: failed or interrupted provider turns, pull request wakes
-  while changes are requested, and threads reopened after settlement. Agents read and add
-  them over MCP. Two sweeps turn corrections with a declared failure mode into learning items, one
+  while changes are requested, and threads reopened after settlement. `KanbanStore.write` also
+  records a done ticket it reopens, on the thread linked to it last, through
+  `producers/ticketReopens.ts` and `Effect.serviceOption`, so a reopen while learning is off
+  records nothing. A ticket can link any thread id, so the reopen is recorded only when the core's
+  thread shell places that thread in the ticket's project. Agents read and add them over MCP. A correction declares a failure mode only
+  when its source names the cause: a review verdict, a person, the security scan (`security`) or a
+  reopened ticket (`defect` for a defect, `unclear_spec` for a scope change); a provider failure
+  never does. Two sweeps turn corrections with a declared failure mode into learning items, one
   per mode per project, routed by fixed rules on the mode to an owner kind, and hand each item
   over through one promotion record, at least once, keyed by the record's id so a promoter can
   drop a repeat. The plugin registers the promoters for `project_knowledge`, `policy` and `prompt`
@@ -272,8 +278,8 @@ them half-evaluated. The host hands `toolkitRegistration` to `ServerPlugin.mcp` 
   is the completion gate a ticket asks before it finishes; nothing calls it yet. The plugin's
   reactor tests the lines each root-run turn adds against six fixed patterns unless the project's
   security mode is `off`, and the `review/security` sweep records each finding as a `security`
-  correction, because a reactor sees only its own plugin's services; in `block` a finding refuses
-  `review.request`, verdicts and `ReviewGate.check`, holds back the invalidation sweep's
+  correction declaring the `security` mode, because a reactor sees only its own plugin's
+  services; in `block` a finding refuses `review.request`, verdicts and `ReviewGate.check`, holds back the invalidation sweep's
   replacement request and keeps a `security_hold` flag until `review.security.ack`. The same sweep calls the reactor's
   `retryFailed` each tick and settles an event the reactor gave up on as a scan row, with a
   `scan_failed` finding in `block`; in `block` a turn the scan cannot read, a stopped or failed

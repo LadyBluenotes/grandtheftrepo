@@ -192,12 +192,14 @@ it.effect(
           "unclear_spec",
         ] as const;
         for (const mode of modes) yield* learning.correction(mode);
+        // The security scan declares its own mode.
+        yield* learning.correction("security", "security", "secret.token at src/config.ts:2");
         // A declared mode on a provider failure is ignored, and prose naming a mode is never read.
         yield* learning.correction("convention", "provider_turn_failed");
         yield* learning.correction("scope_drift", "provider_turn_interrupted");
         yield* learning.correction(undefined, "changes_requested", "convention: scope_drift");
         yield* learning.correction(undefined, "manual", "missing_verification");
-        assert.deepEqual((yield* learning.tick).classify, { examined: 10, acted: 6, flags: 0 });
+        assert.deepEqual((yield* learning.tick).classify, { examined: 11, acted: 7, flags: 0 });
 
         const items = yield* learning.items.list({ projectId });
         assert.deepEqual(
@@ -210,17 +212,20 @@ it.effect(
             ["incomplete", "local_only", "open", 1],
             ["missing_verification", "policy", "candidate", 1],
             ["scope_drift", "policy", "candidate", 1],
+            ["security", "policy", "candidate", 1],
             ["unclear_spec", "local_only", "open", 1],
           ],
         );
         assert.deepEqual((yield* learning.classified).slice(6), [
+          { cause_class: "security", classification_reason: "declared mode" },
           { cause_class: "unclassified", classification_reason: "provider failure" },
           { cause_class: "unclassified", classification_reason: "provider failure" },
           { cause_class: "unclassified", classification_reason: "no declared mode" },
           { cause_class: "unclassified", classification_reason: "no declared mode" },
         ]);
-        // Three candidates, three records; the local-only items have nothing to hand over.
+        // Four candidates, four records; the local-only items have nothing to hand over.
         assert.deepEqual((yield* learning.promotions).map((p) => p.owner_kind).sort(), [
+          "policy",
           "policy",
           "policy",
           "project_knowledge",
@@ -249,6 +254,29 @@ it.effect(
           "context_efficiency 1200 → 1700 (+42%)",
         );
         assert.strictEqual(again.occurrences, 1);
+      }),
+    ),
+);
+
+it.effect(
+  "a security correction stored before the scan declared its mode is classified once migrated",
+  () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const learning = yield* setup;
+        yield* learning.correction(undefined, "security", "secret.token at src/config.ts:2");
+        yield* learning.tick;
+        assert.deepEqual(yield* learning.classified, [
+          { cause_class: "unclassified", classification_reason: "no declared mode" },
+        ]);
+        const [, , declareSecurity] = migrations.find(([id]) => id === 7)!;
+        yield* declareSecurity.pipe(Effect.provideService(SqlClient.SqlClient, learning.sql));
+        assert.deepEqual((yield* learning.tick).classify, { examined: 1, acted: 1, flags: 0 });
+        assert.deepEqual(yield* learning.classified, [
+          { cause_class: "security", classification_reason: "declared mode" },
+        ]);
+        const [item] = yield* learning.items.list({ projectId });
+        assert.deepInclude(item, { failureMode: "security", ownerKind: "policy", occurrences: 1 });
       }),
     ),
 );
