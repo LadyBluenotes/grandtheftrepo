@@ -22,6 +22,8 @@ const issue = {
   tier: null,
   criteria: [],
   findings: [],
+  closureCheck: true,
+  noDecision: null,
   blocked: null,
   reopened: null,
   threads: [],

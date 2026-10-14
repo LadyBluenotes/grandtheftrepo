@@ -58,7 +58,10 @@ export const hashSource = (issue: Pick<KanbanIssue, "createdAt" | "title" | "des
     )
     .digest("hex");
 
-/** A new issue `by` files at `at`: no criteria, findings or threads, and its column as its log. */
+/**
+ * A new issue `by` files at `at`: no criteria, findings or threads, and its column as its log. It
+ * is held to the closure check (`closureGaps`).
+ */
 export const newIssue = (
   fields: Pick<
     KanbanIssue,
@@ -70,6 +73,8 @@ export const newIssue = (
   ...fields,
   criteria: [],
   findings: [],
+  closureCheck: true,
+  noDecision: null,
   blocked: null,
   reopened: null,
   threads: [],
@@ -80,6 +85,41 @@ export const newIssue = (
   archivedAt: null,
   log: [{ at, by, kind: "status", text: fields.status }],
 });
+
+/**
+ * What an issue lacks to be closed beyond its criteria, each part naming how to supply it: a
+ * decision listing it among its `issues` (in any state) or a reason none was needed, and a review
+ * of every finding still `open`. Empty when nothing is missing, and always for an issue filed
+ * before the check (`closureCheck` false). `decisions` may hold any of the project's decisions.
+ */
+export const closureGaps = (
+  issue: KanbanIssue,
+  decisions: ReadonlyArray<KanbanDecision>,
+): ReadonlyArray<string> => {
+  if (!issue.closureCheck) return [];
+  const open = issue.findings.filter((f) => f.disposition === "open").map((f) => f.id);
+  return [
+    ...(issue.noDecision === null && !decisions.some((d) => d.issues.includes(issue.id))
+      ? [
+          `it needs a linked decision or a reason no decision was needed (decision.create with issues ["${issue.id}"], or issue.noDecision with a reason)`,
+        ]
+      : []),
+    ...(open.length === 0
+      ? []
+      : [
+          `${open.length === 1 ? "finding" : "findings"} ${open.join(", ")} ${
+            open.length === 1 ? "is" : "are"
+          } still open (review with finding_review)`,
+        ]),
+  ];
+};
+
+/** A card auto-advance held back from Done, with what it lacks (`closureGaps`). */
+export interface Held {
+  readonly id: string;
+  readonly title: string;
+  readonly missing: ReadonlyArray<string>;
+}
 
 /** Done issues wait this long before the sweep archives them. */
 const ARCHIVE_AFTER = Duration.days(7);
@@ -144,12 +184,16 @@ export class KanbanStore extends Context.Service<
       criteria: ReadonlyArray<string>,
       sourceHash: string,
     ) => Effect.Effect<"admitted" | "left" | "changed", KanbanError>;
-    /** Moves every issue linking `threadId` forward to `status`. Never leaves Triage or Inbox. */
+    /**
+     * Moves every issue linking `threadId` forward to `status`. Never leaves Triage or Inbox. An
+     * issue with an open criterion stays out of Done; one failing `closureGaps` too, and is
+     * returned so the caller can flag it.
+     */
     readonly advance: (
       projectId: ProjectId,
       threadId: ThreadId,
       status: KanbanStatus,
-    ) => Effect.Effect<void, KanbanError>;
+    ) => Effect.Effect<ReadonlyArray<Held>, KanbanError>;
     /** Archives Done issues older than `ARCHIVE_AFTER` in every loaded project. */
     readonly sweepArchive: Effect.Effect<void>;
     readonly board: (projectId: ProjectId) => Effect.Effect<KanbanBoard, KanbanError>;
@@ -498,6 +542,8 @@ const make = Effect.gen(function* () {
     description: _description,
     log: _log,
     findings: _findings,
+    closureCheck: _closureCheck,
+    noDecision: _noDecision,
     criteria,
     ...rest
   }: KanbanIssue): KanbanIssueSummary => ({
@@ -565,6 +611,8 @@ const make = Effect.gen(function* () {
           updatedAt: at,
           log: [...issue.log, { at, by, kind: "status", text: status }],
         };
+
+  const allDecisions = (state: Loaded) => Array.from(state.decisions.values()).flat();
 
   /** Agents may file and triage; only the user moves a card from the holding columns into work. */
   const gated = (actor: KanbanActor, from: KanbanStatus | null, to: KanbanStatus) =>
@@ -714,9 +762,17 @@ const make = Effect.gen(function* () {
             code: "gated",
             message: `Only the user moves a card out of ${current.status}.`,
           });
-        const open = current.criteria.filter((c) => !c.checked).length;
-        if (status === "done" && current.status !== "done" && open > 0)
-          return yield* invalid(`${open} acceptance criteria are still open.`);
+        if (status === "done" && current.status !== "done") {
+          const open = current.criteria.filter((c) => !c.checked).length;
+          const missing = [
+            ...(open === 0
+              ? []
+              : [`${open} acceptance ${open === 1 ? "criterion is" : "criteria are"} still open`]),
+            ...closureGaps(current, allDecisions(state)),
+          ];
+          if (missing.length > 0)
+            return yield* invalid(`${current.id} cannot move to done: ${missing.join("; ")}.`);
+        }
         let next = moved(current, status, actor, at);
         const reopening = current.status === "done" && status !== "done";
         if (reopening) {
@@ -790,6 +846,29 @@ const make = Effect.gen(function* () {
         yield* saveIssue(
           state,
           touch(logged(current, "blocked", reason), { blocked: { reason, at, by: actor } }),
+        );
+        return { id: current.id };
+      }
+      case "issue.noDecision": {
+        const current = yield* issue();
+        const reason = (yield* need(w.reason, "reason")).trim();
+        if (reason === (current.noDecision?.reason ?? "")) return { id: current.id };
+        yield* saveIssue(
+          state,
+          // A `note`, which every client can read: a log kind an older client does not know fails
+          // the whole issue there.
+          touch(
+            logged(
+              current,
+              "note",
+              reason.length === 0
+                ? "cleared the no-decision reason"
+                : `no decision needed: ${reason}`,
+            ),
+            {
+              noDecision: reason.length === 0 ? null : { reason, at, by: actor },
+            },
+          ),
         );
         return { id: current.id };
       }
@@ -1054,23 +1133,37 @@ const make = Effect.gen(function* () {
     function* (projectId, threadId, status) {
       // Thread events arrive for every project; only one with a board folder is worth loading.
       const state = yield* loadExisting(projectId);
-      if (state === null) return;
-      const linked = Array.from(state.issues.values()).filter(
-        (issue) =>
-          issue.threads.some((link) => link.id === threadId) &&
-          !HOLDING.has(issue.status) &&
-          rank(status) > rank(issue.status) &&
-          // Done keeps its definition: open criteria hold the card in review.
-          !(status === "done" && issue.criteria.some((c) => !c.checked)),
-      );
-      if (linked.length === 0) return;
-      const at = yield* nowIso;
-      yield* state.lock.withPermits(1)(
-        Effect.forEach(linked, (issue) => saveIssue(state, moved(issue, status, "system", at)), {
-          discard: true,
+      if (state === null) return [];
+      // Under the write lock, so a decision, finding or reason written meanwhile is neither missed
+      // by the check nor overwritten by the move.
+      const { held, changed } = yield* state.lock.withPermits(1)(
+        Effect.gen(function* () {
+          const linked = Array.from(state.issues.values()).filter(
+            (issue) =>
+              issue.threads.some((link) => link.id === threadId) &&
+              !HOLDING.has(issue.status) &&
+              rank(status) > rank(issue.status),
+          );
+          // Done keeps its definition: open criteria, or a failed closure check, hold the card.
+          const decisions = status === "done" ? allDecisions(state) : null;
+          const held: Array<Held> = [];
+          const moving = linked.filter((issue) => {
+            if (decisions === null) return true;
+            const missing = closureGaps(issue, decisions);
+            if (missing.length > 0) held.push({ id: issue.id, title: issue.title, missing });
+            return missing.length === 0 && !issue.criteria.some((c) => !c.checked);
+          });
+          const at = yield* nowIso;
+          yield* Effect.forEach(
+            moving,
+            (issue) => saveIssue(state, moved(issue, status, "system", at)),
+            { discard: true },
+          );
+          return { held, changed: moving.length > 0 };
         }),
       );
-      yield* publish(projectId);
+      if (changed) yield* publish(projectId);
+      return held;
     },
   );
 
