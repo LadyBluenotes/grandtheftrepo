@@ -11,6 +11,7 @@ import * as AttentionService from "./AttentionService.ts";
 import * as SettleCapture from "./capture/SettleCapture.ts";
 import * as DecisionSweep from "./DecisionSweep.ts";
 import * as FindingService from "./findings/FindingService.ts";
+import * as UnownedSweep from "./findings/UnownedSweep.ts";
 import * as KanbanStore from "./KanbanStore.ts";
 import * as Checks from "./readiness.ts";
 import * as SpecReactor from "./spec/SpecReactor.ts";
@@ -23,7 +24,7 @@ import * as WriterSweep from "./WriterSweep.ts";
  * In Progress, a finished turn to In Review, a merged pull request or settled
  * thread to Done. Cards in Triage or Inbox never move on their own. The writers
  * sweep watches for two agents writing the same project, the decisions sweep for conflicted
- * decisions.
+ * decisions, and the findings sweep for Triage findings nobody owns.
  */
 const start = Effect.gen(function* () {
   const store = yield* KanbanStore.KanbanStore;
@@ -61,6 +62,7 @@ const start = Effect.gen(function* () {
   // A second sweep under this plugin's own name is a defect, not a state the plugin can run in.
   yield* WriterSweep.register.pipe(Effect.orDie);
   yield* DecisionSweep.register.pipe(Effect.orDie);
+  yield* UnownedSweep.register.pipe(Effect.orDie);
   yield* forkParked(
     store.sweepArchive.pipe(Effect.repeat(Schedule.spaced(Duration.hours(1))), Effect.asVoid),
   );

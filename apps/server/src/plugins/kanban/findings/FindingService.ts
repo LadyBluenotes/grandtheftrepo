@@ -125,19 +125,22 @@ const best =
       .map((match) => match.item);
 
 /**
+ * Which of two copies of one finding is canonical: the more recently reviewed, by `review.at`, an
+ * unreviewed copy counting as oldest; on a tie, `latest`, the one met first.
+ */
+export const canonicalCopy = (latest: KanbanFinding | undefined, copy: KanbanFinding) =>
+  latest === undefined || (copy.review?.at ?? "") > (latest.review?.at ?? "") ? copy : latest;
+
+/**
  * Every issue holding finding `id`, and its canonical copy. Normally there is one holder; a move
  * whose second write failed leaves it on two until a move is tried again, and a review that failed
- * halfway can leave the copies apart. The canonical copy is the most recently reviewed one, by
- * `review.at`, an unreviewed copy counting as oldest; on a tie, the first holder's.
+ * halfway can leave the copies apart. The canonical copy is the first holder's unless a later
+ * holder's was reviewed more recently (`canonicalCopy`).
  */
 const locate = (issues: ReadonlyMap<string, KanbanIssue>, id: string) => {
   const held = [...issues.values()].filter((issue) => issue.findings.some((f) => f.id === id));
   const copies = held.flatMap((issue) => issue.findings.filter((f) => f.id === id));
-  const finding = copies.reduce<KanbanFinding | undefined>(
-    (latest, copy) =>
-      latest === undefined || (copy.review?.at ?? "") > (latest.review?.at ?? "") ? copy : latest,
-    undefined,
-  );
+  const finding = copies.reduce<KanbanFinding | undefined>(canonicalCopy, undefined);
   return finding === undefined
     ? Effect.fail(notFound(`No finding "${id}".`))
     : Effect.succeed({ held, finding });
