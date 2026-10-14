@@ -602,6 +602,29 @@ it.effect("a scheduled task is a paused draft on the project's default model", (
   ),
 );
 
+it.effect("a task draft runs on the model a project's settings give it, not only its shell's", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const configured = project("project:configured", null);
+      const world = yield* setup([configured]);
+      const core = yield* fakeCore({ projects: [configured] });
+      const settings = ServerSettings.layerTest({
+        projectSettingsFolded: true,
+        projectSettingsOverrides: { [configured.id]: { defaultModelSelection: MODEL } },
+      });
+      world.weeks.set(WEEK_1, [
+        candidate("7a5c000000000002", { steps: ["command:vp run audit"], form: "scheduled_task" }),
+      ]);
+      yield* world.tick(yield* Layer.build(Layer.merge(core.layer, settings)));
+
+      const [task] = yield* core.tasks;
+      assert.deepInclude(task, { projectId: configured.id, modelSelection: MODEL });
+      const [proposal] = yield* world.store.list({ projectId: configured.id });
+      assert.strictEqual(proposal?.state, "pending");
+    }),
+  ),
+);
+
 /**
  * Scheduled tasks kept in memory, each saved with a creation time of its own, as the real service
  * keeps one per task and an edit keeps it. `tasks` starts with `seeded`.

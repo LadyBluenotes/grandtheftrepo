@@ -10,6 +10,7 @@ import {
   ThreadId,
 } from "@t3tools/contracts";
 import { resolveProjectScripts } from "@t3tools/shared/projectScripts";
+import { resolveProjectSettings } from "@t3tools/shared/projectSettings";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 
@@ -152,8 +153,18 @@ export const make = Effect.gen(function* () {
           const service = yield* tasks;
           if (Option.isNone(service)) return waiting("Scheduled tasks are not available.");
           // Checked before the task list is read: a model-less project's proposal waits every tick.
+          // The project's effective default: its settings override, else the environment's.
           const shell = yield* projects.getShell(projectId);
-          const modelSelection = Option.isSome(shell) ? shell.value.defaultModelSelection : null;
+          const settingsService = yield* settings;
+          const modelSelection = Option.isNone(settingsService)
+            ? Option.isSome(shell)
+              ? shell.value.defaultModelSelection
+              : null
+            : resolveProjectSettings(
+                yield* settingsService.value.getSettings,
+                projectId,
+                Option.getOrNull(shell),
+              ).settings.defaultModelSelection;
           if (modelSelection === null) {
             return waiting("The project has no default model for a task to run on.");
           }
