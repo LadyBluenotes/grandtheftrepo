@@ -865,6 +865,76 @@ it.effect("accepting a draft script adds it to the project's scripts, once", () 
   ),
 );
 
+it.effect(
+  "accepting a script whose id a person's action holds adds it under the next free id and leaves theirs",
+  () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const world = yield* setup();
+        world.weeks.set(WEEK_1, [candidate("acce970000000002")]);
+        yield* world.tick();
+        const [proposal] = yield* world.store.list({ projectId: projectA.id });
+        const mine = {
+          id: "repeated-acce97000000",
+          name: "Mine",
+          command: "make mine",
+          icon: "play",
+          runOnWorktreeCreate: false,
+        } as const;
+        const settings = yield* Layer.build(
+          ServerSettings.layerTest({
+            projectSettingsOverrides: { [projectA.id]: { defaultProjectScripts: [mine] } },
+          }),
+        );
+
+        const draft = proposal?.draft;
+        if (draft?.kind !== "script") return assert.fail("Expected a script draft.");
+        yield* world.store.accept(proposal!.id).pipe(Effect.provide(settings));
+        const saved = yield* Effect.provide(
+          ServerSettings.ServerSettingsService.pipe(Effect.flatMap((s) => s.getSettings)),
+          settings,
+        );
+        assert.deepEqual(saved.projectSettingsOverrides[projectA.id]?.defaultProjectScripts, [
+          mine,
+          { ...draft.script, id: "repeated-acce97000000-2" },
+        ]);
+      }),
+    ),
+);
+
+it.effect(
+  "a list carries at most six steps, each cut to 300 characters, and the row keeps them whole",
+  () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const world = yield* setup();
+        const long = `Read ${"deep/".repeat(1000)}notes.md`;
+        const steps = [
+          long,
+          ...Array.from({ length: 7 }, (_, index) => `Grep step-${index} <path>`),
+        ];
+        yield* world.store.propose({
+          projectId: projectA.id,
+          windowFrom: WEEK_1,
+          candidates: [candidate("b0d0000000000001", { steps, form: "skill" })],
+          dryRun: false,
+        });
+
+        const [listed] = yield* world.store.list({ projectId: projectA.id });
+        assert.strictEqual(listed?.steps.length, 6);
+        assert.strictEqual(listed?.steps[0]?.length, 300);
+        assert.isTrue(listed?.steps[0]?.endsWith("…"));
+        assert.deepEqual(listed?.steps.slice(1), steps.slice(1, 6));
+        const [row] = yield* world.sql<{ readonly candidate: string }>`
+        SELECT candidate FROM deterministic_proposals`;
+        assert.deepEqual(
+          (JSON.parse(row!.candidate) as { readonly steps: ReadonlyArray<string> }).steps,
+          steps,
+        );
+      }),
+    ),
+);
+
 it.effect("every undecided proposal is listed first, however many were decided after it", () =>
   Effect.scoped(
     Effect.gen(function* () {

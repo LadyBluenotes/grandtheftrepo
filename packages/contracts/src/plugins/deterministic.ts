@@ -56,6 +56,10 @@ export const DeterministicDraft = Schema.Union([
 ]);
 export type DeterministicDraft = typeof DeterministicDraft.Type;
 
+/** How many of a candidate's steps a proposal carries, and how much of each; telemetry finds six. */
+export const DETERMINISTIC_STEPS_MAX = 6;
+export const DETERMINISTIC_STEP_MAX_LENGTH = 300;
+
 /**
  * One extraction candidate the weekly sweep turned into a draft for a person to accept or dismiss.
  * A candidate is proposed once; a dismissed one comes back only when a later week's cost is at
@@ -69,6 +73,11 @@ export const DeterministicProposal = Schema.Struct({
   form: TelemetryExtractionForm,
   /** One line naming the repeated work. */
   title: Schema.String,
+  /**
+   * At most `DETERMINISTIC_STEPS_MAX` of the candidate's steps, each cut to
+   * `DETERMINISTIC_STEP_MAX_LENGTH` characters: a path or pattern can be any length, and a list
+   * carries every undecided proposal. The server keeps them whole.
+   */
   steps: Schema.Array(Schema.String),
   threads: NonNegativeInt,
   occurrences: NonNegativeInt,

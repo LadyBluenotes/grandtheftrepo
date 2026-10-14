@@ -2,6 +2,7 @@ import {
   type DeterministicDraft,
   type KanbanActor,
   LearningError,
+  MAX_SCRIPT_ID_LENGTH,
   PROMPT_PREVIEW_LENGTH,
   type ProjectId,
   ScheduledTaskId,
@@ -67,6 +68,19 @@ const failedTo = (what: string) => (cause: unknown) =>
   Effect.logWarning(`learning: ${what} failed`, { cause }).pipe(
     Effect.andThen(Effect.fail(new LearningError({ code: "io", message: `Could not ${what}.` }))),
   );
+
+/**
+ * `id`, or when an action of the project holds it, the first of `id-2`, `id-3`, ... that none
+ * holds, cut so it stays a valid script id.
+ */
+const freeScriptId = (id: string, taken: ReadonlySet<string>) => {
+  if (!taken.has(id)) return id;
+  for (let n = 2; ; n += 1) {
+    const suffix = `-${n}`;
+    const next = `${id.slice(0, MAX_SCRIPT_ID_LENGTH - suffix.length)}${suffix}`;
+    if (!taken.has(next)) return next;
+  }
+};
 
 /** The id a proposal's paused task is saved under, so a retry finds it instead of adding one. */
 const taskIdOf = (proposalId: number) =>
@@ -210,12 +224,19 @@ export const make = Effect.gen(function* () {
           if (Option.isNone(shell)) return yield* invalid(`Project ${projectId} no longer exists.`);
           const current = yield* service.value.getSettings;
           const scripts = resolveProjectScripts(current, shell.value);
-          if (scripts.some((script) => script.id === draft.script.id)) return;
+          // Added already, by an earlier try: an action with the draft's name and command, under
+          // its id or the one it was given beside a person's action of that id.
+          const applied = scripts.some(
+            (script) =>
+              script.name === draft.script.name && script.command === draft.script.command,
+          );
+          if (applied) return;
+          const id = freeScriptId(draft.script.id, new Set(scripts.map((script) => script.id)));
           yield* service.value.updateSettings({
             projectSettingsOverrides: {
               [projectId]: {
                 ...current.projectSettingsOverrides[projectId],
-                defaultProjectScripts: [...scripts, draft.script],
+                defaultProjectScripts: [...scripts, { ...draft.script, id }],
               },
             },
           });

@@ -20,7 +20,7 @@ import * as Semaphore from "effect/Semaphore";
 import * as SqlClient from "effect/sql/SqlClient";
 import type * as SqlError from "effect/sql/SqlError";
 
-import { proposalTitle } from "./drafts.ts";
+import { proposalTitle, shownSteps } from "./drafts.ts";
 import * as Targets from "./targets.ts";
 
 /** A candidate the weekly review proposes: most occurrences identical, in at least three threads. */
@@ -174,12 +174,11 @@ const make = Effect.gen(function* () {
           candidateId: row.candidate_id,
           form: row.form,
           title: proposalTitle(candidate),
-          steps: candidate.steps,
+          ...shownSteps(candidate),
           threads: candidate.threads,
           occurrences: candidate.occurrences,
           deterministicRatio: candidate.deterministicRatio,
           estimatedTokens: row.estimated_tokens,
-          example: candidate.example,
           windowFrom: row.window_from,
           state: row.state,
           draft: row.draft === null ? null : yield* decodeDraft(row.draft),

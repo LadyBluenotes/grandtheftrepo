@@ -1,4 +1,6 @@
 import {
+  DETERMINISTIC_STEP_MAX_LENGTH,
+  DETERMINISTIC_STEPS_MAX,
   KNOWLEDGE_BODY_MAX_LENGTH,
   KNOWLEDGE_MARKER_WORD,
   KNOWLEDGE_TITLE_MAX_LENGTH,
@@ -20,8 +22,6 @@ import {
 
 const COMMAND = "command:";
 const SCRIPT = /^script:([^:]*):(.*)$/;
-/** The most of one step a draft's text quotes; the proposal keeps every step whole. */
-const STEP_MAX = 300;
 /** Titles for a scheduled task and a card, which their schemas do not bound. */
 const SHORT_TITLE_MAX = 120;
 /** Keys and ids made from the candidate's id; a knowledge key is at most 64 characters. */
@@ -53,12 +53,30 @@ const idPart = (candidate: TelemetryExtractionCandidate, max: number) =>
     .replace(/^-+/, "")
     .slice(0, max) || "candidate";
 
+/**
+ * The steps and example a proposal carries over the wire: at most `DETERMINISTIC_STEPS_MAX`, each
+ * step cut to `DETERMINISTIC_STEP_MAX_LENGTH` characters, since a path or pattern can be any length.
+ */
+export const shownSteps = (candidate: TelemetryExtractionCandidate) => ({
+  steps: candidate.steps
+    .slice(0, DETERMINISTIC_STEPS_MAX)
+    .map((step) => clip(step, DETERMINISTIC_STEP_MAX_LENGTH)),
+  example: {
+    ...candidate.example,
+    itemIds: candidate.example.itemIds.slice(0, DETERMINISTIC_STEPS_MAX),
+  },
+});
+
 /** One line naming the repeated work, as lists show it. */
 export const proposalTitle = (candidate: TelemetryExtractionCandidate) =>
   summary(candidate.steps, 160);
 
 const stepsBlock = (steps: ReadonlyArray<string>) =>
-  ["```text", ...steps.map((step) => clip(oneLine(stepText(step)), STEP_MAX)), "```"].join("\n");
+  [
+    "```text",
+    ...steps.map((step) => clip(oneLine(stepText(step)), DETERMINISTIC_STEP_MAX_LENGTH)),
+    "```",
+  ].join("\n");
 
 const lookAt = (candidate: TelemetryExtractionCandidate) =>
   `One run to look at: thread ${candidate.example.threadId}.`;
