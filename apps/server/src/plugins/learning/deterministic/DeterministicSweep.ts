@@ -31,7 +31,7 @@ const flagText = (count: number) =>
  * answers while it replays the event log; while telemetry is off no week is reviewed. Each tick
  * then saves a draft for every waiting proposal whose target is back, and keeps one
  * `deterministic_proposals` flag per project with undecided proposals, opening the Learning
- * screen's Deterministic tab on it, cleared once none is left. It never calls a model. `examined`
+ * screen's Deterministic tab on the project the board strip names, cleared once none is left. It never calls a model. `examined`
  * counts the projects reviewed and the proposals waiting for a draft, `acted` the proposals
  * recorded, the drafts saved and the flags raised, rewritten or cleared, `flags` the flags standing
  * after the tick. A dry run counts and writes nothing.
@@ -117,7 +117,6 @@ export const sweep = Effect.gen(function* () {
             target: "plugin",
             pluginId: PLUGIN_ID,
             tab: "deterministic",
-            recordId: projectId,
           },
         });
       }

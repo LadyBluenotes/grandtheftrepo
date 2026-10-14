@@ -10,20 +10,50 @@ import {
 import { scopeThreadRef } from "@t3tools/client-runtime/environment";
 import {
   KANBAN_METHODS,
+  KanbanDecisionRef,
   type EnvironmentId,
   type KanbanAttentionRow,
   type KanbanDecision,
   type KanbanIssue,
   type ProjectId,
+  type ThreadId,
 } from "@t3tools/contracts";
 import { Atom } from "effect/reactivity";
+import * as Schema from "effect/Schema";
 
 import { connectionAtomRuntime } from "~/connection/runtime";
 import { environmentSummaries } from "~/state/presentation";
 import { environmentThreadShells } from "~/state/threads";
 import { buildThreadRouteParams } from "~/threadRoutes";
+import type { BoardSearch } from "./BoardPage";
 
 export const kanbanBoard = createKanbanBoardAtomFamily(connectionAtomRuntime);
+
+const isDecisionRef = Schema.is(KanbanDecisionRef);
+
+/**
+ * What a `/board` URL names: the project, the open issue, the decisions view with its category
+ * and the decision open in its drawer (`category/id`), and the board's filters. Anything else is
+ * dropped.
+ */
+export function validateBoardSearch(raw: Record<string, unknown>): BoardSearch {
+  return {
+    ...(typeof raw.environmentId === "string" && raw.environmentId
+      ? { environmentId: raw.environmentId as EnvironmentId }
+      : {}),
+    ...(typeof raw.projectId === "string" && raw.projectId
+      ? { projectId: raw.projectId as ProjectId }
+      : {}),
+    ...(typeof raw.issue === "string" && raw.issue ? { issue: raw.issue.slice(0, 80) } : {}),
+    ...(raw.view === "decisions" ? { view: raw.view } : {}),
+    ...(typeof raw.category === "string" && raw.category
+      ? { category: raw.category.slice(0, 80) }
+      : {}),
+    ...(isDecisionRef(raw.decision) ? { decision: raw.decision } : {}),
+    ...(raw.needsYou === true ? { needsYou: true } : {}),
+    ...(raw.archived === true ? { archived: true } : {}),
+  };
+}
 
 /** One issue with its body and log; re-read whenever the board changes. */
 export const kanbanIssue = createPluginRpcQueryAtomFamily(connectionAtomRuntime, {
@@ -39,6 +69,60 @@ export const kanbanDecisions = createPluginRpcQueryAtomFamily(connectionAtomRunt
   refreshTrigger: ({ environmentId, input }) =>
     kanbanBoard({ environmentId, input: { projectId: input.projectId } }),
 });
+
+/** Changes when the thread's latest run starts or ends, or the window comes back into view. */
+const threadRunSignal = (environmentId: EnvironmentId, threadId: ThreadId) => {
+  const shell = environmentThreadShells.threadShellAtom(scopeThreadRef(environmentId, threadId));
+  return Atom.make((get) => {
+    const run = get(shell)?.latestRun;
+    return `${get(Atom.windowFocusSignal)} ${run?.runId ?? "-"} ${run?.status ?? "-"}`;
+  });
+};
+
+/**
+ * The decisions linked to one thread (`input.thread`), for the count in its header. It opens no
+ * board subscription, so every thread view stays cheap: it re-reads when the thread's latest run
+ * starts or ends, which is when an agent's decisions land, and on window focus. A project without
+ * a board answers none, and the read creates no folder for it.
+ */
+export const kanbanThreadDecisions = createPluginRpcQueryAtomFamily(connectionAtomRuntime, {
+  label: "environment-data:kanban:thread-decisions",
+  method: KANBAN_METHODS.listDecisions,
+  staleTimeMs: 5_000,
+  refreshTrigger: ({ environmentId, input }) =>
+    input.thread === undefined ? undefined : threadRunSignal(environmentId, input.thread),
+});
+
+/**
+ * Where "Find decision" in the command palette leads: the decisions view of the thread's project,
+ * or of the project the board already shows (`previous` is the current location's search), or
+ * else of the board's own pick.
+ */
+export function findDecisionSearch(
+  previous: object,
+  thread:
+    | { readonly environmentId: EnvironmentId; readonly projectId: ProjectId }
+    | null
+    | undefined,
+): BoardSearch {
+  const shown =
+    "environmentId" in previous &&
+    "projectId" in previous &&
+    typeof previous.environmentId === "string" &&
+    typeof previous.projectId === "string"
+      ? {
+          environmentId: previous.environmentId as EnvironmentId,
+          projectId: previous.projectId as ProjectId,
+        }
+      : null;
+  const project = thread ?? shown;
+  return {
+    view: "decisions",
+    ...(project === null
+      ? {}
+      : { environmentId: project.environmentId, projectId: project.projectId }),
+  };
+}
 
 export const kanbanWrite = createPluginRpcCommand(connectionAtomRuntime, {
   label: "kanban:write",
@@ -91,8 +175,8 @@ export const kanbanAttention = createKanbanAttentionAtomFamily(connectionAtomRun
 /**
  * Where a strip row's button leads, always on the board's environment: the row's thread, the
  * board (its decisions view for a decision conflict), that environment's Plugins page, where
- * budgets and other plugin settings live, or a plugin's screen on the tab and record the flag
- * names. Null when a thread row has no thread.
+ * budgets and other plugin settings live, or a plugin's screen on the board's project and the tab
+ * and record the flag names. Null when a thread row has no thread.
  */
 export function attentionResumeTarget(
   row: Pick<KanbanAttentionRow, "resumeAction" | "threadId" | "kind">,
@@ -119,6 +203,7 @@ export function attentionResumeTarget(
         params: { pluginId },
         search: {
           machine: board.environmentId,
+          projectId: board.projectId,
           ...(tab === undefined ? {} : { tab }),
           ...(recordId === undefined ? {} : { recordId }),
         },

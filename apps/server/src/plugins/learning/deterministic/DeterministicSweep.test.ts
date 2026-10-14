@@ -222,7 +222,6 @@ it.effect(
           target: "plugin",
           pluginId: "learning",
           tab: "deterministic",
-          recordId: "project:a",
         });
       }),
     ),

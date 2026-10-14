@@ -350,7 +350,7 @@ function DraftPreview({
               <Link
                 to="/plugins/$pluginId"
                 params={{ pluginId: "knowledge" }}
-                search={{ machine: environmentId }}
+                search={{ machine: environmentId, projectId }}
               />
             }
           >

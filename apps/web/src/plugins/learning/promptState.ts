@@ -91,8 +91,10 @@ export function usePrompts(
 }
 
 /** One prompt with its versions; nothing while `id` is null. */
-export function usePrompt(environmentId: EnvironmentId, id: number | null) {
-  return useEnvironmentQuery(id === null ? null : promptDetail({ environmentId, input: { id } }));
+export function usePrompt(environmentId: EnvironmentId | null, id: number | null) {
+  return useEnvironmentQuery(
+    environmentId === null || id === null ? null : promptDetail({ environmentId, input: { id } }),
+  );
 }
 
 /** A project's active prompts, as the composer's `/` menu lists them. */
