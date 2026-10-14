@@ -128,6 +128,10 @@ const locate = (issues: ReadonlyMap<string, KanbanIssue>, id: string) => {
     : Effect.succeed({ held, finding });
 };
 
+/** A card opened for a finding, which a move to "a card of its own" reuses: no other finding. */
+const isOwnCard = (issue: KanbanIssue) =>
+  issue.labels.includes("finding") && issue.findings.length === 1;
+
 /** `issue` holding `finding`, in place of one with its id or at the end, with `text` logged. */
 const holding = (
   issue: KanbanIssue,
@@ -290,11 +294,18 @@ const make = Effect.gen(function* () {
     store.transact(projectId, (issues, at) =>
       Effect.gen(function* () {
         const { held, finding } = yield* locate(issues, id);
-        const already = held.find((issue) => issue.id === issueId);
-        const from = held.filter((issue) => issue !== already);
-        if (from.length === 0) return yield* invalid(`Finding "${id}" is already on ${issueId}.`);
         // Already there when an earlier move added it but failed to remove it: only the other
-        // copies go.
+        // copies go. Without an issue that is the card of its own such a move opened.
+        const already = held.find((issue) =>
+          issueId === undefined ? isOwnCard(issue) : issue.id === issueId,
+        );
+        const from = held.filter((issue) => issue !== already);
+        if (from.length === 0)
+          return yield* invalid(
+            issueId === undefined
+              ? `Finding "${id}" already has a card of its own, ${held[0]!.id}.`
+              : `Finding "${id}" is already on ${issueId}.`,
+          );
         const to =
           already ??
           (yield* placed(

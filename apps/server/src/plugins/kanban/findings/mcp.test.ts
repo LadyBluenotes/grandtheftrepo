@@ -228,13 +228,25 @@ it.effect("refuses the proposer's own review and reopens a rejected finding", ()
       expect(reopened.finding.disposition).toBe("open");
 
       // A finding on the wrong card moves, by its proposer too.
+      const ticket = yield* text(threadScope(finder), "kanban_write", {
+        action: "issue.create",
+        title: "Harden the retry helper",
+      });
       const moved = decodePlacement(
+        (yield* call(threadScope(finder), "finding_move", {
+          id: captured.finding.id,
+          issueId: ticket,
+        })).structuredContent,
+      );
+      expect(moved.issueId).toBe("harden-the-retry-helper");
+      expect(moved.finding).toEqual(reopened.finding);
+      // It has no card of its own now, so asking for one opens one.
+      const ownCard = decodePlacement(
         (yield* call(threadScope(finder), "finding_move", {
           id: captured.finding.id,
         })).structuredContent,
       );
-      expect(moved.issueId).toBe("retry-loop-has-no-backoff-2");
-      expect(moved.finding).toEqual(reopened.finding);
+      expect(ownCard.issueId).toBe("retry-loop-has-no-backoff-2");
     }),
   ).pipe(Effect.provide(layerTest)),
 );

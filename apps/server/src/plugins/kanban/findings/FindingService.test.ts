@@ -297,6 +297,39 @@ describe("FindingService", () => {
     }).pipe(Effect.provide(layerTest)),
   );
 
+  it.effect("a move to a card of its own tried again reuses the card the first one opened", () =>
+    Effect.gen(function* () {
+      const findings = yield* FindingService.FindingService;
+      const store = yield* KanbanStore.KanbanStore;
+      const failing = yield* FailingWrites;
+      const { id: wrong } = yield* store.write(projectId, "user", {
+        action: "issue.create",
+        title: "Wrong ticket",
+      });
+      const { finding } = yield* capture((yield* search(finder)).searchId, { issueId: wrong });
+
+      failing.add(`${wrong}.md`);
+      assert.include(yield* failure(findings.move({ projectId, id: finding.id }, "user")), "io:");
+      failing.clear();
+      const cards = Effect.map(store.board(projectId), (board) =>
+        board.issues.map((issue) => issue.id),
+      );
+      const [, opened] = yield* cards;
+
+      const retried = yield* findings.move({ projectId, id: finding.id }, "user");
+      assert.strictEqual(retried.issueId, opened);
+      assert.deepStrictEqual(yield* cards, [wrong, opened]);
+      assert.deepStrictEqual((yield* store.getIssue({ projectId, id: wrong })).findings, []);
+      assert.deepStrictEqual((yield* store.getIssue({ projectId, id: opened! })).findings, [
+        finding,
+      ]);
+      assert.include(
+        yield* failure(findings.move({ projectId, id: finding.id }, "user")),
+        `invalid: Finding "${finding.id}" already has a card of its own, ${opened}.`,
+      );
+    }).pipe(Effect.provide(layerTest)),
+  );
+
   it.effect("moves a finding to the right issue, or to a new Triage issue, as it was", () =>
     Effect.gen(function* () {
       const findings = yield* FindingService.FindingService;
