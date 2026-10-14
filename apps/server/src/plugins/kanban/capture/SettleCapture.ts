@@ -9,7 +9,6 @@ import {
   KanbanSlug,
   ThreadId,
   TrimmedNonEmptyString,
-  type EventId,
   type OrchestrationV2AppThread,
   type OrchestrationV2Run,
   type ProjectId,
@@ -128,9 +127,12 @@ interface CaptureRow {
  * did not record are filed as drafts, a `proposed` decision or an `open` finding linked to the
  * thread, for a person to accept. Nothing here accepts anything.
  *
- * The extraction turn's thread is keyed by the settle event, so a redelivered event resumes the
- * same launch, and it is recorded before the launch, so its run's end finds it. Kanban's own
- * threads, these and spec drafting, are never read: a capture thread settling starts nothing.
+ * One settlement, a thread and its `settledAt`, gets one capture: the orchestrator emits
+ * `thread.settled` again for a thread already settled, keeping its `settledAt`, and that starts
+ * nothing, while a thread unsettled and settled again is read again. The extraction turn's thread
+ * is named for the settlement, so a redelivered event resumes the same launch, and it is recorded
+ * before the launch, so its run's end finds it. Kanban's own threads, these and spec drafting, are
+ * never read: a capture thread settling starts nothing.
  */
 export class SettleCapture extends Context.Service<
   SettleCapture,
@@ -141,10 +143,7 @@ export class SettleCapture extends Context.Service<
      * cheap tier, or while the emergency stop is set, nothing starts, and that capture is not tried
      * again.
      */
-    readonly settled: (
-      thread: OrchestrationV2AppThread,
-      eventId: EventId,
-    ) => Effect.Effect<void, KanbanError>;
+    readonly settled: (thread: OrchestrationV2AppThread) => Effect.Effect<void, KanbanError>;
     /**
      * Files the drafts of the capture whose thread `run` belongs to, once that run has completed,
      * then settles that thread. Drafts already recorded in the thread by then are left out, so a
@@ -271,18 +270,26 @@ const make = Effect.gen(function* () {
     }).pipe(PluginServices.provide);
 
   const settled: SettleCapture["Service"]["settled"] = Effect.fn("SettleCapture.settled")(
-    function* (thread, eventId) {
+    function* (thread) {
+      if (thread.settledAt === null) return;
+      const settledAt = DateTime.formatIso(thread.settledAt);
       if (!(yield* store.captures(thread.projectId))) return;
       if (yield* isOwn(thread.id)) return;
       const reply = yield* lastReply(thread.id);
       if (reply === undefined) return;
       const recorded = yield* recordedIn(thread.projectId, thread.id);
-      const childThreadId = ThreadId.make(`kanban-capture:${eventId}`);
+      const childThreadId = ThreadId.make(`kanban-capture:${thread.id}:${settledAt}`);
       const createdAt = DateTime.formatIso(yield* DateTime.now);
-      yield* sql`
-        INSERT INTO settle_capture (child_thread_id, project_id, thread_id, status, created_at)
-        VALUES (${childThreadId}, ${thread.projectId}, ${thread.id}, 'running', ${createdAt})
+      const inserted = yield* sql<{ readonly child_thread_id: ThreadId }>`
+        INSERT INTO settle_capture
+          (child_thread_id, project_id, thread_id, settled_at, status, created_at)
+        VALUES
+          (${childThreadId}, ${thread.projectId}, ${thread.id}, ${settledAt}, 'running', ${createdAt})
+        ON CONFLICT DO NOTHING
+        RETURNING child_thread_id
       `.pipe(Effect.catchTags({ SqlError: io }));
+      // This settlement was captured, or tried, already.
+      if (inserted.length === 0) return;
       yield* launch({
         projectId: thread.projectId,
         childThreadId,
@@ -327,13 +334,15 @@ const make = Effect.gen(function* () {
       // reactor runs this in the transaction that marked the capture done, so a write that fails
       // rolls it back to running and the event is retried, without the drafts that landed.
       const recorded = yield* recordedIn(capture.project_id, capture.thread_id);
+      // The capture thread proposes the findings; a decision is filed by `system`, so its threads
+      // stay the ones it was made in.
       const by = `thread:${capture.child_thread_id}`;
       const seenDecisions = new Set(recorded.decisions.map(titleKey));
       for (const draft of drafts.decisions) {
         const key = titleKey(draft.title);
         if (seenDecisions.has(key)) continue;
         seenDecisions.add(key);
-        yield* store.write(capture.project_id, by, {
+        yield* store.write(capture.project_id, "system", {
           action: "decision.create",
           category:
             draft.category !== undefined && isSlug(draft.category) ? draft.category : "general",

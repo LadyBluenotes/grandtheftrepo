@@ -166,11 +166,16 @@ const turn = (
   ];
 };
 
-const settled = (threadId: ThreadId, title: string): OrchestrationV2DomainEvent => ({
+/** `thread.settled` for a thread settled at `settledAt`, which a repeated settle keeps. */
+const settled = (
+  threadId: ThreadId,
+  title: string,
+  settledAt = at,
+): OrchestrationV2DomainEvent => ({
   ...eventBase(),
   type: "thread.settled",
   threadId,
-  payload: { ...appThread(threadId, title), settledAt: at },
+  payload: { ...appThread(threadId, title), settledAt },
 });
 
 const reply = [
@@ -336,8 +341,16 @@ describe("SettleCapture", () => {
           yield* extract(capture.threadId!, answer(["Cache token lookups in SQLite, not Redis"]));
           const decisions = yield* store.listDecisions({ projectId });
           assert.deepEqual(
-            decisions.map((d) => [d.category, d.title, d.state, d.threads.includes(worked)]),
-            [["storage", "Cache token lookups in SQLite, not Redis", "proposed", true]],
+            decisions.map((d) => [d.category, d.title, d.state, d.threads, d.by]),
+            [
+              [
+                "storage",
+                "Cache token lookups in SQLite, not Redis",
+                "proposed",
+                [worked],
+                "system",
+              ],
+            ],
           );
           assert.deepEqual(
             decisions[0]!.alternatives.map((a) => [a.title, a.disposition]),
@@ -396,6 +409,32 @@ describe("SettleCapture", () => {
         );
       }),
     ).pipe(Effect.provide(layerTest)),
+  );
+
+  it.effect(
+    "a thread settled again without being reopened starts no second turn; one settled after a reopen does",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const { store, launched, react } = yield* start;
+          yield* store.setCapture({ projectId, enabled: true });
+          yield* react([
+            ...turn(worked, "Cache token lookups", reply),
+            settled(worked, "Cache token lookups"),
+          ]);
+          assert.strictEqual(launched.length, 1);
+
+          // The orchestrator emits the event again for a settled thread, keeping its settledAt.
+          yield* react([settled(worked, "Cache token lookups")]);
+          assert.strictEqual(launched.length, 1);
+
+          // Reopened and settled later: a new settlement, read again.
+          const later = DateTime.add(at, { hours: 1 });
+          yield* react([settled(worked, "Cache token lookups", later)]);
+          assert.strictEqual(launched.length, 2);
+          assert.notStrictEqual(launched[1]!.threadId, launched[0]!.threadId);
+        }),
+      ).pipe(Effect.provide(layerTest)),
   );
 
   it.effect("with the setting off, no turn starts", () =>

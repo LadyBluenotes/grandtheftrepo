@@ -613,6 +613,25 @@ it.layer(layerTest)("KanbanStore", (it) => {
   });
 
   describe("folder", () => {
+    it.effect("a folder change and a capture toggle made at once both land", () =>
+      Effect.gen(function* () {
+        const store = yield* KanbanStore.KanbanStore;
+        const fs = yield* FileSystem.FileSystem;
+        const other = yield* fs.makeTempDirectoryScoped({ prefix: "t3code-kanban-capture-" });
+        yield* Effect.all(
+          [
+            store.setDirectory({ projectId, directory: other }),
+            store.setCapture({ projectId, enabled: true }),
+          ],
+          { concurrency: "unbounded" },
+        );
+        assert.strictEqual(yield* store.directory(projectId), other);
+        assert.isTrue(yield* store.captures(projectId));
+        yield* store.setCapture({ projectId, enabled: false });
+        yield* store.setDirectory({ projectId, directory: null });
+      }),
+    );
+
     it.effect(
       "keeps capture beside the folder in kanban.json, each surviving a change to the other",
       () =>

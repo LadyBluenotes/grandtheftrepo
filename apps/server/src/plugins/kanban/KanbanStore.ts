@@ -270,6 +270,9 @@ const make = Effect.gen(function* () {
   // Outlives a reload so subscribers keep hearing about the project after its folder moves.
   const changes = new Map<ProjectId, PubSub.PubSub<void>>();
   const loadLock = yield* Semaphore.make(1);
+  // One `kanban.json` read-modify-write at a time, so a folder change and a capture toggle that
+  // cross keep each other.
+  const overridesLock = yield* Semaphore.make(1);
   const isSlug = Schema.is(KanbanSlug);
 
   const io = (message: string) => (cause: unknown) =>
@@ -1081,11 +1084,17 @@ const make = Effect.gen(function* () {
       ),
     );
 
+  const updateOverrides = (change: (overrides: typeof Overrides.Type) => typeof Overrides.Type) =>
+    overridesLock.withPermits(1)(
+      Effect.flatMap(readOverrides, (overrides) => writeOverrides(change(overrides))),
+    );
+
   const setCapture: KanbanStore["Service"]["setCapture"] = Effect.fn("KanbanStore.setCapture")(
     function* ({ projectId, enabled }) {
-      const overrides = yield* readOverrides;
-      const others = (overrides.capture ?? []).filter((id) => id !== projectId);
-      yield* writeOverrides({ ...overrides, capture: enabled ? [...others, projectId] : others });
+      yield* updateOverrides((overrides) => {
+        const others = (overrides.capture ?? []).filter((id) => id !== projectId);
+        return { ...overrides, capture: enabled ? [...others, projectId] : others };
+      });
       const state = loaded.get(projectId);
       if (state !== undefined) state.capture = enabled;
       yield* publish(projectId);
@@ -1097,11 +1106,12 @@ const make = Effect.gen(function* () {
   )(function* ({ projectId, directory }) {
     if (directory !== null && !path.isAbsolute(directory))
       return yield* invalid("The issues folder must be an absolute path.");
-    const overrides = yield* readOverrides;
-    const directories: Record<string, string> = { ...overrides.directories };
-    if (directory === null) delete directories[projectId];
-    else directories[projectId] = directory;
-    yield* writeOverrides({ ...overrides, directories });
+    yield* updateOverrides((overrides) => {
+      const directories: Record<string, string> = { ...overrides.directories };
+      if (directory === null) delete directories[projectId];
+      else directories[projectId] = directory;
+      return { ...overrides, directories };
+    });
     const previous = loaded.get(projectId);
     if (previous !== undefined) {
       loaded.delete(projectId);

@@ -15,7 +15,8 @@ import type { PluginMigration } from "../Plugin.ts";
  * only while it still has them.
  *
  * `settle_capture` holds each turn started to read a settled thread's last reply for decisions and
- * findings it did not record, keyed by that turn's thread. A `running` one waits for its run to end.
+ * findings it did not record, keyed by that turn's thread, one per settlement (`thread_id` and
+ * `settled_at`). A `running` one waits for its run to end.
  */
 export const migrations: ReadonlyArray<PluginMigration> = [
   [
@@ -70,8 +71,10 @@ export const migrations: ReadonlyArray<PluginMigration> = [
           child_thread_id TEXT PRIMARY KEY,
           project_id TEXT NOT NULL,
           thread_id TEXT NOT NULL,
+          settled_at TEXT NOT NULL,
           status TEXT NOT NULL,
-          created_at TEXT NOT NULL
+          created_at TEXT NOT NULL,
+          UNIQUE (thread_id, settled_at)
         )
       `;
     }),
