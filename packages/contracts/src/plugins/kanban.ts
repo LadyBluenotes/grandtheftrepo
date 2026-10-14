@@ -338,8 +338,8 @@ export const KANBAN_ATTENTION_KIND_LABELS: Record<KanbanAttentionKind, string> =
 
 /**
  * What to do about a flag: a label and the screen it leads to, on the board's environment. A
- * `plugin` target opens `/plugins/<pluginId>` on `tab` with `recordId` open, each when given; a
- * client with no screen for that plugin opens the board instead.
+ * `plugin` target opens `/plugins/<pluginId>` on `tab` with `recordId` open, each when given;
+ * mobile, which has no plugin screens, stays on the board.
  */
 export const AttentionResumeAction = Schema.Union([
   Schema.Struct({
