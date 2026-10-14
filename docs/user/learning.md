@@ -3,8 +3,8 @@
 The learning plugin keeps track of work that went wrong: a turn that failed or was interrupted, a
 review that asked for changes, a security finding, a ticket reopened after it was done. Each of these
 is a correction. When the same failure mode recurs in a project, its corrections open a learning
-item, and the plugin hands the item to whoever should act on it: the project's knowledge files, a
-prompt, or a policy.
+item, and the plugin hands the item to whoever should act on it: the project's knowledge files, its
+prompt library, or a policy.
 
 Only a correction with a failure mode counts toward an item. A review verdict names one, a security
 finding is **Security**, and a kanban ticket reopened from Done is a **Defect**, or an **Unclear
@@ -38,13 +38,12 @@ kind with nothing to hand over, so an item with it stays open.
 Handing over writes a draft for you to review. Nothing is accepted for you.
 
 - **Project knowledge**: a draft page titled `Learned: <failure mode>` on the **Knowledge** screen.
-- **Policy** and **Prompt**: a draft policy version on the **Policies** screen, keyed
-  `learned-<failure mode>`, or `prompt-learned-<failure mode>` for a prompt. For now an accepted
-  prompt policy reaches agents through the instruction files, like any other policy.
+- **Policy**: a draft policy version on the **Policies** screen, keyed `learned-<failure mode>`.
+- **Prompt**: a proposed prompt titled `Learned: <failure mode>` on the **Prompts** tab.
 
 Each draft holds the item's reason and its latest five pieces of evidence. While the knowledge
-plugin is off, items for project knowledge stay candidates; likewise policy items and prompt items
-while the policy plugin is off. They are handed over once it is on again.
+plugin is off, items for project knowledge stay candidates; likewise policy items while the policy
+plugin is off. They are handed over once it is on again.
 
 ## Reviewing a handover
 
@@ -85,6 +84,25 @@ next sweep. See [Waiting on you](./kanban.md#waiting-on-you) for the strip.
 The **Corrections** tab lists the project's corrections over the last 7, 30 or 90 days, with the
 kind of event that recorded each one and its failure mode, if it has one. Narrow the list by kind
 or mode, and open a correction's thread from its row.
+
+## Prompts
+
+The **Prompts** tab is the project's prompt library: prompts you send again and again, and
+workflows, steps for an agent to follow in order. Search titles and bodies, or narrow the list by
+state:
+
+- **Active**: ready to use.
+- **Proposed**: an agent or a learning item suggested it, and it waits for you to accept it.
+- **Archived**: put away.
+
+**New prompt** saves one, active at once. Open a prompt to accept it, archive it, or unarchive it.
+Unarchiving brings back a prompt you had accepted as active, and one you never accepted as
+proposed. Editing the title or body saves a new version; the latest 20 versions are listed, and
+**Restore** saves a copy of one as the latest.
+
+Agents reach the library through the `prompt_search`, `prompt_save` and `prompt_get` tools. An
+agent has to search before it saves, so it finds a prompt that already covers the work, and what it
+saves is proposed until you accept it.
 
 ## Reviews
 
