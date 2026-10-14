@@ -5,6 +5,7 @@ import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as PlatformError from "effect/PlatformError";
 import * as TestClock from "effect/testing/TestClock";
 
 import * as ServerConfig from "../../../config.ts";
@@ -33,9 +34,31 @@ const withoutBoard = project("project-2", "Quiet Repo");
 const projectId = withBoard.id;
 const finder = ThreadId.make("thr_finder");
 
+/** Set while checking whether a folder exists fails, as a permission error makes it. */
+const existsCheck = { fails: false };
+
 /** A fresh board folder per test, over two projects. */
 const layerTest = FindingService.layer.pipe(
   Layer.provideMerge(KanbanStore.layer),
+  Layer.provide(
+    Layer.effect(
+      FileSystem.FileSystem,
+      Effect.map(FileSystem.FileSystem, (real) => ({
+        ...real,
+        exists: (path) =>
+          existsCheck.fails
+            ? Effect.fail(
+                PlatformError.systemError({
+                  _tag: "PermissionDenied",
+                  module: "FileSystem",
+                  method: "exists",
+                  description: "EACCES: permission denied",
+                }),
+              )
+            : real.exists(path),
+      })),
+    ),
+  ),
   Layer.provideMerge(
     Layer.mock(ProjectService.ProjectService)({
       getById: (id) =>
@@ -66,12 +89,22 @@ const fixture = Effect.gen(function* () {
     filename: ":memory:",
     migrations: HostDatabase.migrations,
   });
-  const run = yield* UnownedSweep.sweep.pipe(
-    Effect.provide(
-      Attention.layer.pipe(Layer.provide(Layer.succeed(HostDatabase.HostDatabase, sql))),
-    ),
+  const attention = Attention.layer.pipe(
+    Layer.provide(Layer.succeed(HostDatabase.HostDatabase, sql)),
   );
+  const run = yield* UnownedSweep.sweep.pipe(Effect.provide(attention));
   return {
+    /** A flag as an earlier server run left it. */
+    raise: (text: string) =>
+      Effect.flatMap(Attention.Attention, (flags) =>
+        flags.raise({
+          pluginId: "kanban",
+          threadId: `findings:${projectId}`,
+          kind: "unowned_finding",
+          text,
+          resumeAction: { label: "Open board", target: "board" },
+        }),
+      ).pipe(Effect.provide(attention)),
     /** One supervisor tick of the sweep. */
     tick: (dryRun = false) => run({ dryRun }),
     flags: sql<FlagRow>`SELECT * FROM attention ORDER BY id`,
@@ -196,6 +229,29 @@ it.effect("ten old findings in one project raise one flag with the count", () =>
       // The project without a board was looked at without creating one.
       const fs = yield* FileSystem.FileSystem;
       assert.isFalse(yield* fs.exists(yield* store.directory(withoutBoard.id)));
+    }),
+  ).pipe(Effect.provide(layerTest)),
+);
+
+it.effect("a board whose folder cannot be checked keeps its flag; a missing folder clears it", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const { tick, open, raise } = yield* fixture;
+      // Raised before a restart; this server has not loaded the board yet.
+      yield* raise(
+        "1 finding in Triage has had no owner for over 3 days; review it to take it on.",
+      );
+
+      existsCheck.fails = true;
+      const unread = yield* tick().pipe(
+        Effect.ensuring(Effect.sync(() => (existsCheck.fails = false))),
+      );
+      assert.deepEqual(unread, { examined: 0, acted: 0, flags: 1 });
+      assert.strictEqual((yield* open).length, 1);
+
+      // Once the check works, the folder is known to be missing: no board, so no finding.
+      assert.deepEqual(yield* tick(), { examined: 0, acted: 1, flags: 0 });
+      assert.deepEqual(yield* open, []);
     }),
   ).pipe(Effect.provide(layerTest)),
 );

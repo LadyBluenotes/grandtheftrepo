@@ -150,7 +150,8 @@ export class KanbanStore extends Context.Service<
     readonly board: (projectId: ProjectId) => Effect.Effect<KanbanBoard, KanbanError>;
     /**
      * The project's issues, or none while its base folder does not exist: unlike `board`, a project
-     * that never had a board gets no folder. For sweeps that look at every project.
+     * that never had a board gets no folder. A folder that cannot be checked fails with `io`, so a
+     * sweep that looks at every project can tell an unread board from an empty one.
      */
     readonly issues: (
       projectId: ProjectId,
@@ -968,18 +969,13 @@ const make = Effect.gen(function* () {
     },
   );
 
-  /** Whether the project is loaded or its base folder exists, so loading it creates no folder. */
-  const hasFolder = (projectId: ProjectId) =>
-    loaded.has(projectId)
-      ? Effect.succeed(true)
-      : Effect.flatMap(resolveDirectory(projectId), ({ directory }) =>
-          fs.exists(directory).pipe(Effect.orElseSucceed(() => false)),
-        );
-
   const advance: KanbanStore["Service"]["advance"] = Effect.fn("KanbanStore.advance")(
     function* (projectId, threadId, status) {
       // Thread events arrive for every project; only one with a board folder is worth loading.
-      if (!(yield* hasFolder(projectId))) return;
+      if (!loaded.has(projectId)) {
+        const { directory } = yield* resolveDirectory(projectId);
+        if (!(yield* fs.exists(directory).pipe(Effect.orElseSucceed(() => false)))) return;
+      }
       const state = yield* load(projectId);
       const linked = Array.from(state.issues.values()).filter(
         (issue) =>
@@ -1122,12 +1118,17 @@ const make = Effect.gen(function* () {
       discard: true,
     }).pipe(Effect.catch((cause) => Effect.logWarning("kanban: archive sweep failed", { cause }))),
     board: (projectId) => Effect.map(load(projectId), board),
-    issues: (projectId) =>
-      Effect.flatMap(hasFolder(projectId), (exists) =>
-        exists
-          ? Effect.map(load(projectId), (state) => Array.from(state.issues.values()))
-          : Effect.succeed([]),
-      ),
+    issues: Effect.fn("KanbanStore.issues")(function* (projectId) {
+      // Loading creates the folder, so a project that has none reads as empty without one.
+      if (!loaded.has(projectId)) {
+        const { directory } = yield* resolveDirectory(projectId);
+        const exists = yield* fs
+          .exists(directory)
+          .pipe(Effect.catch(io("Could not check the board folder.")));
+        if (!exists) return [];
+      }
+      return Array.from((yield* load(projectId)).issues.values());
+    }),
     directory: (projectId) => Effect.map(resolveDirectory(projectId), ({ directory }) => directory),
     linkedProject: (threadId) =>
       Effect.sync(() => {
