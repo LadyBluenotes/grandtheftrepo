@@ -24,11 +24,11 @@ import {
 import { useNavigate } from "@tanstack/react-router";
 import {
   ArchiveIcon,
-  FolderIcon,
   GitBranchIcon,
   OctagonAlertIcon,
   PlusIcon,
   ScaleIcon,
+  Settings2Icon,
   SquareKanbanIcon,
   UserRoundCheckIcon,
 } from "lucide-react";
@@ -54,6 +54,7 @@ import {
   SelectValue,
 } from "~/components/ui/select";
 import { SidebarInset } from "~/components/ui/sidebar";
+import { Switch } from "~/components/ui/switch";
 import { stackedThreadToast, toastManager } from "~/components/ui/toast";
 import { Toggle } from "~/components/ui/toggle";
 import { isElectron } from "~/env";
@@ -67,7 +68,13 @@ import { DecisionsView } from "./DecisionsView";
 import { IssuePanel } from "./IssuePanel";
 import { ReopenDialog } from "./ReopenDialog";
 import { StopBanner } from "./StopBanner";
-import { kanbanActiveAtom, kanbanBoard, kanbanSetDirectory, kanbanWrite } from "./state";
+import {
+  kanbanActiveAtom,
+  kanbanBoard,
+  kanbanSetCapture,
+  kanbanSetDirectory,
+  kanbanWrite,
+} from "./state";
 
 export interface BoardSearch {
   readonly environmentId?: EnvironmentId;
@@ -323,7 +330,9 @@ export function BoardPage({ search }: { readonly search: BoardSearch }) {
   );
   const write = useAtomCommand(kanbanWrite, { reportFailure: false });
   const setDirectory = useAtomCommand(kanbanSetDirectory, { reportFailure: false });
+  const setCapture = useAtomCommand(kanbanSetCapture, { reportFailure: false });
   const canWrite = useAtomValue(kanbanWrite.permissionAtom(environmentId));
+  const canSetCapture = useAtomValue(kanbanSetCapture.permissionAtom(environmentId));
 
   const columns = useMemo(() => {
     const grouped = new Map<KanbanStatus, Array<KanbanIssueSummary>>(
@@ -473,9 +482,9 @@ export function BoardPage({ search }: { readonly search: BoardSearch }) {
               onOpenChange={(open) => open && setDirectoryDraft(board.data?.directory ?? "")}
             >
               <PopoverTrigger
-                render={<Button size="icon-sm" variant="ghost-muted" aria-label="Issues folder" />}
+                render={<Button size="icon-sm" variant="ghost-muted" aria-label="Board settings" />}
               >
-                <FolderIcon />
+                <Settings2Icon />
               </PopoverTrigger>
               <PopoverPopup side="bottom" align="end" className="w-96">
                 <form
@@ -510,6 +519,26 @@ export function BoardPage({ search }: { readonly search: BoardSearch }) {
                     </Button>
                   </div>
                 </form>
+                <div className="mt-3 flex items-start gap-3 border-t border-border pt-3">
+                  <p className="min-w-0 flex-1 text-xs text-muted-foreground">
+                    When a thread settles, the routing plugin&apos;s cheap model reads its last
+                    reply and drafts the decisions and findings it did not record, for you to accept
+                    or reject. One cheap turn per settled thread.
+                  </p>
+                  <Switch
+                    size="sm"
+                    aria-label="Draft decisions and findings when a thread settles"
+                    checked={board.data?.capture === true}
+                    disabled={!canSetCapture || board.data === null}
+                    onCheckedChange={async (enabled) => {
+                      if (environmentId === null || projectId === null) return;
+                      reportFailure(
+                        "Could not change drafting from settled threads",
+                        await setCapture({ environmentId, input: { projectId, enabled } }),
+                      );
+                    }}
+                  />
+                </div>
               </PopoverPopup>
             </Popover>
           </div>

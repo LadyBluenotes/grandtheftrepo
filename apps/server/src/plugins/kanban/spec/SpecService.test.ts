@@ -46,6 +46,7 @@ import { migrations as policyMigrations } from "../../policy/migrations.ts";
 import * as PolicyService from "../../policy/PolicyService.ts";
 import * as Ponytail from "../../policy/ponytail.ts";
 import * as TierSelectionService from "../../routing/TierSelectionService.ts";
+import * as SettleCapture from "../capture/SettleCapture.ts";
 import * as KanbanStore from "../KanbanStore.ts";
 import { migrations } from "../migrations.ts";
 import * as StopGate from "../StopGate.ts";
@@ -116,6 +117,12 @@ const eventBase = () => ({
 });
 
 const modelSelection = { instanceId: codex, model: cheap.model } satisfies ModelSelection;
+
+/** Settle-time capture is off in these tests; its own are in `SettleCapture.test.ts`. */
+const noCapture = SettleCapture.SettleCapture.of({
+  settled: () => Effect.void,
+  finish: () => Effect.void,
+});
 
 /** The drafting thread as the orchestrator records it, so its turn items can be read back. */
 const threadCreated = (threadId: ThreadId): OrchestrationV2DomainEvent => ({
@@ -360,7 +367,7 @@ const start = Effect.gen(function* () {
           PluginReactor.start({
             plugin: "kanban",
             from: "start",
-            handlers: SpecReactor.handlers(spec),
+            handlers: SpecReactor.handlers(spec, noCapture),
           }),
           (reactor) => reactor.drain,
         ),
@@ -958,6 +965,7 @@ describe("SpecService", () => {
           yield* Layer.build(
             SpecReactor.layer.pipe(
               Layer.provide(withSignal),
+              Layer.provide(Layer.succeed(SettleCapture.SettleCapture, noCapture)),
               Layer.provide(Layer.succeed(SqlClient.SqlClient, sql)),
             ),
           );
@@ -1081,6 +1089,7 @@ describe("SpecService", () => {
           yield* Layer.build(
             SpecReactor.layer.pipe(
               Layer.provide(withSignal),
+              Layer.provide(Layer.succeed(SettleCapture.SettleCapture, noCapture)),
               Layer.provide(Layer.succeed(SqlClient.SqlClient, sql)),
               Layer.provide(
                 Layer.succeed(ServerActivation.ServerActivation, Deferred.await(activation)),
@@ -1137,29 +1146,31 @@ describe("SpecService", () => {
     ).pipe(Effect.provide(layerTest)),
   );
 
-  it.effect("a drafting run that ends without completing leaves a malformed attempt", () =>
-    Effect.scoped(
-      Effect.gen(function* () {
-        const { spec, launched, specify, react, file, fileText } = yield* start;
-        const { id } = yield* file("Login loops", rough);
-        const before = yield* fileText(id);
+  it.effect.each(["failed", "rolled_back"] as const)(
+    "a drafting run that ends %s leaves a malformed attempt",
+    (status) =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const { spec, launched, specify, react, file, fileText } = yield* start;
+          const { id } = yield* file("Login loops", rough);
+          const before = yield* fileText(id);
 
-        yield* specify({ projectId, id });
-        const threadId = launched[0]!.threadId!;
-        yield* react([
-          threadCreated(threadId),
-          runUpdated(threadId, RunId.make("run:spec-failed"), "failed"),
-        ]);
+          yield* specify({ projectId, id });
+          const threadId = launched[0]!.threadId!;
+          yield* react([
+            threadCreated(threadId),
+            runUpdated(threadId, RunId.make(`run:spec-${status}`), status),
+          ]);
 
-        const report = yield* spec.latest({ projectId, id });
-        assert.strictEqual(report?.attempt.status, "malformed");
-        assert.strictEqual(
-          report?.attempt.reason,
-          "The drafting run ended failed before it sent a spec.",
-        );
-        assert.strictEqual(yield* fileText(id), before);
-      }),
-    ).pipe(Effect.provide(layerTest)),
+          const report = yield* spec.latest({ projectId, id });
+          assert.strictEqual(report?.attempt.status, "malformed");
+          assert.strictEqual(
+            report?.attempt.reason,
+            `The drafting run ended ${status} before it sent a spec.`,
+          );
+          assert.strictEqual(yield* fileText(id), before);
+        }),
+      ).pipe(Effect.provide(layerTest)),
   );
 
   it.effect("useExisting validates the description and never starts a thread", () =>
