@@ -590,6 +590,8 @@ describe("boardFolders", () => {
       folders.filter((folder) => folder.board).map((folder) => folder.projectId),
     );
   const otherId = ProjectId.make("project-2");
+  // A second checkout under the same title, so the same default folder; its id sorts first.
+  const twinId = ProjectId.make("project-0");
   const layerTwoProjects = (store: typeof KanbanStore.layer) =>
     Layer.empty.pipe(
       Layer.provideMerge(store),
@@ -601,7 +603,9 @@ describe("boardFolders", () => {
                 ? Option.some(project)
                 : id === otherId
                   ? Option.some({ ...project, id: otherId, title: "Other Repo" })
-                  : Option.none(),
+                  : id === twinId
+                    ? Option.some({ ...project, id: twinId, workspaceRoot: "/elsewhere" })
+                    : Option.none(),
             ),
         }),
       ),
@@ -677,6 +681,51 @@ describe("boardFolders", () => {
           { projectId: otherId, directory: unused, board: false },
         ]);
         assert.isFalse(yield* fs.exists(unused));
+      }).pipe(Effect.provide(layerTwoProjects(KanbanStore.layer))),
+  );
+
+  it.effect("shows a folder two projects share under the first of them by id only", () =>
+    Effect.gen(function* () {
+      const store = yield* KanbanStore.KanbanStore;
+      // Both load the shared folder, as a card filed in each would.
+      yield* store.write(projectId, "user", { action: "issue.create", title: "First" });
+      yield* store.board(twinId);
+      for (const order of [
+        [projectId, twinId],
+        [twinId, projectId],
+      ])
+        assert.deepEqual(yield* withBoard(store, order), [twinId]);
+      const [first, second] = yield* store.boardFolders([projectId, twinId]);
+      assert.strictEqual(first?.directory, second?.directory);
+      // Alone, either one still shows it.
+      assert.deepEqual(yield* withBoard(store, [projectId]), [projectId]);
+    }).pipe(Effect.provide(layerTwoProjects(KanbanStore.layer))),
+  );
+
+  it.effect(
+    "refuses a move to a folder that cannot be created, and keeps the board where it was",
+    () =>
+      Effect.gen(function* () {
+        const store = yield* KanbanStore.KanbanStore;
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const { baseDir } = yield* ServerConfig.ServerConfig;
+        const { id } = yield* store.write(projectId, "user", {
+          action: "issue.create",
+          title: "Stays put",
+        });
+        const before = (yield* store.board(projectId)).directory;
+        // A file where the new folder's parent should be.
+        const blocker = path.join(baseDir, "blocker");
+        yield* fs.writeFileString(blocker, "");
+
+        const moved = store.setDirectory({ projectId, directory: path.join(blocker, "board") });
+        assert.strictEqual(yield* failureCode(moved), "io");
+        assert.strictEqual(yield* store.directory(projectId), before);
+        assert.deepEqual(yield* store.boardFolders([projectId]), [
+          { projectId, directory: before, board: true },
+        ]);
+        assert.strictEqual((yield* store.getIssue({ projectId, id })).title, "Stays put");
       }).pipe(Effect.provide(layerTwoProjects(KanbanStore.layer))),
   );
 

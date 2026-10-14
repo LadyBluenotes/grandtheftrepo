@@ -152,7 +152,10 @@ export const KanbanBoardFolder = Schema.Struct({
   projectId: ProjectId,
   /** Absolute base folder: the project's override, else the default under T3 home. */
   directory: Schema.String,
-  /** Whether the board exists: loaded, or its folder on disk. */
+  /**
+   * Whether the board exists (loaded, or its folder on disk) and is this project's to show: a
+   * folder several of the read projects resolve to is shown under the first of them by id only.
+   */
   board: Schema.Boolean,
 });
 export type KanbanBoardFolder = typeof KanbanBoardFolder.Type;

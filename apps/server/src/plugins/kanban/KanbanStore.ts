@@ -97,7 +97,10 @@ export class KanbanStore extends Context.Service<
       actor: KanbanActor,
       write: KanbanWrite,
     ) => Effect.Effect<KanbanWriteResult, KanbanError>;
-    /** Moves the project's board, which is loaded in the new folder before this returns. */
+    /**
+     * Moves the project's board, which is loaded in the new folder before this returns. A new
+     * folder that cannot be created or read fails the move before anything changes.
+     */
     readonly setDirectory: (input: KanbanSetDirectoryInput) => Effect.Effect<void, KanbanError>;
     /**
      * Admits an issue from Triage or Inbox to Todo as `by`, in one write, with `criteria` as its
@@ -130,8 +133,9 @@ export class KanbanStore extends Context.Service<
     readonly directory: (projectId: ProjectId) => Effect.Effect<string, KanbanError>;
     /**
      * The board folder of each of `projectIds` that exists, in the given order, and whether the
-     * board is there: loaded, or its folder on disk. Nothing is created or loaded, so a project
-     * without one gets no folder or watcher.
+     * board is there: loaded, or its folder on disk. A folder several of them resolve to is the
+     * board of the first by id only. Nothing is created or loaded, so a project without one gets
+     * no folder or watcher.
      */
     readonly boardFolders: (
       projectIds: ReadonlyArray<ProjectId>,
@@ -258,8 +262,10 @@ const make = Effect.gen(function* () {
     };
   };
 
+  /** The project's folder under `overrides`, or under `kanban.json` as it is now. */
   const resolveDirectory = Effect.fn("KanbanStore.resolveDirectory")(function* (
     projectId: ProjectId,
+    overrides?: typeof Overrides.Type,
   ) {
     const project = yield* readProject(projectId).pipe(
       Effect.flatMap(
@@ -269,8 +275,19 @@ const make = Effect.gen(function* () {
         }),
       ),
     );
-    return directoryOf(projectId, project.title, yield* readOverrides);
+    return directoryOf(projectId, project.title, overrides ?? (yield* readOverrides));
   });
+
+  /** Creates the board's `issues/` and `decisions/` under `directory` and lists each one's files. */
+  const openFolders = (directory: string) =>
+    Effect.forEach(["issues", "decisions"], (name) => {
+      const dir = path.join(directory, name);
+      return fs.makeDirectory(dir, { recursive: true }).pipe(
+        Effect.catch(io(`Could not create ${dir}.`)),
+        Effect.andThen(fs.readDirectory(dir).pipe(Effect.catch(io(`Could not read ${dir}.`)))),
+        Effect.map((names) => ({ dir, names })),
+      );
+    });
 
   /**
    * The project's board folder and whether the board is there: loaded, or its folder on disk;
@@ -310,7 +327,6 @@ const make = Effect.gen(function* () {
         const again = loaded.get(projectId);
         if (again !== undefined) return again;
         const { slug, directory } = yield* resolveDirectory(projectId);
-        const dirs = [path.join(directory, "issues"), path.join(directory, "decisions")];
         const state: Loaded = {
           directory,
           slug,
@@ -319,13 +335,7 @@ const make = Effect.gen(function* () {
           lock: yield* Semaphore.make(1),
           scope: yield* Scope.make(),
         };
-        for (const dir of dirs) {
-          yield* fs
-            .makeDirectory(dir, { recursive: true })
-            .pipe(Effect.catch(io(`Could not create ${dir}.`)));
-          const names = yield* fs
-            .readDirectory(dir)
-            .pipe(Effect.catch(io(`Could not read ${dir}.`)));
+        for (const { dir, names } of yield* openFolders(directory)) {
           for (const name of names)
             yield* refresh(state, path.join(dir, name)).pipe(
               Effect.catch(io(`Could not read ${path.join(dir, name)}.`)),
@@ -805,6 +815,10 @@ const make = Effect.gen(function* () {
     const directories: Record<string, string> = { ...overrides.directories };
     if (directory === null) delete directories[projectId];
     else directories[projectId] = directory;
+    // Staged before anything changes: a destination that cannot be created or read fails the move
+    // and leaves the board, its watchers and `kanban.json` as they were.
+    if (hadBoard)
+      yield* openFolders((yield* resolveDirectory(projectId, { directories })).directory);
     const contents = yield* encodeOverrides({ directories }).pipe(
       Effect.catch(io("Could not encode kanban.json.")),
     );
@@ -860,10 +874,23 @@ const make = Effect.gen(function* () {
     directory: (projectId) => Effect.map(resolveDirectory(projectId), ({ directory }) => directory),
     boardFolders: Effect.fn("KanbanStore.boardFolders")(function* (projectIds) {
       const overrides = yield* readOverrides;
-      const folders = yield* Effect.forEach(projectIds, (id) => folderOf(id, overrides), {
+      const folders = (yield* Effect.forEach(projectIds, (id) => folderOf(id, overrides), {
         concurrency: 8,
-      });
-      return folders.filter((folder) => folder !== null);
+      })).filter((folder) => folder !== null);
+      // Two projects can resolve to one folder (the default is keyed by title). Its board shows
+      // under the first of them by id only, so a client showing both lists its cards once.
+      const owners = new Map<string, ProjectId>();
+      for (const folder of folders) {
+        const key = path.resolve(folder.directory);
+        const owner = owners.get(key);
+        if (folder.board && (owner === undefined || folder.projectId < owner))
+          owners.set(key, folder.projectId);
+      }
+      return folders.map((folder) =>
+        folder.board && owners.get(path.resolve(folder.directory)) !== folder.projectId
+          ? { ...folder, board: false }
+          : folder,
+      );
     }),
     linkedProject: (threadId) =>
       Effect.sync(() => {
