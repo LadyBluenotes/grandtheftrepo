@@ -12,9 +12,9 @@ const SWEEPS: Readiness.Check = { id: "sweeps", label: "Sweeps registered", targ
 const PROMOTERS: Readiness.Check = { id: "promoters", label: "Promoters", target: "plugin" };
 
 /** The sweeps the plugin's layer registers, in the order a tick runs them. */
-const SWEEP_NAMES = ["classify", "promote", "reviews", "regressions", "outcomes"];
+const SWEEP_NAMES = ["classify", "promote", "reviews", "regressions", "outcomes", "unclassified"];
 
-/** The five sweeps are on the supervisor's tick, and a dry run would keep them from acting. */
+/** The six sweeps are on the supervisor's tick, and a dry run would keep them from acting. */
 export const sweepsCheck = (status: Pick<SupervisorStatus, "dryRun" | "sweeps">) => {
   const registered = new Set(
     status.sweeps.filter((sweep) => sweep.plugin === "learning").map((sweep) => sweep.name),
@@ -34,7 +34,7 @@ export const sweepsCheck = (status: Pick<SupervisorStatus, "dryRun" | "sweeps">)
   }
   return Readiness.ready(
     SWEEPS,
-    "The classify, promote, reviews, regressions and outcomes sweeps run each tick.",
+    "The classify, promote, reviews, regressions, outcomes and unclassified sweeps run each tick.",
   );
 };
 

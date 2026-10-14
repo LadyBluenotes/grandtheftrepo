@@ -1,5 +1,14 @@
 import { scopeProjectRef } from "@t3tools/client-runtime/environment";
-import type { LearningFailureKind, ThreadId } from "@t3tools/contracts";
+import {
+  isAtomCommandInterrupted,
+  squashAtomCommandFailure,
+} from "@t3tools/client-runtime/state/runtime";
+import {
+  LEARNING_PROVIDER_FAILURE_KINDS,
+  type LearningCorrection,
+  type LearningFailureKind,
+  type ThreadId,
+} from "@t3tools/contracts";
 import { Link } from "@tanstack/react-router";
 import { useMemo, useState } from "react";
 
@@ -20,6 +29,7 @@ import {
   TableHeader,
   TableRow,
 } from "~/components/ui/table";
+import { stackedThreadToast, toastManager } from "~/components/ui/toast";
 import { useThreadShellsForProjectRefs } from "~/state/entities";
 import {
   CORRECTION_WINDOWS,
@@ -32,7 +42,10 @@ import {
   isCorrectionWindow,
   isDeclaredMode,
   isFailureKind,
+  isReviewMode,
+  REVIEW_MODES,
   threadLabel,
+  useLearningCorrectionDeclare,
   useLearningCorrections,
   type CorrectionWindowDays,
   type LearningScope,
@@ -43,12 +56,70 @@ import { When } from "./When";
 const modeLabel = (mode: ModeFilter | null) =>
   mode === null ? "All modes" : mode === "none" ? "No declared mode" : DECLARED_MODE_LABEL[mode];
 
+/**
+ * A correction's declared mode, or, for one without a mode that is no provider failure, a picker
+ * that declares it; the next sweep counts it toward that mode's item.
+ */
+function ModeCell({
+  correction,
+  declaring,
+  onDeclared,
+}: {
+  readonly correction: LearningCorrection;
+  readonly declaring: ReturnType<typeof useLearningCorrectionDeclare>;
+  readonly onDeclared: () => void;
+}) {
+  const { canWrite, declare } = declaring;
+  const [saving, setSaving] = useState(false);
+  if (correction.declaredMode !== null) return <>{DECLARED_MODE_LABEL[correction.declaredMode]}</>;
+  if (!canWrite || LEARNING_PROVIDER_FAILURE_KINDS.has(correction.failureKind))
+    return <span className="text-muted-foreground">—</span>;
+
+  const apply = async (value: string | null) => {
+    if (!isReviewMode(value)) return;
+    setSaving(true);
+    const result = await declare({ id: correction.id, declaredMode: value });
+    setSaving(false);
+    if (result._tag === "Success") {
+      onDeclared();
+      return;
+    }
+    if (isAtomCommandInterrupted(result)) return;
+    const failure = squashAtomCommandFailure(result);
+    toastManager.add(
+      stackedThreadToast({
+        type: "error",
+        title: "Could not declare the mode",
+        description: failure instanceof Error ? failure.message : String(failure),
+      }),
+    );
+  };
+
+  return (
+    <div className="w-40">
+      <Select<string> value={null} disabled={saving} onValueChange={(value) => void apply(value)}>
+        <SelectTrigger size="sm" aria-label="Declare mode">
+          <SelectValue placeholder="Declare mode" />
+        </SelectTrigger>
+        <SelectPopup>
+          {REVIEW_MODES.map((candidate) => (
+            <SelectItem key={candidate} value={candidate}>
+              {DECLARED_MODE_LABEL[candidate]}
+            </SelectItem>
+          ))}
+        </SelectPopup>
+      </Select>
+    </div>
+  );
+}
+
 /** A project's corrections over the chosen window, narrowed by kind and declared mode. */
 export function CorrectionsTable({ environmentId, projectId }: LearningScope) {
   const [days, setDays] = useState<CorrectionWindowDays>(30);
   const [kind, setKind] = useState<LearningFailureKind | null>(null);
   const [mode, setMode] = useState<ModeFilter | null>(null);
   const corrections = useLearningCorrections({ environmentId, projectId }, correctionsWindow(days));
+  const declaring = useLearningCorrectionDeclare(environmentId);
   const refs = useMemo(
     () => [scopeProjectRef(environmentId, projectId)],
     [environmentId, projectId],
@@ -157,11 +228,11 @@ export function CorrectionsTable({ environmentId, projectId }: LearningScope) {
               <TableRow key={row.id}>
                 <TableCell>{FAILURE_KIND_LABEL[row.failureKind]}</TableCell>
                 <TableCell>
-                  {row.declaredMode === null ? (
-                    <span className="text-muted-foreground">—</span>
-                  ) : (
-                    DECLARED_MODE_LABEL[row.declaredMode]
-                  )}
+                  <ModeCell
+                    correction={row}
+                    declaring={declaring}
+                    onDeclared={corrections.refresh}
+                  />
                 </TableCell>
                 <TableCell>
                   <div className="max-w-56 truncate">

@@ -153,6 +153,16 @@ export class KanbanStore extends Context.Service<
     /** Archives Done issues older than `ARCHIVE_AFTER` in every loaded project. */
     readonly sweepArchive: Effect.Effect<void>;
     readonly board: (projectId: ProjectId) => Effect.Effect<KanbanBoard, KanbanError>;
+    /**
+     * The project's issues, or none while its issues folder does not exist. A board that is not
+     * loaded is read once from its files and left unloaded: unlike `board`, nothing is created,
+     * watched or archived, so a sweep over every project, even a dry run, changes nothing. A folder
+     * that cannot be checked or read fails with `io`, so such a sweep can tell an unread board from
+     * an empty one.
+     */
+    readonly issues: (
+      projectId: ProjectId,
+    ) => Effect.Effect<ReadonlyArray<KanbanIssue>, KanbanError>;
     /** The project's base folder as the board resolves it; unlike `board`, nothing is loaded or created. */
     readonly directory: (projectId: ProjectId) => Effect.Effect<string, KanbanError>;
     /**
@@ -1199,6 +1209,31 @@ const make = Effect.gen(function* () {
       discard: true,
     }).pipe(Effect.catch((cause) => Effect.logWarning("kanban: archive sweep failed", { cause }))),
     board: (projectId) => Effect.map(load(projectId), board),
+    issues: Effect.fn("KanbanStore.issues")(function* (projectId) {
+      const state = loaded.get(projectId);
+      if (state !== undefined) return Array.from(state.issues.values());
+      // One read of the issue files: a board nobody opened is not loaded, watched, swept or created.
+      const { directory } = yield* resolveDirectory(projectId);
+      const dir = path.join(directory, "issues");
+      const exists = yield* fs
+        .exists(dir)
+        .pipe(Effect.catch(io("Could not check the board folder.")));
+      if (!exists) return [];
+      const names = yield* fs.readDirectory(dir).pipe(Effect.catch(io(`Could not read ${dir}.`)));
+      const issues: Array<KanbanIssue> = [];
+      for (const name of names) {
+        const id = path.basename(name, Files.ISSUE_EXTENSION);
+        if (path.extname(name) !== Files.ISSUE_EXTENSION || !isSlug(id)) continue;
+        const file = path.join(dir, name);
+        const text = yield* fs
+          .readFileString(file)
+          .pipe(Effect.catch(io(`Could not read ${file}.`)));
+        const parsed = Files.parseIssue(id, text);
+        if (parsed === null) yield* Effect.logWarning("kanban: unreadable issue file", { file });
+        else issues.push(parsed.issue);
+      }
+      return issues;
+    }),
     directory: (projectId) => Effect.map(resolveDirectory(projectId), ({ directory }) => directory),
     boardFolders: Effect.fn("KanbanStore.boardFolders")(function* (projectIds) {
       const overrides = yield* readOverrides;
