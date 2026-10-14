@@ -31,6 +31,30 @@ conversations, model refreshes, and generated titles or commit messages. Clear
 **Session launcher** to return to direct Copilot sessions. To keep both choices
 available, add a separate Copilot instance and set the launcher only there.
 
+On Linux, save a launcher such as `~/.local/bin/copilot-session` with LF line
+endings:
+
+```sh
+#!/bin/sh
+exec copilot-wrapper copilot -- "$@"
+```
+
+Replace `copilot-wrapper copilot --` with your wrapper's command and any fixed
+arguments before the Copilot flags. Keep `"$@"` so T3's arguments pass through
+unchanged. Use an absolute executable path if the wrapper is not on the T3
+server's `PATH`.
+
+Make the script executable:
+
+```sh
+chmod +x ~/.local/bin/copilot-session
+```
+
+Set **Session launcher** to the script's absolute path on the Linux environment
+running T3, not a Windows path or a path on the device viewing the app. Keep
+**Binary path** set to the regular `copilot` executable. Refresh provider status
+and models, then select that instance in a new thread.
+
 ## Sign-in and tokens
 
 To use a token instead of the saved login, add a **GitHub token** to the Copilot
