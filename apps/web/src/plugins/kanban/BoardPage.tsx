@@ -477,13 +477,13 @@ function useBoardProjectGroups() {
       primaryEnvironmentId,
       resolveEnvironmentLabel: (id) => environmentLabels.get(id) ?? null,
     }).toSorted((a, b) => a.displayName.localeCompare(b.displayName));
-    return { groups, settings, environmentLabels };
+    return { groups, settings, environmentLabels, projects };
   }, [environments, primaryEnvironmentId, projects, settings]);
 }
 
 export function BoardPage({ search }: { readonly search: BoardSearch }) {
   const navigate = useNavigate();
-  const { groups, settings, environmentLabels } = useBoardProjectGroups();
+  const { groups, settings, environmentLabels, projects } = useBoardProjectGroups();
   const persistedScope = useUiStateStore((store) => store.sidebarProjectScopeKey);
   const setScope = useUiStateStore((store) => store.setSidebarProjectScopeKey);
   const scopeKey = useMemo(
@@ -491,14 +491,19 @@ export function BoardPage({ search }: { readonly search: BoardSearch }) {
     [groups, persistedScope, settings],
   );
   const scopedGroup = groups.find((group) => group.projectKey === scopeKey) ?? null;
-  const scoped = useMemo(() => scopedBoardProjects(groups, scopeKey), [groups, scopeKey]);
+  const scoped = useMemo(
+    () => scopedBoardProjects(groups, scopeKey, projects),
+    [groups, projects, scopeKey],
+  );
   const environments = useAtomValue(kanbanBoardEnvironments(scoped));
   const { writable, shown } = useMemo(
     () => boardFanOut(scoped, environments),
     [scoped, environments],
   );
   const boards = useAtomValue(kanbanBoards(shown));
-  const attention = useAtomValue(kanbanBoardAttention(shown));
+  // Every project the board can write to, board or not: their requests and an environment's
+  // policy flag wait on a person all the same.
+  const attention = useAtomValue(kanbanBoardAttention(writable));
   const labels = useMemo(
     () => new Map(scoped.map((project) => [boardProjectKey(project), project.label] as const)),
     [scoped],

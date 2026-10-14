@@ -7,6 +7,7 @@ import {
   boardFanOut,
   decisionsCategory,
   pickBoardProject,
+  projectIdsByEnvironment,
   scopedBoardProjects,
 } from "./boardScope";
 
@@ -38,8 +39,9 @@ const project = (environmentId: EnvironmentId, id: string, title: string, shared
 const appHere = project(local, "app-here", "app", true);
 const appThere = project(remote, "app-there", "app", true);
 const notes = project(local, "notes", "notes");
+const projects = [appHere, appThere, notes];
 const groups = buildSidebarProjectSnapshots({
-  projects: [appHere, appThere, notes],
+  projects,
   settings: { sidebarProjectGroupingMode: "repository", sidebarProjectGroupingOverrides: {} },
   groupScratchProjects: true,
   primaryEnvironmentId: local,
@@ -51,7 +53,7 @@ const refs = (projects: ReadonlyArray<{ environmentId: string; projectId: string
 
 describe("scopedBoardProjects", () => {
   it("covers every project when the sidebar has no scope, naming environments when they differ", () => {
-    const all = scopedBoardProjects(groups, null);
+    const all = scopedBoardProjects(groups, null, projects);
     expect(refs(all).toSorted()).toEqual([
       "env-local/app-here",
       "env-local/notes",
@@ -61,17 +63,17 @@ describe("scopedBoardProjects", () => {
   });
 
   it("covers the scoped group's members, on every environment", () => {
-    expect(refs(scopedBoardProjects(groups, keyOf("app"))).toSorted()).toEqual([
+    expect(refs(scopedBoardProjects(groups, keyOf("app"), projects)).toSorted()).toEqual([
       "env-local/app-here",
       "env-remote/app-there",
     ]);
-    const [only, ...rest] = scopedBoardProjects(groups, keyOf("notes"));
+    const [only, ...rest] = scopedBoardProjects(groups, keyOf("notes"), projects);
     expect(rest).toEqual([]);
     expect(only).toEqual({ environmentId: local, projectId: notes.id, label: "notes" });
   });
 
   it("covers every project while the scope names no group", () => {
-    expect(scopedBoardProjects(groups, "gone")).toHaveLength(3);
+    expect(scopedBoardProjects(groups, "gone", projects)).toHaveLength(3);
   });
 
   it("tells two checkouts of one group on one environment apart by their paths", () => {
@@ -83,15 +85,51 @@ describe("scopedBoardProjects", () => {
       primaryEnvironmentId: local,
       resolveEnvironmentLabel: () => "Laptop",
     });
-    expect(scopedBoardProjects(withClone, null).map((p) => p.label)).toEqual([
+    expect(scopedBoardProjects(withClone, null, [appHere, appClone]).map((p) => p.label)).toEqual([
       "app · /work/app-here",
       "app · /work/clone",
+    ]);
+  });
+
+  it("covers an older id registered at the same path, which can have a board of its own", () => {
+    const older = { ...project(local, "notes-old", "notes"), workspaceRoot: notes.workspaceRoot };
+    const both = [{ ...notes, updatedAt: "2026-02-01T00:00:00.000Z" }, older];
+    const withOlder = buildSidebarProjectSnapshots({
+      projects: both,
+      settings: { sidebarProjectGroupingMode: "repository", sidebarProjectGroupingOverrides: {} },
+      groupScratchProjects: true,
+      primaryEnvironmentId: local,
+      resolveEnvironmentLabel: () => "Laptop",
+    });
+    // The sidebar shows the fresher registration only, but scopes by both.
+    expect(withOlder[0]?.memberProjects.map((p) => p.id)).toEqual([notes.id]);
+    expect(scopedBoardProjects(withOlder, null, both)).toEqual([
+      { environmentId: local, projectId: notes.id, label: "notes" },
+      { environmentId: local, projectId: older.id, label: "notes" },
+    ]);
+  });
+});
+
+describe("projectIdsByEnvironment", () => {
+  it("reads attention for every writable project, a project without a board included", () => {
+    const { writable } = boardFanOut(scopedBoardProjects(groups, null, projects), [
+      {
+        environmentId: local,
+        active: true,
+        folders: [{ projectId: notes.id, directory: "/wiki/notes", board: true }],
+        error: null,
+      },
+      { environmentId: remote, active: true, folders: [], error: null },
+    ]);
+    expect(projectIdsByEnvironment(writable).toSorted(([a], [b]) => a.localeCompare(b))).toEqual([
+      [local, [appHere.id, notes.id]],
+      [remote, [appThere.id]],
     ]);
   });
 });
 
 describe("boardFanOut", () => {
-  const all = scopedBoardProjects(groups, null);
+  const all = scopedBoardProjects(groups, null, projects);
   const folder = (p: Project, board: boolean) => ({
     projectId: p.id,
     directory: `/home/me/.t3/wiki/${p.id}`,
@@ -126,7 +164,7 @@ describe("boardFanOut", () => {
 });
 
 describe("pickBoardProject", () => {
-  const options = scopedBoardProjects(groups, null);
+  const options = scopedBoardProjects(groups, null, projects);
   const ref = (p: Project) => ({ environmentId: p.environmentId, projectId: p.id });
 
   it("takes the first preference that is an option, else the first option", () => {

@@ -6,6 +6,7 @@ import type {
 } from "@t3tools/contracts";
 
 import type { SidebarProjectSnapshot } from "~/sidebarProjectGrouping";
+import type { Project } from "~/types";
 
 /** A project the board can show, named as the sidebar names its group. */
 export interface BoardProject extends ScopedProjectRef {
@@ -32,32 +33,51 @@ export interface BoardEnvironment {
 export const boardProjectKey = (ref: ScopedProjectRef) =>
   `${ref.environmentId}\u0000${ref.projectId}`;
 
+/** Project ids per environment, sorted, so the same projects make the same read in any order. */
+export function projectIdsByEnvironment(
+  refs: ReadonlyArray<ScopedProjectRef>,
+): ReadonlyArray<readonly [EnvironmentId, ReadonlyArray<ProjectId>]> {
+  const grouped = new Map<EnvironmentId, Array<ProjectId>>();
+  for (const ref of refs)
+    grouped.set(ref.environmentId, [...(grouped.get(ref.environmentId) ?? []), ref.projectId]);
+  return [...grouped].map(([environmentId, projectIds]) => [environmentId, projectIds.toSorted()]);
+}
+
 /**
  * The projects the board covers under the sidebar's project scope, which the board shares so it
- * and the thread list agree: every project with no scope, else the scoped group's members. A scope
- * that names no group, while one is being restored or after it is gone, covers every project, as
- * the sidebar's list does.
+ * and the thread list agree: every project with no scope, else the scoped group's. Like the
+ * sidebar, it takes each group's every project id, not only the one shown for a path registered
+ * twice, since an older id can have a board of its own. A scope that names no group, while one is
+ * being restored or after it is gone, covers every project, as the sidebar's list does.
  */
 export function scopedBoardProjects(
   groups: ReadonlyArray<SidebarProjectSnapshot>,
   scopeKey: string | null,
+  projects: ReadonlyArray<Pick<Project, "environmentId" | "id" | "workspaceRoot">>,
 ): ReadonlyArray<BoardProject> {
   const scoped = groups.find((group) => group.projectKey === scopeKey);
-  const members = (scoped === undefined ? groups : [scoped]).flatMap((group) =>
-    group.memberProjects.map((member) => ({ group, member })),
+  const refs = (scoped === undefined ? groups : [scoped]).flatMap((group) =>
+    group.memberProjectRefs.map((ref) => ({ group, ref })),
   );
-  const spansEnvironments = new Set(members.map(({ member }) => member.environmentId)).size > 1;
-  return members.map(({ group, member }) => {
-    const sharesEnvironment = group.memberProjects.some(
-      (other) => other !== member && other.environmentId === member.environmentId,
+  const workspaceRoots = new Map(
+    projects.map((project) => [
+      boardProjectKey({ environmentId: project.environmentId, projectId: project.id }),
+      project.workspaceRoot,
+    ]),
+  );
+  const spansEnvironments = new Set(refs.map(({ ref }) => ref.environmentId)).size > 1;
+  return refs.map(({ group, ref }) => {
+    const onEnvironment = group.memberProjects.filter(
+      (member) => member.environmentId === ref.environmentId,
     );
     return {
-      environmentId: member.environmentId,
-      projectId: member.id,
+      environmentId: ref.environmentId,
+      projectId: ref.projectId,
       label: [
         group.displayName,
-        spansEnvironments ? member.environmentLabel : null,
-        sharesEnvironment ? member.workspaceRoot : null,
+        spansEnvironments ? (onEnvironment[0]?.environmentLabel ?? null) : null,
+        // Two checkouts of the group on one environment are told apart by their paths.
+        onEnvironment.length > 1 ? (workspaceRoots.get(boardProjectKey(ref)) ?? null) : null,
       ]
         .filter((part) => part !== null)
         .join(" · "),

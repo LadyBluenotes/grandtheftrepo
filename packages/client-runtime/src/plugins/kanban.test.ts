@@ -330,7 +330,7 @@ describe("createKanbanAttentionAtomFamily", () => {
 });
 
 describe("createKanbanProjectsAttentionAtomFamily", () => {
-  it("reads several projects at once, and again on a snapshot of any of their boards", async () => {
+  it("reads several projects at once, and again when their boards change", async () => {
     const other = ProjectId.make("project-2");
     const reads: unknown[] = [];
     const waiters: Array<{ readonly count: number; readonly resolve: () => void }> = [];
@@ -339,10 +339,8 @@ describe("createKanbanProjectsAttentionAtomFamily", () => {
         if (reads.length >= count) return resolve();
         waiters.push({ count, resolve });
       });
-    const boards = new Map([
-      [projectId, Atom.make(0)],
-      [other, Atom.make(0)],
-    ]);
+    // The client's signal for the boards it subscribes to; `other` need not have one.
+    const boards = Atom.make(0);
     const attention = createKanbanProjectsAttentionAtomFamily(
       connectedRuntime({
         [PLUGIN_GATEWAY_WS_METHODS.read]: (call) =>
@@ -353,7 +351,7 @@ describe("createKanbanProjectsAttentionAtomFamily", () => {
           }),
       }),
       {
-        board: ({ input }) => boards.get(input.projectId)!,
+        boards: () => boards,
         threadShells: () => Atom.make<ReadonlyArray<EnvironmentThreadShell>>([]),
       },
     );
@@ -368,7 +366,7 @@ describe("createKanbanProjectsAttentionAtomFamily", () => {
           input: { projectIds: [projectId, other] },
         },
       ]);
-      registry.set(boards.get(other)!, 1);
+      registry.set(boards, 1);
       await asked(2);
       expect(reads).toHaveLength(2);
     } finally {

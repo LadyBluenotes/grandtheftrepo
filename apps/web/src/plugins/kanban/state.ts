@@ -32,7 +32,7 @@ import { environmentSummaries } from "~/state/presentation";
 import { formatEnvironmentQueryError } from "~/state/query";
 import { environmentThreadShells } from "~/state/threads";
 import { buildThreadRouteParams } from "~/threadRoutes";
-import type { BoardEnvironment } from "./boardScope";
+import { projectIdsByEnvironment, type BoardEnvironment } from "./boardScope";
 
 const kanbanBoard = createKanbanBoardAtomFamily(connectionAtomRuntime);
 
@@ -86,17 +86,6 @@ export const kanbanStop = createPluginRpcQueryAtomFamily(connectionAtomRuntime, 
 export const kanbanStopClear = createPluginRpcCommand(connectionAtomRuntime, {
   label: "kanban:stop-clear",
   method: KANBAN_METHODS.stopClear,
-});
-
-/**
- * What waits on a person in some projects of one environment, for the strip above the board. It
- * re-reads only on the window coming back into view, a change in the projects' pending requests
- * and every board snapshot, and never polls, so a flag a sweep raises shows on the next of those.
- */
-const kanbanProjectsAttention = createKanbanProjectsAttentionAtomFamily(connectionAtomRuntime, {
-  board: kanbanBoard,
-  threadShells: environmentThreadShells.threadShellsForProjectRefsAtom,
-  focus: Atom.windowFocusSignal,
 });
 
 /**
@@ -168,18 +157,8 @@ const kanbanBoardFolders = createPluginRpcQueryAtomFamily(connectionAtomRuntime,
 const failureMessage = (result: AsyncResult.AsyncResult<unknown, unknown>) =>
   result._tag === "Failure" ? formatEnvironmentQueryError(result.cause) : null;
 
-/** Project ids per environment, sorted, so the same projects make the same read in any order. */
-const byEnvironment = (refs: ReadonlyArray<ScopedProjectRef>) => {
-  const grouped = new Map<EnvironmentId, Array<ProjectId>>();
-  for (const ref of refs)
-    grouped.set(ref.environmentId, [...(grouped.get(ref.environmentId) ?? []), ref.projectId]);
-  return [...grouped].map(
-    ([environmentId, projectIds]) => [environmentId, projectIds.toSorted()] as const,
-  );
-};
-
 const kanbanBoardEnvironmentsFamily = Atom.family((key: string) => {
-  const environments = byEnvironment(parseProjectRefCollectionKey(key));
+  const environments = projectIdsByEnvironment(parseProjectRefCollectionKey(key));
   return Atom.make((get): ReadonlyArray<BoardEnvironment> =>
     environments.map(([environmentId, projectIds]) => {
       const active = get(kanbanActiveAtom(environmentId));
@@ -227,6 +206,47 @@ const kanbanBoardsFamily = Atom.family((key: string) => {
 export const kanbanBoards = (refs: ReadonlyArray<ScopedProjectRef>) =>
   kanbanBoardsFamily(projectRefCollectionKey(refs));
 
+/**
+ * Changes with each snapshot of the boards, among one environment's `projectIds`, that have one.
+ * It subscribes to those only: subscribing to a board loads it, which creates its folder.
+ */
+const subscribedBoardsSignal = Atom.family((key: string) => {
+  const refs = parseProjectRefCollectionKey(key);
+  const projectIds = refs.map((ref) => ref.projectId);
+  return Atom.withEquality(
+    Atom.make((get) => {
+      const environmentId = refs[0]?.environmentId;
+      if (environmentId === undefined) return [];
+      // The same read `kanbanBoardEnvironments` makes for these projects, so no second request.
+      const folders = Option.getOrNull(
+        AsyncResult.value(get(kanbanBoardFolders({ environmentId, input: { projectIds } }))),
+      );
+      return (folders ?? [])
+        .filter((folder) => folder.board)
+        .map((folder) =>
+          get(kanbanBoard({ environmentId, input: { projectId: folder.projectId } })),
+        );
+    }),
+    (left, right) =>
+      left.length === right.length && left.every((value, index) => Object.is(value, right[index])),
+  );
+});
+
+/**
+ * What waits on a person in some projects of one environment, for the strip above the board,
+ * whether or not each has a board. It re-reads only on the window coming back into view, a change
+ * in the projects' pending requests and every snapshot of their boards, and never polls, so a flag
+ * a sweep raises shows on the next of those.
+ */
+const kanbanProjectsAttention = createKanbanProjectsAttentionAtomFamily(connectionAtomRuntime, {
+  boards: ({ environmentId, input }) =>
+    subscribedBoardsSignal(
+      projectRefCollectionKey(input.projectIds.map((projectId) => ({ environmentId, projectId }))),
+    ),
+  threadShells: environmentThreadShells.threadShellsForProjectRefsAtom,
+  focus: Atom.windowFocusSignal,
+});
+
 // Every `since` is an ISO instant, so instants sort as strings.
 const order = (left: string, right: string) => (left < right ? -1 : left > right ? 1 : 0);
 
@@ -236,7 +256,7 @@ export type BoardAttentionRow = KanbanProjectAttentionRow & {
 };
 
 const kanbanBoardAttentionFamily = Atom.family((key: string) => {
-  const environments = byEnvironment(parseProjectRefCollectionKey(key));
+  const environments = projectIdsByEnvironment(parseProjectRefCollectionKey(key));
   return Atom.make((get): ReadonlyArray<BoardAttentionRow> =>
     environments
       .flatMap(([environmentId, projectIds]) =>
@@ -266,7 +286,10 @@ export function boardAttentionTitle(
   return projectLabel({ environmentId: row.environmentId, projectId: row.projectId }) ?? row.title;
 }
 
-/** What waits on a person in the boards of `refs`: one read per environment, oldest first. */
+/**
+ * What waits on a person in `refs`, with or without a board: one read per environment, oldest
+ * first. Only the projects that have a board are subscribed to, to re-read on their snapshots.
+ */
 export const kanbanBoardAttention = (refs: ReadonlyArray<ScopedProjectRef>) =>
   kanbanBoardAttentionFamily(projectRefCollectionKey(refs));
 

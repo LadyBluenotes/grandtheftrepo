@@ -65,37 +65,40 @@ const waitingThreadsKey = (threads: ReadonlyArray<EnvironmentThreadShell>) =>
     )
     .join("\n");
 
-interface KanbanAttentionSources {
-  readonly board: (target: {
-    readonly environmentId: EnvironmentId;
-    readonly input: { readonly projectId: ProjectId };
-  }) => Atom.Atom<unknown>;
+interface KanbanThreadSources {
   readonly threadShells: (
     refs: ReadonlyArray<ScopedProjectRef>,
   ) => Atom.Atom<ReadonlyArray<EnvironmentThreadShell>>;
   readonly focus?: Atom.Atom<unknown>;
 }
 
-/** Changes on `focus`, a waiting-thread change in any of the projects, and each of their boards. */
+interface KanbanAttentionSources extends KanbanThreadSources {
+  readonly board: (target: {
+    readonly environmentId: EnvironmentId;
+    readonly input: { readonly projectId: ProjectId };
+  }) => Atom.Atom<unknown>;
+}
+
+/** Changes on `focus`, a waiting-thread change in any of the projects, and on `boards`. */
 const attentionSignal = (
-  sources: KanbanAttentionSources,
+  sources: KanbanThreadSources,
   environmentId: EnvironmentId,
   projectIds: ReadonlyArray<ProjectId>,
+  boards: Atom.Atom<unknown>,
 ) => {
   const threads = sources.threadShells(
     projectIds.map((projectId) => ({ environmentId, projectId })),
   );
-  const boards = projectIds.map((projectId) =>
-    sources.board({ environmentId, input: { projectId } }),
-  );
   return Atom.withEquality(
-    Atom.make((get) => [
-      sources.focus === undefined ? undefined : get(sources.focus),
-      waitingThreadsKey(get(threads)),
-      ...boards.map((board) => get(board)),
-    ]),
-    (left, right) =>
-      left.length === right.length && left.every((value, index) => Object.is(value, right[index])),
+    Atom.make(
+      (get) =>
+        [
+          sources.focus === undefined ? undefined : get(sources.focus),
+          waitingThreadsKey(get(threads)),
+          get(boards),
+        ] as const,
+    ),
+    (left, right) => left.every((value, index) => Object.is(value, right[index])),
   );
 };
 
@@ -118,24 +121,41 @@ export function createKanbanAttentionAtomFamily<R, ER>(
     method: KANBAN_METHODS.attentionList,
     staleTimeMs: 5_000,
     refreshTrigger: ({ environmentId, input }) =>
-      attentionSignal(sources, environmentId, [input.projectId]),
+      attentionSignal(
+        sources,
+        environmentId,
+        [input.projectId],
+        sources.board({ environmentId, input }),
+      ),
   });
 }
 
 /**
  * `createKanbanAttentionAtomFamily` for several projects of one environment in one read, each row
- * with its project. It re-reads on the same signals, from any of them.
+ * with its project. It re-reads on the same signals, from any of the projects, with `boards` in
+ * place of each board: the client decides which boards it subscribes to, since a project need not
+ * have one for its requests and flags to show.
  */
 export function createKanbanProjectsAttentionAtomFamily<R, ER>(
   runtime: Atom.AtomRuntime<EnvironmentRegistry.EnvironmentRegistry | R, ER>,
-  sources: KanbanAttentionSources,
+  sources: KanbanThreadSources & {
+    readonly boards: (target: {
+      readonly environmentId: EnvironmentId;
+      readonly input: { readonly projectIds: ReadonlyArray<ProjectId> };
+    }) => Atom.Atom<unknown>;
+  },
 ) {
   return createPluginRpcQueryAtomFamily(runtime, {
     label: "environment-data:kanban:attention-projects",
     method: KANBAN_METHODS.attentionListProjects,
     staleTimeMs: 5_000,
     refreshTrigger: ({ environmentId, input }) =>
-      attentionSignal(sources, environmentId, input.projectIds),
+      attentionSignal(
+        sources,
+        environmentId,
+        input.projectIds,
+        sources.boards({ environmentId, input }),
+      ),
   });
 }
 
