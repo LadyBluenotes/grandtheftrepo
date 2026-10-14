@@ -254,10 +254,21 @@ const INLINE_OPTIONS: ReadonlyMap<string, ReadonlySet<string>> = new Map([
   ["ruby", words("-e")],
 ]);
 
+/** Whether a heredoc or here-string comes before any argument but `-`, the stdin marker. */
+const readsHeredocScript = (tokens: ReadonlyArray<string>, at: number): boolean => {
+  for (let index = at + 1; index < tokens.length; index += 1) {
+    const token = tokens[index]!;
+    if (token.startsWith("<<")) return true;
+    if (token !== "-" && !token.startsWith("-")) return false;
+  }
+  return false;
+};
+
 /**
  * Whether the program `programName` names is an interpreter running a script written into the
  * command line: `node -e`, `python3 -c`, `ruby -e`, `bun --eval` or `deno eval` before its first
- * argument, or a heredoc or here-string it reads, such as `python3 - <<'EOF'` or `bash <<EOF`.
+ * argument, or a heredoc or here-string it reads before any argument but `-`, such as
+ * `python3 - <<'EOF'` or `bash <<EOF`. `python3 tool.py <<EOF` feeds a script file its input.
  * A shell's `-c` is a wrapper, judged by the command it runs, so `bash -lc 'git status'` is none.
  */
 export const runsInlineScript = (command: string, depth = 0): boolean => {
@@ -266,7 +277,7 @@ export const runsInlineScript = (command: string, depth = 0): boolean => {
     if (found === undefined) continue;
     if (found.program === null || !INTERPRETERS.has(found.program)) return false;
     const { at } = found;
-    if (tokens.slice(at + 1).some((token) => token.startsWith("<<"))) return true;
+    if (readsHeredocScript(tokens, at)) return true;
     if (SHELLS.has(programOf(tokens[at]!) ?? "")) {
       const script = tokens[scriptIndex(tokens, at)];
       return script !== undefined && depth < MAX_DEPTH && runsInlineScript(script, depth + 1);
