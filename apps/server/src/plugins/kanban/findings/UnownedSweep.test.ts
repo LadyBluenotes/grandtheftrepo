@@ -233,6 +233,42 @@ it.effect("ten old findings in one project raise one flag with the count", () =>
   ).pipe(Effect.provide(layerTest)),
 );
 
+it.effect("a finding left on two cards counts once, by its most recently reviewed copy", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const { tick, open } = yield* fixture;
+      const store = yield* KanbanStore.KanbanStore;
+      const { finding } = yield* capture("Retry loop has no backoff");
+      const { id: second } = yield* store.write(projectId, "user", {
+        action: "issue.create",
+        title: "Retry loop has no backoff",
+        status: "triage",
+      });
+      // What a move or review that failed halfway leaves: the second card holds an unreviewed copy.
+      const copyOnSecond = store.transact(projectId, (issues) =>
+        Effect.succeed({
+          result: undefined,
+          save: [{ ...issues.get(second)!, findings: [finding] }],
+        }),
+      );
+      yield* copyOnSecond;
+
+      yield* TestClock.adjust("3 days");
+      assert.deepEqual(yield* tick(), { examined: 1, acted: 1, flags: 1 });
+      assert.include(
+        (yield* open)[0]?.text ?? "",
+        "1 finding in Triage has had no owner for over 3 days",
+      );
+
+      // The review reached the first card's copy only; the reviewed copy is the canonical one.
+      yield* review(finding.id);
+      yield* copyOnSecond;
+      assert.deepEqual(yield* tick(), { examined: 1, acted: 1, flags: 0 });
+      assert.deepEqual(yield* open, []);
+    }),
+  ).pipe(Effect.provide(layerTest)),
+);
+
 it.effect("a board whose folder cannot be checked keeps its flag; a missing folder clears it", () =>
   Effect.scoped(
     Effect.gen(function* () {

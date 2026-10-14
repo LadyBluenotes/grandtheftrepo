@@ -1,4 +1,4 @@
-import type { KanbanIssue, ProjectId } from "@t3tools/contracts";
+import type { KanbanFinding, KanbanIssue, ProjectId } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
@@ -8,6 +8,7 @@ import * as ProjectService from "../../../project/ProjectService.ts";
 import * as Attention from "../../Attention.ts";
 import * as PluginSupervisor from "../../PluginSupervisor.ts";
 import * as KanbanStore from "../KanbanStore.ts";
+import { canonicalCopy } from "./FindingService.ts";
 
 const PLUGIN_ID = "kanban";
 const FLAG_KIND = "unowned_finding";
@@ -28,12 +29,19 @@ const flagText = (count: number) =>
  * The findings on the project's unarchived Triage cards, and how many of them nobody has reviewed
  * though they were captured at or before `cutoff`, in epoch milliseconds. A finding's reviewer owns
  * it, so one with no review has no owner and any review takes it on. A capture time that is not an
- * instant, as a hand edit can leave, is never old enough.
+ * instant, as a hand edit can leave, is never old enough. A finding a failed move or review left on
+ * two cards counts once, as its canonical copy across every card says.
  */
 const countUnowned = (issues: ReadonlyArray<KanbanIssue>, cutoff: number) => {
-  const findings = issues
-    .filter((issue) => issue.status === "triage" && issue.archivedAt === null)
-    .flatMap((issue) => issue.findings);
+  const canonical = new Map<string, KanbanFinding>();
+  for (const copy of issues.flatMap((issue) => issue.findings))
+    canonical.set(copy.id, canonicalCopy(canonical.get(copy.id), copy));
+  const inTriage = new Set(
+    issues
+      .filter((issue) => issue.status === "triage" && issue.archivedAt === null)
+      .flatMap((issue) => issue.findings.map((finding) => finding.id)),
+  );
+  const findings = [...canonical.values()].filter((finding) => inTriage.has(finding.id));
   const unowned = findings.filter(
     (finding) =>
       finding.review === null &&
