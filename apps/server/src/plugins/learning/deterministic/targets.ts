@@ -227,7 +227,9 @@ export const make = Effect.gen(function* () {
           if (page === undefined || page.state === "retired") {
             return yield* invalid("The knowledge draft was discarded; dismiss this proposal.");
           }
+          // An accepted page whose install failed is installed again, so a retry finishes the job.
           if (page.state === "draft") yield* store.value.accept({ id: page.id });
+          else yield* store.value.install({ projectId });
           return;
         }
         case "scheduled_task": {

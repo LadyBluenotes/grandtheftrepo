@@ -353,6 +353,7 @@ it.effect("a project gets at most five proposals a week, the costliest eligible 
 const fakeKnowledge = Effect.gen(function* () {
   const pages = yield* Ref.make<ReadonlyArray<KnowledgeEntry>>([]);
   const failing = yield* Ref.make(false);
+  const installs = yield* Ref.make(0);
   const setState = (id: number, state: KnowledgeEntry["state"]) =>
     Ref.update(pages, (all) => all.map((page) => (page.id === id ? { ...page, state } : page)));
   const layer = Layer.mock(KnowledgeStore.KnowledgeStore)({
@@ -379,10 +380,16 @@ const fakeKnowledge = Effect.gen(function* () {
         yield* setState(id, "retired");
         return (yield* Ref.get(pages)).find((page) => page.id === id)!;
       }),
+    install: () =>
+      Effect.as(
+        Ref.update(installs, (count) => count + 1),
+        [],
+      ),
   });
   return {
     context: yield* Layer.build(layer),
     pages: Ref.get(pages),
+    installs: Ref.get(installs),
     failDiscard: (fail: boolean) => Ref.set(failing, fail),
     setState,
   };
@@ -682,6 +689,28 @@ it.effect(
         assert.strictEqual((yield* knowledge.pages)[0]?.state, "accepted");
       }),
     ),
+);
+
+it.effect("accepting a page that was accepted but never installed installs it", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const world = yield* setup();
+      const knowledge = yield* fakeKnowledge;
+      world.weeks.set(WEEK_1, [
+        candidate("d15c000000000002", { steps: ["Read docs/arch.md"], form: "context_file" }),
+      ]);
+      yield* world.tick(knowledge.context);
+      const [proposal] = yield* world.store.list({ projectId: projectA.id });
+      // An earlier accept saved the page as accepted, then its install failed.
+      yield* knowledge.setState(1, "accepted");
+
+      const accepted = yield* world.store
+        .accept(proposal!.id)
+        .pipe(Effect.provide(knowledge.context));
+      assert.strictEqual(accepted.state, "accepted");
+      assert.strictEqual(yield* knowledge.installs, 1);
+    }),
+  ),
 );
 
 it.effect("accepting a draft script adds it to the project's scripts, once", () =>
