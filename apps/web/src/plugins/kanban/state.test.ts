@@ -1,7 +1,7 @@
 import { EnvironmentId, ProjectId, ThreadId } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
-import { attentionResumeTarget, buildIssuePrompt } from "./state";
+import { attentionResumeTarget, buildIssuePrompt, findDecisionSearch } from "./state";
 
 const issue = {
   id: "fix-login-redirect",
@@ -145,5 +145,28 @@ describe("attentionResumeTarget", () => {
       params: { pluginId: "learning" },
       search: { machine: "remote" },
     });
+  });
+});
+
+describe("findDecisionSearch", () => {
+  const environmentId = EnvironmentId.make("env-1");
+  const thread = { environmentId, projectId: ProjectId.make("thread-project") };
+  const board = { environmentId, projectId: ProjectId.make("board-project"), view: undefined };
+
+  it("opens the decisions of the thread's project, over what the board showed", () => {
+    expect(findDecisionSearch(board, thread)).toEqual({
+      view: "decisions",
+      environmentId,
+      projectId: thread.projectId,
+    });
+  });
+
+  it("keeps the board's project without a thread, and leaves the pick to the board otherwise", () => {
+    expect(findDecisionSearch(board, null)).toEqual({
+      view: "decisions",
+      environmentId,
+      projectId: board.projectId,
+    });
+    expect(findDecisionSearch({ diff: "1" }, undefined)).toEqual({ view: "decisions" });
   });
 });
