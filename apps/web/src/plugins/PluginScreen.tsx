@@ -20,7 +20,12 @@ export function PluginScreen({
 }) {
   return (
     <PluginEnvironmentContext.Provider value={environmentId}>
-      <PluginScreenBody pluginId={pluginId} environmentId={environmentId} />
+      {/* Keyed by environment: a screen's state, such as a selected project, belongs to one. */}
+      <PluginScreenBody
+        key={environmentId ?? "primary"}
+        pluginId={pluginId}
+        environmentId={environmentId}
+      />
     </PluginEnvironmentContext.Provider>
   );
 }
