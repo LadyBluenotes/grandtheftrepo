@@ -115,7 +115,12 @@ export const promptQueryWords = (query: string): ReadonlyArray<string> =>
       query
         .split(/\s+/)
         .filter((word) => word !== "")
-        .map((word) => Array.from(word).slice(0, PROMPT_QUERY_WORD_MAX_LENGTH).join("")),
+        // Matching ignores ASCII case, so `File` and `FILE` are one word here too.
+        .map((word) =>
+          Array.from(word.replace(/[A-Z]/g, (letter) => letter.toLowerCase()))
+            .slice(0, PROMPT_QUERY_WORD_MAX_LENGTH)
+            .join(""),
+        ),
     ),
   ].slice(0, PROMPT_QUERY_MAX_WORDS);
 

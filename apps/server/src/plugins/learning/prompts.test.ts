@@ -257,6 +257,12 @@ it.effect("a search matches every word in the title or body, active first, most 
         })).map((p) => p.id),
         [tests.id, archived.id, review.id].toSorted((a, b) => b - a),
       );
+      // Words that differ only in ASCII case are one word, so they don't use up the eight.
+      const cased = ["file", "File", "FILE", "fIle", "FIle", "FILe", "fiLE", "filE", "tests"];
+      assert.deepStrictEqual(
+        (yield* prompts.search({ projectId, query: cased.join(" ") })).prompts.map((p) => p.id),
+        [tests.id],
+      );
     }),
   ),
 );
