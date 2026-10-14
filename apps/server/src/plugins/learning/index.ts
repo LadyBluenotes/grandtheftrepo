@@ -20,6 +20,7 @@ import * as PromoteSweep from "./PromoteSweep.ts";
 import * as Promoter from "./Promoter.ts";
 import * as Checks from "./readiness.ts";
 import * as RegressionSweep from "./regressions/RegressionSweep.ts";
+import * as ReviewSweep from "./ReviewSweep.ts";
 import * as UnclassifiedSweep from "./UnclassifiedSweep.ts";
 
 /** Every producer's handlers, run by one reactor from the first event the server ever committed. */
@@ -43,6 +44,8 @@ const start = Effect.gen(function* () {
   // Classify before promote, so a tick hands over what it just classified.
   yield* supervisor.register(yield* ClassifySweep.sweep);
   yield* supervisor.register(yield* PromoteSweep.sweep);
+  // After promote, so a draft written this tick is flagged for review in the same one.
+  yield* supervisor.register(yield* ReviewSweep.sweep);
   yield* supervisor.register(yield* RegressionSweep.sweep);
   // A verdict is permanent, so the outcome sweep waits for the reactor that records corrections.
   yield* supervisor.register(yield* OutcomeSweep.sweep(reactor.drain));
@@ -58,11 +61,13 @@ const start = Effect.gen(function* () {
  * tickets reopened from Done and security findings.
  * Two sweeps turn them into learning items, one per recurring failure mode per
  * project, and hand each item once to the owner kind the rules or a person
- * picked; a third opens an item for each efficiency measure that worsened from
- * one week to the next, a fourth flags a handover whose failure mode kept
- * recurring, or went quiet, in the four weeks after it, and a fifth flags
- * corrections left without a mode for a week. MCP tools expose corrections and
- * items to agents.
+ * picked, as a draft someone other than its proposer reviews; a third flags
+ * each handover waiting for that review, a fourth opens an item for each
+ * efficiency measure that worsened from one week to the next, a fifth flags
+ * an adopted handover whose failure mode kept recurring, or went quiet, in the
+ * four weeks after its adoption, and a sixth flags corrections left without a
+ * mode for a week. MCP tools expose corrections and items to agents, and take
+ * an agent's verdict on a handover.
  */
 export const plugin = {
   id: "learning",

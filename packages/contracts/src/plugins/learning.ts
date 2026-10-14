@@ -9,6 +9,8 @@ const LEARNING_WS_METHODS = {
   item: "learning.item",
   itemsSetDisposition: "learning.itemsSetDisposition",
   correctionDeclare: "learning.correctionDeclare",
+  promotionReview: "learning.promotionReview",
+  promotionRollBack: "learning.promotionRollBack",
 } as const;
 
 /** Which kind of event produced a correction. */
@@ -84,7 +86,10 @@ export const LearningOwnerKind = Schema.Literals([
 ]);
 export type LearningOwnerKind = typeof LearningOwnerKind.Type;
 
-/** `candidate` waits for promotion, `promoted` was handed over; only a person closes. */
+/**
+ * `candidate` waits for its handover to be written and reviewed, `promoted` had it adopted; only a
+ * person closes.
+ */
 export const LearningItemState = Schema.Literals(["open", "candidate", "promoted", "closed"]);
 export type LearningItemState = typeof LearningItemState.Type;
 
@@ -122,6 +127,27 @@ export const LearningItemEvidence = Schema.Struct({
 });
 export type LearningItemEvidence = typeof LearningItemEvidence.Type;
 
+/**
+ * Where a handover is: `proposed` until its owner kind's promoter writes the draft, `in_review`
+ * from then until a reviewer adopts or rejects it, and `rolled_back` once an adopted one is undone.
+ * `failed` gave up writing the draft after five attempts.
+ */
+export const LearningPromotionState = Schema.Literals([
+  "proposed",
+  "in_review",
+  "adopted",
+  "rejected",
+  "rolled_back",
+  "failed",
+]);
+export type LearningPromotionState = typeof LearningPromotionState.Type;
+
+/**
+ * Who acted on a promotion: `user` for a person on any client, `thread:<id>` for an agent in that
+ * thread, `supervisor` for the plugin's own rules.
+ */
+const LearningActor = Schema.String;
+
 /** Handing an item to one owner kind, once per project, failure mode and owner kind. */
 export const LearningPromotion = Schema.Struct({
   id: Schema.Int,
@@ -129,21 +155,59 @@ export const LearningPromotion = Schema.Struct({
   projectId: ProjectId,
   failureMode: Schema.String,
   ownerKind: LearningOwnerKind,
-  state: Schema.Literals(["pending", "delivered", "failed"]),
+  state: LearningPromotionState,
+  /**
+   * Who proposed it: `user` when a person set the item's owner kind, `supervisor` when the rules
+   * did. Their own verdict on it is refused.
+   */
+  proposedBy: LearningActor,
   /** Failed attempts so far; the fifth makes it `failed`. */
   attempts: Schema.Int,
   /** The earliest the next attempt runs, after a failed one; null when nothing is waiting on time. */
   nextAttemptAt: Schema.NullOr(IsoDateTime),
   lastError: Schema.NullOr(Schema.String),
+  /** When the promoter handed the draft over and review began; null before. */
+  deliveredAt: Schema.NullOr(IsoDateTime),
+  /** When a reviewer adopted it, where its outcome window starts; null until then. */
+  adoptedAt: Schema.NullOr(IsoDateTime),
+  rolledBackAt: Schema.NullOr(IsoDateTime),
+  rolledBackBy: Schema.NullOr(LearningActor),
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
 });
 export type LearningPromotion = typeof LearningPromotion.Type;
 
+/** `revise` asks for changes and leaves the promotion in review; the others decide it. */
+export const LearningReviewVerdict = Schema.Literals(["adopt", "reject", "revise"]);
+export type LearningReviewVerdict = typeof LearningReviewVerdict.Type;
+
+/** One reviewer's verdict on a promotion in review. */
+export const LearningPromotionReview = Schema.Struct({
+  id: Schema.Int,
+  promotionId: Schema.Int,
+  verdict: LearningReviewVerdict,
+  reviewer: LearningActor,
+  /** Bounded, with secrets redacted. */
+  note: Schema.NullOr(Schema.String),
+  createdAt: IsoDateTime,
+});
+export type LearningPromotionReview = typeof LearningPromotionReview.Type;
+
+/** What the four weeks after an adoption showed, judged once they are complete. */
+export const LearningPromotionOutcome = Schema.Struct({
+  promotionId: Schema.Int,
+  verdict: Schema.Literals(["ineffective", "settled", "improved", "inconclusive"]),
+  judgedAt: IsoDateTime,
+});
+export type LearningPromotionOutcome = typeof LearningPromotionOutcome.Type;
+
 export const LearningItemDetail = Schema.Struct({
   item: LearningItem,
   evidence: Schema.Array(LearningItemEvidence),
   promotions: Schema.Array(LearningPromotion),
+  /** Every verdict on the item's promotions, oldest first. */
+  reviews: Schema.Array(LearningPromotionReview),
+  outcomes: Schema.Array(LearningPromotionOutcome),
 });
 export type LearningItemDetail = typeof LearningItemDetail.Type;
 
@@ -205,6 +269,21 @@ export const LearningItemsSetDispositionInput = Schema.Struct({
 export type LearningItemsSetDispositionInput = typeof LearningItemsSetDispositionInput.Type;
 
 /**
+ * A verdict on a promotion in review, by anyone but its proposer. `adopt` promotes the item and
+ * starts the outcome window; `reject` reopens the item; `revise` keeps it in review.
+ */
+export const LearningPromotionReviewInput = Schema.Struct({
+  promotionId: Schema.Int,
+  verdict: LearningReviewVerdict,
+  note: Schema.optional(Schema.String.check(Schema.isMaxLength(500))),
+});
+export type LearningPromotionReviewInput = typeof LearningPromotionReviewInput.Type;
+
+/** Undoes an adopted promotion and reopens its item. */
+export const LearningPromotionRollBackInput = Schema.Struct({ promotionId: Schema.Int });
+export type LearningPromotionRollBackInput = typeof LearningPromotionRollBackInput.Type;
+
+/**
  * The plugin's methods and the gateway each answers behind. They are not in the WebSocket RPC
  * group, which is at TypeScript's instantiation limit; the gateway RPCs dispatch them by name.
  */
@@ -249,6 +328,21 @@ export const LEARNING_METHODS = definePluginMethods({
     gateway: "operate",
     input: LearningCorrectionDeclareInput,
     output: LearningCorrection,
+    error: LearningError,
+  },
+  /** A client's verdict is a person's (`user`); agents give theirs with `learning_promotion_review`. */
+  promotionReview: {
+    method: LEARNING_WS_METHODS.promotionReview,
+    gateway: "operate",
+    input: LearningPromotionReviewInput,
+    output: LearningPromotion,
+    error: LearningError,
+  },
+  promotionRollBack: {
+    method: LEARNING_WS_METHODS.promotionRollBack,
+    gateway: "operate",
+    input: LearningPromotionRollBackInput,
+    output: LearningPromotion,
     error: LearningError,
   },
 });

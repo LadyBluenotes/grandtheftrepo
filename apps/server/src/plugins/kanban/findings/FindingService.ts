@@ -117,12 +117,19 @@ const best =
       .map((match) => match.item);
 
 /**
- * Every issue holding finding `id`, and the finding as the first of them has it. Normally one; a
- * move whose second write failed leaves it on two until a move is tried again.
+ * Every issue holding finding `id`, and its canonical copy. Normally there is one holder; a move
+ * whose second write failed leaves it on two until a move is tried again, and a review that failed
+ * halfway can leave the copies apart. The canonical copy is the most recently reviewed one, by
+ * `review.at`, an unreviewed copy counting as oldest; on a tie, the first holder's.
  */
 const locate = (issues: ReadonlyMap<string, KanbanIssue>, id: string) => {
   const held = [...issues.values()].filter((issue) => issue.findings.some((f) => f.id === id));
-  const finding = held[0]?.findings.find((f) => f.id === id);
+  const copies = held.flatMap((issue) => issue.findings.filter((f) => f.id === id));
+  const finding = copies.reduce<KanbanFinding | undefined>(
+    (latest, copy) =>
+      latest === undefined || (copy.review?.at ?? "") > (latest.review?.at ?? "") ? copy : latest,
+    undefined,
+  );
   return finding === undefined
     ? Effect.fail(notFound(`No finding "${id}".`))
     : Effect.succeed({ held, finding });
@@ -281,6 +288,11 @@ const make = Effect.gen(function* () {
             code: "gated",
             message: "A finding is reviewed by someone other than the one who captured it.",
           });
+        // Reviewing an open finding as open decides nothing, yet would give it an owner.
+        if (disposition === "open" && finding.disposition === "open")
+          return yield* invalid(
+            `Finding "${id}" is already open: choose what to do about it, or leave it unreviewed.`,
+          );
         const reviewed: KanbanFinding = { ...finding, disposition, review: { by, at, reason } };
         // Every copy, so a move tried again keeps the review whichever copy it takes.
         return {
@@ -308,16 +320,22 @@ const make = Effect.gen(function* () {
               ? `Finding "${id}" already has a card of its own, ${held[0]!.id}.`
               : `Finding "${id}" is already on ${issueId}.`,
           );
+        // A destination already holding it gets the canonical copy too, before the others go.
         const to =
-          already ??
-          (yield* placed(
-            issues,
-            issueId,
-            finding,
-            by,
-            at,
-            `${id} moved from ${from.map((issue) => issue.id).join(", ")}`,
-          ));
+          already === undefined
+            ? yield* placed(
+                issues,
+                issueId,
+                finding,
+                by,
+                at,
+                `${id} moved from ${from.map((issue) => issue.id).join(", ")}`,
+              )
+            : {
+                ...already,
+                findings: already.findings.map((f) => (f.id === id ? finding : f)),
+                updatedAt: at,
+              };
         const left = from.map((issue): KanbanIssue => ({
           ...issue,
           findings: issue.findings.filter((f) => f.id !== id),
@@ -325,10 +343,7 @@ const make = Effect.gen(function* () {
           log: [...issue.log, { at, by, kind: "note", text: `finding ${id} moved to ${to.id}` }],
         }));
         // Added before it is removed: a failed later write leaves it on two issues, not on none.
-        return {
-          result: { projectId, issueId: to.id, finding },
-          save: already === undefined ? [to, ...left] : left,
-        };
+        return { result: { projectId, issueId: to.id, finding }, save: [to, ...left] };
       }),
     );
 

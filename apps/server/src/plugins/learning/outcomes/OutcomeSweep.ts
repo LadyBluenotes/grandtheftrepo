@@ -40,15 +40,17 @@ const promotionOf = (key: string) => {
 };
 
 /**
- * Checks each delivered promotion's bet: did the handover reduce its failure mode? Once a
- * promotion's 28 days after delivery are complete, the sweep counts the project's corrections
- * declaring the item's failure mode in the 28 days before and after, judges it once (`judge`) and
- * writes the verdict to `promotion_outcome`. `ineffective` raises a `promotion_ineffective` flag
+ * Checks each adopted promotion's bet: did the handover reduce its failure mode? Once a
+ * promotion's 28 days after adoption are complete, the sweep counts the project's corrections
+ * declaring the item's failure mode in the 28 days before and after its adoption, judges it once
+ * (`judge`) and writes the verdict to `promotion_outcome`. A promotion still in review, or turned
+ * down, was never in effect and is not judged. `ineffective` raises a `promotion_ineffective` flag
  * and `settled` a `promotion_settled` one, both keyed by promotion and project; nothing else
  * does. A promotion whose owner kind is `local_only` has no handover and is never judged. A
- * person who set the item's disposition after the delivery, closing it or sending it to another
+ * person who set the item's disposition after the adoption, closing it or sending it to another
  * owner kind, has already answered: that promotion is judged without a flag, and an open flag is
- * cleared on the next tick. The sweep never closes or reroutes an item.
+ * cleared on the next tick, as is one whose promotion was rolled back. The sweep never closes or
+ * reroutes an item.
  *
  * A verdict is permanent, so a promotion is judged only from complete corrections. `caughtUp` is
  * the drain of the reactor that records them: a tick judges nothing, and only counts the
@@ -58,7 +60,7 @@ const promotionOf = (key: string) => {
  *
  * The flag is raised before the verdict is written, so a crash between them judges again and
  * raises the same flag. Open flags are checked first, then a tick judges up to a batch of
- * promotions, earliest delivered first. `examined` counts the open flags checked and the
+ * promotions, earliest adopted first. `examined` counts the open flags checked and the
  * promotions judged or held back, `acted` the flags cleared and the verdicts written, `flags` the
  * flags standing after the tick. A dry run counts and writes nothing.
  */
@@ -105,13 +107,13 @@ export const sweep = (caughtUp: Effect.Effect<void, EventSink.EventSinkV2Error>)
             : yield* sql<{
                 readonly id: number;
                 readonly verdict: Verdict;
-                readonly delivered_at: string;
+                readonly adopted_at: string;
                 readonly disposition_at: string | null;
-              }>`SELECT o.promotion_id AS id, o.verdict, p.updated_at AS delivered_at, i.disposition_at
+              }>`SELECT o.promotion_id AS id, o.verdict, p.adopted_at, i.disposition_at
               FROM promotion_outcome o
               JOIN learning_promotions p ON p.id = o.promotion_id
               JOIN learning_items i ON i.id = p.item_id
-              WHERE o.promotion_id IN ${sql.in(openIds)}`;
+              WHERE o.promotion_id IN ${sql.in(openIds)} AND p.state = 'adopted'`;
         const byId = new Map(standing.map((row) => [row.id, row]));
         for (const { kind, key } of open) {
           examined += 1;
@@ -120,7 +122,7 @@ export const sweep = (caughtUp: Effect.Effect<void, EventSink.EventSinkV2Error>)
           if (
             row !== undefined &&
             flagKind(row.verdict) === kind &&
-            !respondedTo(row.delivered_at, row.disposition_at)
+            !respondedTo(row.adopted_at, row.disposition_at)
           ) {
             flags += 1;
             continue;
@@ -134,16 +136,15 @@ export const sweep = (caughtUp: Effect.Effect<void, EventSink.EventSinkV2Error>)
           readonly project_id: ProjectId;
           readonly failure_mode: string;
           readonly owner_kind: LearningOwnerKind;
-          readonly delivered_at: string;
+          readonly adopted_at: string;
           readonly disposition_at: string | null;
-        }>`SELECT p.id, p.project_id, p.failure_mode, p.owner_kind, p.updated_at AS delivered_at,
-          i.disposition_at
+        }>`SELECT p.id, p.project_id, p.failure_mode, p.owner_kind, p.adopted_at, i.disposition_at
         FROM learning_promotions p
         JOIN learning_items i ON i.id = p.item_id
         LEFT JOIN promotion_outcome o ON o.promotion_id = p.id
-        WHERE p.state = 'delivered' AND p.owner_kind != 'local_only'
-          AND p.updated_at <= ${latestComplete(now)} AND o.promotion_id IS NULL
-        ORDER BY p.updated_at, p.id
+        WHERE p.state = 'adopted' AND p.owner_kind != 'local_only'
+          AND p.adopted_at <= ${latestComplete(now)} AND o.promotion_id IS NULL
+        ORDER BY p.adopted_at, p.id
         LIMIT ${BATCH_SIZE}`;
         if (due.length > 0 && !(yield* correctionsComplete)) {
           return { examined: examined + due.length, acted, flags };
@@ -151,7 +152,7 @@ export const sweep = (caughtUp: Effect.Effect<void, EventSink.EventSinkV2Error>)
         for (const promotion of due) {
           examined += 1;
           acted += 1;
-          const around = windows(promotion.delivered_at);
+          const around = windows(promotion.adopted_at);
           const counts = {
             before: yield* CorrectionStore.countDeclared({
               projectId: promotion.project_id,
@@ -165,7 +166,7 @@ export const sweep = (caughtUp: Effect.Effect<void, EventSink.EventSinkV2Error>)
             }),
           };
           const verdict = judge(counts);
-          const flag = respondedTo(promotion.delivered_at, promotion.disposition_at)
+          const flag = respondedTo(promotion.adopted_at, promotion.disposition_at)
             ? null
             : flagFor(verdict, {
                 failureMode: promotion.failure_mode,

@@ -1,8 +1,13 @@
 import {
+  IsoDateTime,
   KanbanActor,
+  KanbanAlternative,
   KanbanBlock,
   KanbanCriterion,
   KanbanDecision,
+  KanbanDecisionRef,
+  KanbanDecisionRevision,
+  KanbanDecisionState,
   KanbanFinding,
   KanbanLabel,
   KanbanLogEntry,
@@ -14,6 +19,8 @@ import {
   KanbanThreadLink,
   KanbanTier,
   KanbanVerification,
+  ThreadId,
+  TrimmedNonEmptyString,
   type KanbanIssue,
 } from "@t3tools/contracts";
 import { fromYaml } from "@t3tools/shared/schemaYaml";
@@ -167,21 +174,78 @@ export function serializeIssue(issue: KanbanIssue, project: string): string {
   return `---\n${stringifyYaml(front, { lineWidth: 0 })}---\n${body}\n## Log\n${logText}`;
 }
 
+/** How one decision names another: `<category>/<id>`. */
+export const decisionRef = (decision: Pick<KanbanDecision, "category" | "id">) =>
+  `${decision.category}/${decision.id}`;
+
+/** Before decisions had a state, each was `for` or `against` its title. Read, never written. */
+const LegacyStance = Schema.Literals(["for", "against"]);
+
+/**
+ * One decision as the file holds it. Everything added since the first version is optional, so an
+ * older file still reads; `parseDecisions` fills it in and `serializeDecisions` writes it all.
+ */
+const DecisionEntry = Schema.Struct({
+  id: KanbanSlug,
+  state: Schema.optional(KanbanDecisionState),
+  title: TrimmedNonEmptyString,
+  why: Schema.String,
+  alternatives: Schema.optional(Schema.Array(KanbanAlternative)),
+  reconsiderWhen: Schema.optional(Schema.NullOr(Schema.String)),
+  supersedes: Schema.optional(Schema.Array(KanbanDecisionRef)),
+  supersededBy: Schema.optional(Schema.NullOr(KanbanDecisionRef)),
+  issues: Schema.Array(KanbanSlug),
+  threads: Schema.optional(Schema.Array(ThreadId)),
+  by: KanbanActor,
+  at: IsoDateTime,
+  revisions: Schema.optional(Schema.Array(KanbanDecisionRevision)),
+  stance: Schema.optional(LegacyStance),
+  /** The file's own `category` wins; an entry's is ignored. */
+  category: Schema.optional(KanbanSlug),
+});
+
 const DecisionFile = fromYaml(
   Schema.Struct({
     category: Schema.optional(Schema.NullOr(Schema.String)),
     project: Schema.optional(Schema.NullOr(Schema.String)),
-    decisions: Schema.optional(
-      Schema.NullOr(
-        Schema.Array(
-          Schema.Struct({ ...KanbanDecision.fields, category: Schema.optional(KanbanSlug) }),
-        ),
-      ),
-    ),
+    decisions: Schema.optional(Schema.NullOr(Schema.Array(DecisionEntry))),
   }),
 );
 const decodeDecisionFile = Schema.decodeUnknownSync(DecisionFile);
 const encodeDecisionFile = Schema.encodeSync(DecisionFile);
+
+/**
+ * A decision from its entry. One written with a stance is accepted, and its title becomes its one
+ * alternative, chosen for `for` and rejected for `against`, with the why as the reason. Nothing
+ * says whether that reason was permanent, so it reads as contextual: worth a second look.
+ */
+const fromEntry = (category: string, entry: typeof DecisionEntry.Type): KanbanDecision => ({
+  category,
+  id: entry.id,
+  state: entry.state ?? "accepted",
+  title: entry.title,
+  why: entry.why,
+  alternatives:
+    entry.alternatives ??
+    (entry.stance === undefined
+      ? []
+      : [
+          {
+            title: entry.title,
+            disposition: entry.stance === "for" ? "chosen" : "rejected",
+            reason: entry.why,
+            reasonKind: "contextual",
+          },
+        ]),
+  reconsiderWhen: entry.reconsiderWhen ?? null,
+  supersedes: entry.supersedes ?? [],
+  supersededBy: entry.supersededBy ?? null,
+  issues: entry.issues,
+  threads: entry.threads ?? [],
+  by: entry.by,
+  at: entry.at,
+  revisions: entry.revisions ?? [],
+});
 
 /** Null when the file is not a decision file this version can read. */
 export function parseDecisions(
@@ -189,12 +253,13 @@ export function parseDecisions(
   text: string,
 ): ReadonlyArray<KanbanDecision> | null {
   try {
-    return (decodeDecisionFile(text).decisions ?? []).map((d) => ({ ...d, category }));
+    return (decodeDecisionFile(text).decisions ?? []).map((entry) => fromEntry(category, entry));
   } catch {
     return null;
   }
 }
 
+/** The file for a category, every field written; a stance never is. */
 export function serializeDecisions(
   category: string,
   project: string,

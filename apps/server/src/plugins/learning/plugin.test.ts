@@ -63,6 +63,7 @@ it.effect(
           assert.deepEqual((yield* supervisor.status).sweeps, [
             { plugin: "learning", name: "classify" },
             { plugin: "learning", name: "promote" },
+            { plugin: "learning", name: "reviews" },
             { plugin: "learning", name: "regressions" },
             { plugin: "learning", name: "outcomes" },
             { plugin: "learning", name: "unclassified" },
@@ -84,9 +85,11 @@ it.effect(
             [
               ["classify", "ok", 1, 1, 0],
               ["promote", "ok", 1, 1, 0],
+              // No promoter runs for policy, so no draft waits for review.
+              ["reviews", "ok", 0, 0, 0],
               // Telemetry is off, so there is nothing to compare.
               ["regressions", "ok", 0, 0, 0],
-              // The one promotion is still pending, so nothing is delivered to judge.
+              // The one promotion is still proposed, so nothing is adopted to judge.
               ["outcomes", "ok", 0, 0, 0],
               // The one correction declares its mode.
               ["unclassified", "ok", 0, 0, 0],
@@ -102,7 +105,7 @@ it.effect(
           );
           assert.deepEqual(
             yield* sql`SELECT owner_kind, state, attempts FROM learning_promotions`,
-            [{ owner_kind: "policy", state: "pending", attempts: 0 }],
+            [{ owner_kind: "policy", state: "proposed", attempts: 0 }],
           );
         }).pipe(Effect.provide(layerHost));
       }),

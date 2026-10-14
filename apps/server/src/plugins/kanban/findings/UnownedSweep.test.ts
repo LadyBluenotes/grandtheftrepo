@@ -102,7 +102,7 @@ const capture = (title: string, issueId?: string) =>
 
 const review = (id: string) =>
   Effect.flatMap(FindingService.FindingService, (findings) =>
-    findings.review({ projectId, id, disposition: "open", reason: "Mine now." }, "user"),
+    findings.review({ projectId, id, disposition: "fix_now", reason: "Mine now." }, "user"),
   );
 
 it.effect(
@@ -143,7 +143,7 @@ it.effect(
         assert.deepEqual(yield* tick(), { examined: 1, acted: 0, flags: 1 });
         assert.strictEqual(yield* changes, unchanged);
 
-        // A review takes it on, even one that keeps it open; the next tick clears the flag.
+        // A review takes it on; the next tick clears the flag.
         yield* review(finding.id);
         assert.deepEqual(yield* tick(), { examined: 1, acted: 1, flags: 0 });
         assert.deepEqual(yield* open, []);

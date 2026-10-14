@@ -27,8 +27,8 @@ const flagText = (count: number) =>
 /**
  * The findings on the project's unarchived Triage cards, and how many of them nobody has reviewed
  * though they were captured at or before `cutoff`, in epoch milliseconds. A finding's reviewer owns
- * it, so one with no review has no owner; reviewing it, even to `open`, takes it on. A capture time
- * that is not an instant, as a hand edit can leave, is never old enough.
+ * it, so one with no review has no owner and any review takes it on. A capture time that is not an
+ * instant, as a hand edit can leave, is never old enough.
  */
 const countUnowned = (issues: ReadonlyArray<KanbanIssue>, cutoff: number) => {
   const findings = issues

@@ -104,17 +104,110 @@ describe("KanbanFiles", () => {
       {
         category: "auth",
         id: "keep-ttl",
-        stance: "for" as const,
+        state: "accepted" as const,
         title: "Keep session TTL at 30m",
         why: "Extending it hides the bug.",
+        alternatives: [
+          {
+            title: "Keep 30m",
+            disposition: "chosen" as const,
+            reason: "Matches the IdP.",
+            reasonKind: "contextual" as const,
+          },
+          {
+            title: "Extend to 24h",
+            disposition: "rejected" as const,
+            reason: "Hides the redirect bug.",
+            reasonKind: "permanent" as const,
+          },
+        ],
+        reconsiderWhen: "The IdP session length changes.",
+        supersedes: ["auth/short-ttl"],
+        supersededBy: null,
         issues: ["fix-login-redirect"],
+        threads: [ThreadId.make("thr_1")],
         by: "user",
         at: "2026-10-12T14:00:00.000Z",
+        revisions: [{ at: "2026-10-12T14:00:00.000Z", by: "user", change: "created: accepted" }],
       },
     ];
     const text = serializeDecisions("auth", "grandtheftrepo", decisions);
     assert.deepStrictEqual(parseDecisions("auth", text), decisions);
     assert.strictEqual(parseDecisions("auth", "decisions: [not: valid"), null);
+  });
+
+  it("reads a decision written with a stance as accepted, with its title as the one alternative", () => {
+    const legacy = [
+      "category: auth",
+      "project: grandtheftrepo",
+      "decisions:",
+      "  - id: keep-ttl",
+      "    stance: for",
+      "    title: Keep session TTL at 30m",
+      "    why: Extending it hides the bug.",
+      "    issues: [fix-login-redirect]",
+      "    by: user",
+      '    at: "2026-10-12T14:00:00.000Z"',
+      "  - id: retries-on-login",
+      "    stance: against",
+      "    title: Retries on login",
+      '    why: ""',
+      "    issues: []",
+      "    by: thread:thr_1",
+      '    at: "2026-10-12T15:00:00.000Z"',
+      "",
+    ].join("\n");
+    const parsed = parseDecisions("auth", legacy);
+    const common = {
+      category: "auth",
+      state: "accepted" as const,
+      reconsiderWhen: null,
+      supersedes: [],
+      supersededBy: null,
+      threads: [],
+      revisions: [],
+    };
+    assert.deepStrictEqual(parsed, [
+      {
+        ...common,
+        id: "keep-ttl",
+        title: "Keep session TTL at 30m",
+        why: "Extending it hides the bug.",
+        alternatives: [
+          {
+            title: "Keep session TTL at 30m",
+            disposition: "chosen",
+            reason: "Extending it hides the bug.",
+            reasonKind: "contextual",
+          },
+        ],
+        issues: ["fix-login-redirect"],
+        by: "user",
+        at: "2026-10-12T14:00:00.000Z",
+      },
+      {
+        ...common,
+        id: "retries-on-login",
+        title: "Retries on login",
+        why: "",
+        alternatives: [
+          {
+            title: "Retries on login",
+            disposition: "rejected",
+            reason: "",
+            reasonKind: "contextual",
+          },
+        ],
+        issues: [],
+        by: "thread:thr_1",
+        at: "2026-10-12T15:00:00.000Z",
+      },
+    ]);
+    // Written back in the new shape, it reads the same and carries no stance.
+    const saved = serializeDecisions("auth", "grandtheftrepo", parsed ?? []);
+    assert.notMatch(saved, /stance/);
+    assert.match(saved, /^ {4}state: accepted$/m);
+    assert.deepStrictEqual(parseDecisions("auth", saved), parsed);
   });
 
   it("slugs titles and resolves collisions", () => {

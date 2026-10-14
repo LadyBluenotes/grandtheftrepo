@@ -226,6 +226,12 @@ describe("FindingService", () => {
         findings.review({ projectId, id: finding.id, disposition, reason: `${by} says so` }, by);
 
       assert.include(yield* failure(review(`thread:${finder}`, "rejected")), "gated:");
+      // Open is no decision on an open finding, and must not give it an owner.
+      assert.include(
+        yield* failure(review("user", "open")),
+        `invalid: Finding "${finding.id}" is already open`,
+      );
+      assert.isNull((yield* store.getIssue({ projectId, id: issueId })).findings[0]?.review);
       const rejected = yield* review("user", "rejected");
       assert.strictEqual(rejected.finding.disposition, "rejected");
       assert.deepStrictEqual(rejected.finding.review, {
@@ -299,6 +305,50 @@ describe("FindingService", () => {
         yield* failure(findings.move({ projectId, id: finding.id, issueId: right }, "user")),
         "invalid: Finding",
       );
+    }).pipe(Effect.provide(layerTest)),
+  );
+
+  it.effect("a move tried again gives the destination the latest review before the rest go", () =>
+    Effect.gen(function* () {
+      const findings = yield* FindingService.FindingService;
+      const store = yield* KanbanStore.KanbanStore;
+      const failing = yield* FailingWrites;
+      // Created first, so a review writes the source's copy before the destination's.
+      const { id: wrong } = yield* store.write(projectId, "user", {
+        action: "issue.create",
+        title: "Wrong ticket",
+      });
+      const { id: right } = yield* store.write(projectId, "user", {
+        action: "issue.create",
+        title: "Right ticket",
+      });
+      const { finding } = yield* capture((yield* search(finder)).searchId, { issueId: wrong });
+      const moveRight = findings.move({ projectId, id: finding.id, issueId: right }, "user");
+
+      // The move adds it to the destination, then fails to take it off the source.
+      failing.add(`${wrong}.md`);
+      assert.include(yield* failure(moveRight), "io:");
+      // A review updates the source's copy, then fails on the destination's.
+      failing.clear();
+      failing.add(`${right}.md`);
+      assert.include(
+        yield* failure(
+          findings.review(
+            { projectId, id: finding.id, disposition: "ticketed", reason: "Filed upstream." },
+            "user",
+          ),
+        ),
+        "io:",
+      );
+      failing.clear();
+      assert.isNull((yield* store.getIssue({ projectId, id: right })).findings[0]?.review);
+
+      const retried = yield* moveRight;
+      assert.strictEqual(retried.finding.disposition, "ticketed");
+      assert.deepStrictEqual((yield* store.getIssue({ projectId, id: right })).findings, [
+        retried.finding,
+      ]);
+      assert.deepStrictEqual((yield* store.getIssue({ projectId, id: wrong })).findings, []);
     }).pipe(Effect.provide(layerTest)),
   );
 
