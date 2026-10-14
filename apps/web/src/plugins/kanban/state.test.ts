@@ -108,4 +108,23 @@ describe("attentionResumeTarget", () => {
   it("has nowhere to go for a thread action without a thread", () => {
     expect(attentionResumeTarget(row("thread"), board)).toBeNull();
   });
+
+  it("opens a plugin's screen on the board's environment, with the tab and record named", () => {
+    const plugin = (patch: { readonly tab?: string; readonly recordId?: string }) =>
+      ({
+        resumeAction: { label: "Open item", target: "plugin", pluginId: "learning", ...patch },
+        threadId: ThreadId.make("thread-1"),
+      }) as const;
+    expect(attentionResumeTarget(plugin({ tab: "items", recordId: "12" }), board)).toEqual({
+      to: "/plugins/$pluginId",
+      params: { pluginId: "learning" },
+      search: { machine: "remote", tab: "items", recordId: "12" },
+    });
+    // Without a tab or record the screen opens as it would from the sidebar.
+    expect(attentionResumeTarget(plugin({}), board)).toStrictEqual({
+      to: "/plugins/$pluginId",
+      params: { pluginId: "learning" },
+      search: { machine: "remote" },
+    });
+  });
 });

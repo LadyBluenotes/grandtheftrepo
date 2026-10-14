@@ -1,9 +1,16 @@
 # Learning
 
 The learning plugin keeps track of work that went wrong: a turn that failed or was interrupted, a
-review that asked for changes, a ticket reopened after it was done. Each of these is a correction.
-When the same failure mode recurs in a project, its corrections open a learning item, and the plugin
-hands the item to whoever should act on it: the project's knowledge files, a prompt, or a policy.
+review that asked for changes, a security finding, a ticket reopened after it was done. Each of these
+is a correction. When the same failure mode recurs in a project, its corrections open a learning
+item, and the plugin hands the item to whoever should act on it: the project's knowledge files, a
+prompt, or a policy.
+
+Only a correction with a failure mode counts toward an item. A review verdict names one, a security
+finding is **Security**, and a kanban ticket reopened from Done is a **Defect**, or an **Unclear
+spec** when it was reopened for a scope change. A reopened ticket's correction goes on the thread
+linked to it last, so a ticket with no thread records none. A failed or interrupted turn has no
+failure mode: the provider, not the work, may be at fault.
 
 While the plugin runs, **Learning** in the sidebar's **Plugins** menu opens its screen. Turn it on under
 **Plugins**.
@@ -51,14 +58,14 @@ next sweep. See [Waiting on you](./kanban.md#waiting-on-you) for the strip.
 ## Corrections
 
 The **Corrections** tab lists the project's corrections over the last 7, 30 or 90 days, with the
-kind of event that recorded each one and the failure mode a reviewer declared, if any. Narrow the
-list by kind or mode, and open a correction's thread from its row.
+kind of event that recorded each one and its failure mode, if it has one. Narrow the list by kind
+or mode, and open a correction's thread from its row.
 
-Only a correction with a failure mode counts toward an item. For one without, other than a failed
-or interrupted turn, which says nothing about the work, pick its mode under **Declare mode** in its
-row; the next sweep adds it to that mode's item. A mode cannot be changed once declared. Corrections
-left without a mode for seven days are flagged on the project's board under
-[Waiting on you](./kanban.md#waiting-on-you), one row with the count, until each has a mode.
+For a correction without a failure mode, other than a failed or interrupted turn, pick its mode
+under **Declare mode** in its row; the next sweep adds it to that mode's item. A mode cannot be
+changed once declared. Corrections left without a mode for seven days are flagged on the project's
+board under [Waiting on you](./kanban.md#waiting-on-you), one row with the count, until each has a
+mode.
 
 ## Reviews
 

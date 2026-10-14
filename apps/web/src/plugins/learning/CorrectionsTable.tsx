@@ -42,6 +42,8 @@ import {
   isCorrectionWindow,
   isDeclaredMode,
   isFailureKind,
+  isReviewMode,
+  REVIEW_MODES,
   threadLabel,
   useLearningCorrectionDeclare,
   useLearningCorrections,
@@ -74,7 +76,7 @@ function ModeCell({
     return <span className="text-muted-foreground">—</span>;
 
   const apply = async (value: string | null) => {
-    if (!isDeclaredMode(value)) return;
+    if (!isReviewMode(value)) return;
     setSaving(true);
     const result = await declare({ id: correction.id, declaredMode: value });
     setSaving(false);
@@ -100,7 +102,7 @@ function ModeCell({
           <SelectValue placeholder="Declare mode" />
         </SelectTrigger>
         <SelectPopup>
-          {DECLARED_MODES.map((candidate) => (
+          {REVIEW_MODES.map((candidate) => (
             <SelectItem key={candidate} value={candidate}>
               {DECLARED_MODE_LABEL[candidate]}
             </SelectItem>

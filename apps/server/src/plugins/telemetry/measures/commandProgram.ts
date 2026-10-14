@@ -147,11 +147,14 @@ const afterOptions = (
   return index;
 };
 
-/** What a segment names: a program, null for a command no program names, or undefined to look on. */
+/**
+ * What a segment names: a program, null for a command no program names, or undefined to look on.
+ * `at` is the word that settled it, such as the shell whose `-c` script names the program.
+ */
 const segmentProgram = (
   tokens: ReadonlyArray<string>,
   depth: number,
-): { readonly program: string | null } | undefined => {
+): { readonly program: string | null; readonly at: number } | undefined => {
   let index = 0;
   while (index < tokens.length) {
     const token = tokens[index]!;
@@ -160,7 +163,7 @@ const segmentProgram = (
       continue;
     }
     const name = programOf(token);
-    if (name === null || CONTROL.has(name)) return { program: null };
+    if (name === null || CONTROL.has(name)) return { program: null, at: index };
     if (SETUP.has(name)) return undefined;
     if (name === "env") {
       index = afterOptions(tokens, index + 1, ENV_OPTIONS_WITH_VALUE);
@@ -170,12 +173,14 @@ const segmentProgram = (
       index = afterOptions(tokens, index + 1) + 1;
     } else if (TRANSPARENT.has(name)) {
       // `command -v git` looks a program up; it does not run it.
-      if (name === "command" && /^-\w*[vV]/.test(tokens[index + 1] ?? "")) return { program: null };
+      if (name === "command" && /^-\w*[vV]/.test(tokens[index + 1] ?? "")) {
+        return { program: null, at: index };
+      }
       index = afterOptions(tokens, index + 1);
     } else if (SHELLS.has(name)) {
-      return { program: shellScriptProgram(tokens, index, name, depth) };
+      return { program: shellScriptProgram(tokens, index, name, depth), at: index };
     } else {
-      return { program: name };
+      return { program: name, at: index };
     }
   }
   return undefined;
@@ -233,4 +238,81 @@ export const programName = (command: string, depth = 0): string | null => {
     if (found !== undefined) return found.program;
   }
   return null;
+};
+
+/** The interpreters whose scripts agents write into the command line. */
+const INTERPRETERS = words("node python python3 bash sh ruby deno bun");
+/**
+ * Each interpreter's options that run the next word as its script. They differ: `node -c` and
+ * `ruby -c` check a file's syntax. A shell's `-c` is a wrapper, and `deno` takes `eval` instead.
+ */
+const INLINE_OPTIONS: ReadonlyMap<string, ReadonlySet<string>> = new Map([
+  ["node", words("-e --eval -p --print")],
+  ["bun", words("-e --eval -p --print")],
+  ["python", words("-c")],
+  ["python3", words("-c")],
+  ["ruby", words("-e")],
+]);
+
+/**
+ * Whether a heredoc or here-string feeds the program its script: one before any argument, or
+ * any after `-`, the stdin marker, whose later words are the script's own arguments.
+ */
+const readsHeredocScript = (tokens: ReadonlyArray<string>, at: number): boolean => {
+  let stdin = false;
+  for (let index = at + 1; index < tokens.length; index += 1) {
+    const token = tokens[index]!;
+    if (token.startsWith("<<")) return true;
+    if (token === "-") stdin = true;
+    else if (!stdin && !token.startsWith("-")) return false;
+  }
+  return false;
+};
+
+/** A loop, a branch, a function or several lines: what no single command runs. */
+const SHELL_PROGRAM = /(?:^|[\s;&|(])(?:for|while|until|if|case|function)\s|\n/;
+
+/**
+ * Whether a shell's `-c` body is a program of its own, such as `bash -c 'for f in *; do …; done'`,
+ * rather than a wrapper around commands, such as `bash -lc 'cd app && pnpm test'`.
+ */
+const shellRunsProgram = (tokens: ReadonlyArray<string>, at: number): boolean => {
+  if (!SHELLS.has(programOf(tokens[at]!) ?? "")) return false;
+  const script = tokens[scriptIndex(tokens, at)];
+  return script !== undefined && SHELL_PROGRAM.test(script);
+};
+
+/**
+ * Whether the program `programName` names is an interpreter running a script written into the
+ * command line: `node -e`, `python3 -c`, `ruby -e`, `bun --eval` or `deno eval` before its first
+ * argument, or a heredoc or here-string it reads before any argument but `-`, such as
+ * `python3 - <<'EOF'` or `bash <<EOF`. `python3 tool.py <<EOF` feeds a script file its input.
+ * A shell's `-c` is a wrapper, judged by the command it runs, so `bash -lc 'git status'` is none.
+ */
+export const runsInlineScript = (command: string, depth = 0): boolean => {
+  for (const tokens of segmentsOf(command)) {
+    const found = segmentProgram(tokens, depth);
+    if (found === undefined) continue;
+    if (shellRunsProgram(tokens, found.at)) return true;
+    if (found.program === null || !INTERPRETERS.has(found.program)) return false;
+    const { at } = found;
+    if (readsHeredocScript(tokens, at)) return true;
+    if (SHELLS.has(programOf(tokens[at]!) ?? "")) {
+      const script = tokens[scriptIndex(tokens, at)];
+      return script !== undefined && depth < MAX_DEPTH && runsInlineScript(script, depth + 1);
+    }
+    const inline = INLINE_OPTIONS.get(found.program);
+    for (let index = at + 1; index < tokens.length; index += 1) {
+      const token = tokens[index]!;
+      if (inline?.has(token)) return true;
+      // `--eval=<script>` is one word; a short option never takes `=`.
+      const equals = token.indexOf("=");
+      if (token.startsWith("--") && equals > 0 && inline?.has(token.slice(0, equals))) return true;
+      if (!token.startsWith("-") || token === "--") {
+        return found.program === "deno" && token === "eval";
+      }
+    }
+    return false;
+  }
+  return false;
 };

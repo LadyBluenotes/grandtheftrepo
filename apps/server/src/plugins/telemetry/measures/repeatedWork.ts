@@ -9,7 +9,7 @@ import * as NodePath from "node:path";
 
 import { digest } from "../digest.ts";
 import { COMMAND_CHARS, type FieldPath } from "../fields.ts";
-import { unwrapShell } from "./commandProgram.ts";
+import { programName, runsInlineScript, unwrapShell } from "./commandProgram.ts";
 import {
   type Measure,
   type MeasureInput,
@@ -22,7 +22,7 @@ import {
 import { toolKey } from "./toolOutput.ts";
 
 /*
- * Repeated deterministic work: tool calls, or runs of them, that runs of several threads repeat,
+ * Repeated deterministic work: tool calls, or sequences of them, that several threads repeat,
  * which a script, a hook, a server tool, a scheduled task, a context file or a skill could do
  * without model tokens. Everything here is a pure function of the window's rows.
  */
@@ -54,6 +54,10 @@ const SEPARATOR = "\u0000";
 const QUOTED = /'[^']*'|"(?:[^"\\]|\\.)*"/g;
 const INTEGER = /^\d+$/;
 
+/** A script's step starts with this, and holds this many characters of its input's digest. */
+const SCRIPT = "script:";
+const SCRIPT_DIGEST_CHARS = 12;
+
 /** A path token: a word with a slash or a backslash in it. */
 const isPath = (token: string) => token.includes("/") || token.includes("\\");
 
@@ -80,23 +84,30 @@ export interface Shape {
 
 /**
  * A tool call's shape, or null for a call that is none: a file change, a web search, a file
- * search with no pattern, a command whose stored head may be cut short, or a call whose input is
- * not recorded (an event a compaction removed before migration 5 left no `input_digest`).
+ * search with no pattern, or a call whose input is not recorded (an event a compaction removed
+ * before migration 5 left no `input_digest`).
  *
  * A command is its command line out of its shell wrapper, split on whitespace, with quoted
  * strings as `<str>`, integers as `<n>` and paths under the project's directory made relative.
- * A dynamic tool with a pattern or a path is its name, its pattern, then its path; any other is
- * its name with its input's keys. A file search is `file_search:` and its pattern.
+ * A script is `script:<program>:` and the start of its input's digest instead: an interpreter
+ * running a script written into the command line, or any command line as long as the head the
+ * reactor keeps of it. A dynamic tool with a pattern or a path is its name, its pattern, then its
+ * path; any other is its name with its input's keys. A file search is `file_search:` and its
+ * pattern.
  */
 export const shapeOf = (call: ToolCallRow, directory: string | null): Shape | null => {
   if (call.input_digest === null) return null;
   switch (call.item_type) {
     case "command_execution": {
-      // The reactor keeps only a command line's first `COMMAND_CHARS` characters. A head at that
-      // length may be cut short, and shaping it could merge different commands into a step no
-      // script could run, so such a command is no shape. A command line that long is rarely the
-      // repeated work a script would take over.
-      if (call.command === null || call.command.length >= COMMAND_CHARS) return null;
+      if (call.command === null) return null;
+      // Quoted strings as `<str>` would make every `node -e '...'` one step, and the reactor keeps
+      // only a command line's first `COMMAND_CHARS` characters, so a head that long may be cut
+      // short. Such a command matches only the same input, by its digest.
+      if (call.command.length >= COMMAND_CHARS || runsInlineScript(call.command)) {
+        const program = programName(call.command) ?? "unknown";
+        const step = `${SCRIPT}${program}:${call.input_digest.slice(0, SCRIPT_DIGEST_CHARS)}`;
+        return { exact: step, slot: step };
+      }
       const tokens = unwrapShell(call.command)
         .replace(QUOTED, "<str>")
         .split(/\s+/)
@@ -196,7 +207,7 @@ interface Occurrence {
   readonly start: number;
 }
 
-/** Shapes in a row that runs of at least three threads hold, from one list of shapes. */
+/** Shapes in a row that occur in runs of at least three threads, from one list of shapes. */
 interface Found {
   readonly steps: ReadonlyArray<string>;
   readonly key: string;
@@ -208,8 +219,8 @@ const stepsAt = ({ run, start }: Occurrence, length: number) =>
   run.steps.slice(start, start + length);
 
 /**
- * Every window of one to six shapes in a row, from each run's `list` shapes, that runs of at
- * least three threads hold. A window is counted only when both windows one shape shorter were
+ * Every window of one to six shapes in a row, from each run's `list` shapes, that occurs in runs
+ * of at least three threads. A window is counted only when both windows one shape shorter were
  * found, since it cannot be in more threads than either.
  */
 const mine = (runs: ReadonlyArray<Run>, list: List) => {
@@ -272,15 +283,23 @@ const longest = (found: ReadonlyArray<Found>) => {
   return found.filter((window) => !held.has(window.key));
 };
 
-/** Whether a slot window's occurrences have more than one exact shape between them. */
-const varies = (window: Found) =>
-  new Set(
-    window.occurrences.map((occurrence) =>
-      stepsAt(occurrence, window.steps.length)
-        .map((step) => step.exact)
-        .join(SEPARATOR),
-    ),
-  ).size > 1;
+/**
+ * Whether a slot window is a varying candidate: the steps whose path or pattern differs between
+ * its occurrences are at least two different steps, such as `Grep <pattern> <path>` then
+ * `Read <path>`. One step with a different path or pattern each time, alone, repeated or next to
+ * fixed steps, is the agent choosing one call's input, which no extraction takes over; and
+ * `Read <path>` alone would be a candidate in almost any project and outweigh every procedure.
+ */
+const varies = (window: Found) => {
+  const differing = new Set<string>();
+  window.steps.forEach((slot, index) => {
+    const exact = new Set(
+      window.occurrences.map(({ run, start }) => run.steps[start + index]!.exact),
+    );
+    if (exact.size > 1) differing.add(slot);
+  });
+  return differing.size > 1;
+};
 
 /** Occurrences whose raw inputs match the most common ones, over all occurrences. */
 const deterministicRatio = (window: Found) => {
@@ -368,9 +387,9 @@ interface RepeatedWork {
 const mined = new WeakMap<MeasureInput, RepeatedWork>();
 
 /**
- * The window's candidates: every exact window that runs of three threads repeat, and every slot
- * window whose occurrences differ in a path or pattern. A slot window whose occurrences all share
- * one exact shape is that exact window again, and is dropped.
+ * The window's candidates: every exact window that three threads repeat, and every slot window
+ * that `varies`. A slot window whose occurrences all share one exact shape is that exact window
+ * again, and is dropped.
  */
 const repeatedWork = (input: MeasureInput): RepeatedWork => {
   const cached = mined.get(input);

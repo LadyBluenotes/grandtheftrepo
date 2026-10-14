@@ -59,7 +59,7 @@ const CorrectionTool = Tool.make("learning_correction", {
 const CorrectionAddTool = Tool.make("learning_correction_add", {
   ...shared,
   description:
-    "Record a correction by hand: an instance of work being wrong that no server event caught. Omit threadId for the calling thread; the correction takes the thread's project, and a projectId that differs from it is refused. declaredMode names the review failure mode when a reviewer or person named one. Secrets in the description are redacted and it is cut at 500 characters.",
+    "Record a correction by hand: an instance of work being wrong that no server event caught. Omit threadId for the calling thread; the correction takes the thread's project, and a projectId that differs from it is refused. declaredMode names the failure mode when a reviewer or person named one. Secrets in the description are redacted and it is cut at 500 characters.",
   parameters: Schema.Struct({
     projectId: Schema.optional(ProjectId),
     threadId: Schema.optional(ThreadId),

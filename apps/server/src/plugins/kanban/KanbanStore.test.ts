@@ -2,6 +2,7 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, describe, it } from "@effect/vitest";
 import { ProjectId, ThreadId, type KanbanError, type Project } from "@t3tools/contracts";
 import * as Context from "effect/Context";
+import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
@@ -11,10 +12,19 @@ import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Queue from "effect/Queue";
 import * as Ref from "effect/Ref";
+import * as SqlClient from "effect/sql/SqlClient";
 import * as Stream from "effect/Stream";
 
 import * as ServerConfig from "../../config.ts";
+import { liveThreadShell } from "../../mcp/McpToolAccess.testkit.ts";
+import * as ThreadManagementService from "../../orchestration-v2/ThreadManagementService.ts";
 import * as ProjectService from "../../project/ProjectService.ts";
+import * as ClassifySweep from "../learning/ClassifySweep.ts";
+import * as CorrectionStore from "../learning/CorrectionStore.ts";
+import * as ItemStore from "../learning/items/ItemStore.ts";
+import { migrations } from "../learning/migrations.ts";
+import { rememberThread } from "../learning/producers/threads.ts";
+import * as PluginDatabase from "../PluginDatabase.ts";
 import { ISSUE_EXTENSION, serializeIssue } from "./KanbanFiles.ts";
 import * as KanbanStore from "./KanbanStore.ts";
 
@@ -48,6 +58,24 @@ const failureCode = <A>(effect: Effect.Effect<A, KanbanError>) =>
     Effect.map(() => "ok"),
     Effect.catch((error) => Effect.succeed(error.code)),
   );
+
+/** The learning plugin's correction store and classify sweep, over a fresh database of its own. */
+const learningPlugin = Effect.gen(function* () {
+  const { sql } = yield* PluginDatabase.open({ id: "learning", filename: ":memory:", migrations });
+  const context = yield* Layer.build(
+    Layer.mergeAll(CorrectionStore.layer, ItemStore.layer).pipe(
+      Layer.provideMerge(Layer.succeed(SqlClient.SqlClient, sql)),
+    ),
+  );
+  const classify = yield* ClassifySweep.sweep.pipe(Effect.provide(context));
+  return {
+    corrections: Context.get(context, CorrectionStore.CorrectionStore),
+    /** A thread of the project, as the plugin's reactor learns it from the thread's events. */
+    remember: (id: ThreadId) =>
+      rememberThread({ id, projectId }).pipe(Effect.provideService(SqlClient.SqlClient, sql)),
+    classify: classify.run({ dryRun: false }),
+  };
+});
 
 /**
  * What a test holds of a store whose issues-folder watcher it drives: `events` are the watcher's
@@ -397,6 +425,129 @@ it.layer(layerTest)("KanbanStore", (it) => {
         yield* store.advance(projectId, threadId, "done");
         assert.strictEqual((yield* store.getIssue({ projectId, id })).status, "todo");
       }),
+    );
+
+    it.effect(
+      "a reopen is one correction on the thread linked last, classified by its reason, while learning runs",
+      () =>
+        Effect.scoped(
+          Effect.gen(function* () {
+            const store = yield* KanbanStore.KanbanStore;
+            const learning = yield* learningPlugin;
+            const first = ThreadId.make("thr_reopen_first");
+            const last = ThreadId.make("thr_reopen_last");
+            const elsewhere = ThreadId.make("thr_reopen_elsewhere");
+            // `last` is not projected into the learning plugin yet: a reopen still records it,
+            // because the core places it in the ticket's project.
+            yield* learning.remember(first);
+            const owners = new Map([
+              [first, projectId],
+              [last, projectId],
+              [elsewhere, ProjectId.make("project-2")],
+            ]);
+            const core = Layer.mock(ThreadManagementService.ThreadManagementService)({
+              getThreadShell: (id) => {
+                const owner = owners.get(id);
+                return Effect.succeed(
+                  owner === undefined ? null : { ...liveThreadShell(id), projectId: owner },
+                );
+              },
+            });
+            const reopen = (
+              title: string,
+              reopenReason: "defect" | "scope_change",
+              threads: ReadonlyArray<ThreadId>,
+            ) =>
+              Effect.gen(function* () {
+                const { id } = yield* store.write(projectId, "user", {
+                  action: "issue.create",
+                  title,
+                });
+                for (const threadId of threads)
+                  yield* store.write(projectId, "user", { action: "issue.link", id, threadId });
+                yield* store.write(projectId, "user", { action: "issue.move", id, status: "done" });
+                yield* store.write(projectId, "user", {
+                  action: "issue.move",
+                  id,
+                  status: "todo",
+                  reopenReason,
+                });
+                return id;
+              });
+
+            // Without the learning plugin a reopen records nothing and still succeeds.
+            yield* reopen("Reopened while learning is off", "defect", [last]);
+            const [defect, scopeChange] = yield* Effect.gen(function* () {
+              const ids = yield* Effect.all([
+                reopen("Login loops", "defect", [first, last]),
+                reopen("Login needs SSO too", "scope_change", [last]),
+                // No linked thread, so no agent's work to learn from.
+                reopen("Typo on the board", "defect", []),
+                // A ticket links any thread id; one the core places elsewhere, or does not know,
+                // is not claimed for this project.
+                reopen("Linked to another project's thread", "defect", [elsewhere]),
+                reopen("Linked to a thread that never existed", "defect", [
+                  ThreadId.make("thr_reopen_missing"),
+                ]),
+              ]);
+              // Settling and reopening again within the same clock tick is a second correction.
+              yield* store.write(projectId, "user", {
+                action: "issue.move",
+                id: ids[0],
+                status: "done",
+              });
+              yield* store.write(projectId, "user", {
+                action: "issue.move",
+                id: ids[0],
+                status: "todo",
+                reopenReason: "defect",
+              });
+              return ids;
+            }).pipe(
+              Effect.provideService(CorrectionStore.CorrectionStore, learning.corrections),
+              Effect.provide(core),
+            );
+
+            const at = DateTime.formatIso(yield* DateTime.now);
+            const recorded = yield* learning.corrections.list({ projectId, from: at, to: at });
+            assert.deepEqual(
+              recorded.map((c) => [c.threadId, c.failureKind, c.declaredMode, c.sourceKey]),
+              [
+                [
+                  last,
+                  "reopened_after_settlement",
+                  "defect",
+                  `issue:${projectId}:${defect}:1:${at}`,
+                ],
+                [
+                  last,
+                  "reopened_after_settlement",
+                  "unclear_spec",
+                  `issue:${projectId}:${scopeChange}:1:${at}`,
+                ],
+                [
+                  last,
+                  "reopened_after_settlement",
+                  "defect",
+                  `issue:${projectId}:${defect}:2:${at}`,
+                ],
+              ],
+            );
+
+            assert.deepInclude(yield* learning.classify, { examined: 3, acted: 3 });
+            const classified = yield* Effect.forEach(recorded, (c) =>
+              learning.corrections.get(c.id),
+            );
+            assert.deepEqual(
+              classified.map((c) => [c.causeClass, c.classificationReason]),
+              [
+                ["defect", "declared mode"],
+                ["unclear_spec", "declared mode"],
+                ["defect", "declared mode"],
+              ],
+            );
+          }),
+        ),
     );
   });
 

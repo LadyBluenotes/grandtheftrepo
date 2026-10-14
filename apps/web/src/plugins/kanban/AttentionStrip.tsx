@@ -35,6 +35,8 @@ export function AttentionStrip({
         return void navigate(target);
       case "/plugins":
         return void navigate(target);
+      case "/plugins/$pluginId":
+        return void navigate(target);
     }
   };
 
