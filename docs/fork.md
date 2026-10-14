@@ -76,7 +76,8 @@ resolved by keeping the line.
 | `apps/web/src/routes/_chat.board.tsx`                        | the kanban board's own route; a new plugin screen uses `/plugins/<id>` through the registry instead                                                                 |
 | `apps/web/src/components/sidebar/mainAppLocation.ts`         | `/board` and the `/plugins` paths in `isSidebarUtilityPage`                                                                                                         |
 | `apps/web/src/components/sidebar/SidebarChrome.tsx`          | the board's `SidebarUtilityItem`, gated on `kanbanSupportedAtom`, and `<PluginSidebarEntries />` after the Usage entry, plus imports                                |
-| `apps/web/src/components/CommandPalette.tsx`                 | the board's `actionItems.push` block, gated the same way, plus imports                                                                                              |
+| `apps/web/src/components/CommandPalette.tsx`                 | the board's `actionItems.push` block (Open board, Find decision), gated the same way, plus imports                                                                  |
+| `apps/web/src/components/chat/ChatHeader.tsx`                | `<ThreadDecisions ... />` after the breadcrumb, the thread's decision count, plus its import                                                                        |
 | `apps/server/src/orchestration-v2/toolOutputImageBytes.ts`   | `export function carriesImage`, the one exported function: does a record hold image bytes or the size stripping left, so the estimate matches what ingestion stores |
 | `third-party-licenses.config.json`                           | the `Caveman reply rules` and `Ponytail ladder` entries at the end of `customNotices`, so the adapted policy text is credited in the app's license list             |
 | `scripts/build-desktop-artifact.ts`                          | in `createBuildConfig`, unsigned Mac builds get `identity: "-"`, `hardenedRuntime: false` and no GitHub update feed, plus their tests                               |
@@ -119,7 +120,10 @@ them half-evaluated. The host hands `toolkitRegistration` to `ServerPlugin.mcp` 
   one not loaded since the server started stays until the store next loads it.
   `kanban.attention.list` feeds the strip above the board from the project's open host
   flags, its threads' pending questions and permission requests, and, while routing runs, its
-  routing mismatches. `kanban.ticket.specify` (MCP `kanban_ticket_specify`) checks a Triage or
+  routing mismatches. The thread header's decision count reads `kanban.listDecisions` with
+  `thread`, which answers none for a project with no board folder and creates none, and re-reads
+  when the thread's latest run starts or ends rather than following the board.
+  `kanban.ticket.specify` (MCP `kanban_ticket_specify`) checks a Triage or
   Inbox issue's description against the Goal, Approach and Acceptance format, or starts a plan-mode
   drafting thread on routing's cheap tier whose final message the plugin's reactor checks when the
   run ends; a valid spec becomes the issue's criteria and admits it as `spec`, and the description

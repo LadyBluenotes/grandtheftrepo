@@ -246,7 +246,7 @@ import {
 import type { Project } from "../types";
 import { PullRequestGlyph } from "~/components/pullRequest/pullRequestIcons";
 import { readPullRequestListPreferences } from "~/components/pullRequest/pullRequestListPreferences";
-import { kanbanSupportedAtom } from "~/plugins/kanban/state";
+import { findDecisionSearch, kanbanSupportedAtom } from "~/plugins/kanban/state";
 
 const EMPTY_BROWSE_ENTRIES: FilesystemBrowseResult["entries"] = [];
 
@@ -2233,6 +2233,19 @@ function OpenCommandPaletteDialog(props: {
       icon: <SquareKanbanIcon className={ITEM_ICON_CLASS} />,
       run: async () => {
         await navigate({ to: "/board", search: {} });
+      },
+    });
+    actionItems.push({
+      kind: "action",
+      value: "action:find-decision",
+      searchTerms: ["find decision", "decisions", "search", "why", "alternatives", "kanban"],
+      title: "Find decision",
+      icon: <TextSearchIcon className={ITEM_ICON_CLASS} />,
+      run: async () => {
+        await navigate({
+          to: "/board",
+          search: (previous) => findDecisionSearch(previous, activeThread ?? activeDraftThread),
+        });
       },
     });
   }
