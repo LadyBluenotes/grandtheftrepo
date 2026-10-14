@@ -462,6 +462,24 @@ it.layer(layerTest)("KanbanStore", (it) => {
   });
 
   describe("folder", () => {
+    it.effect(
+      "keeps capture beside the folder in kanban.json, each surviving a change to the other",
+      () =>
+        Effect.gen(function* () {
+          const store = yield* KanbanStore.KanbanStore;
+          const fs = yield* FileSystem.FileSystem;
+          const other = yield* fs.makeTempDirectoryScoped({ prefix: "t3code-kanban-capture-" });
+          yield* store.setCapture({ projectId, enabled: true });
+          yield* store.setDirectory({ projectId, directory: other });
+          assert.isTrue((yield* store.board(projectId)).capture);
+          yield* store.setCapture({ projectId, enabled: false });
+          assert.strictEqual((yield* store.board(projectId)).directory, other);
+          assert.isFalse((yield* store.board(projectId)).capture);
+          assert.isFalse(yield* store.captures(projectId));
+          yield* store.setDirectory({ projectId, directory: null });
+        }),
+    );
+
     it.effect("archives Done issues older than seven days when a folder loads", () =>
       Effect.gen(function* () {
         const store = yield* KanbanStore.KanbanStore;

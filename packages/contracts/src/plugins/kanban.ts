@@ -1,3 +1,4 @@
+import * as Effect from "effect/Effect";
 import * as Rpc from "effect/rpc/Rpc";
 import * as Schema from "effect/Schema";
 import { AuthOrchestrationReadScope, EnvironmentAuthorizationError } from "../auth.ts";
@@ -284,6 +285,8 @@ export type KanbanDecision = typeof KanbanDecision.Type;
 export const KanbanBoard = Schema.Struct({
   /** Absolute base folder holding `issues/` and `decisions/`. */
   directory: Schema.String,
+  /** Whether a settled thread's last reply is read for decisions and findings it did not record. */
+  capture: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
   issues: Schema.Array(KanbanIssueSummary),
   decisionCategories: Schema.Array(Schema.Struct({ category: KanbanSlug, count: Schema.Int })),
 });
@@ -384,6 +387,11 @@ export const KanbanSetDirectoryInput = Schema.Struct({
   directory: Schema.NullOr(TrimmedNonEmptyString),
 });
 export type KanbanSetDirectoryInput = typeof KanbanSetDirectoryInput.Type;
+export const KanbanSetCaptureInput = Schema.Struct({
+  projectId: ProjectId,
+  enabled: Schema.Boolean,
+});
+export type KanbanSetCaptureInput = typeof KanbanSetCaptureInput.Type;
 
 /** Sets a finding's disposition; `open` reopens it. Its proposer is refused. */
 export const KanbanFindingReviewInput = Schema.Struct({
@@ -579,6 +587,17 @@ export const KANBAN_METHODS = definePluginMethods({
     method: "kanban.setDirectory",
     gateway: "settingsWrite",
     input: KanbanSetDirectoryInput,
+    output: Schema.Struct({}),
+    error: KanbanError,
+  },
+  /**
+   * Turns settle-time capture on or off for a project: when one of its threads settles, a cheap
+   * turn reads the last reply and files what it decided or found, unrecorded, as drafts.
+   */
+  setCapture: {
+    method: "kanban.setCapture",
+    gateway: "settingsWrite",
+    input: KanbanSetCaptureInput,
     output: Schema.Struct({}),
     error: KanbanError,
   },

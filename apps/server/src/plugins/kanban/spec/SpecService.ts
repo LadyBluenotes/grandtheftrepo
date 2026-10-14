@@ -45,7 +45,7 @@ const ISSUE_DELETED = "The issue was deleted while the spec was drafted.";
 const NEVER_STARTED = "The drafting thread was never started. Run specify again.";
 
 /** The run statuses that end a drafting thread's attempt. `waiting` still has a person to answer. */
-const ENDED = new Set<OrchestrationV2Run["status"]>([
+export const ENDED = new Set<OrchestrationV2Run["status"]>([
   "completed",
   "interrupted",
   "failed",
@@ -204,7 +204,7 @@ const acceptedLadder = Effect.serviceOption(Ponytail.Ponytail).pipe(
 );
 
 /** Plan mode answers with a proposed plan; without one, the last thing the agent said counts. */
-const finalMessage = (items: ReadonlyArray<OrchestrationV2TurnItem>) => {
+export const finalMessage = (items: ReadonlyArray<OrchestrationV2TurnItem>) => {
   let plan: string | undefined;
   let message: string | undefined;
   // The projection returns items in ordinal order, so the last of each kind wins.

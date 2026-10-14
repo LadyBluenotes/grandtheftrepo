@@ -65,6 +65,14 @@ export class FindingService extends Context.Service<
       readonly query: string;
     }) => Effect.Effect<FindingSearch, KanbanError>;
     readonly capture: (input: FindingCapture) => Effect.Effect<KanbanFindingPlacement, KanbanError>;
+    /**
+     * Files a finding found in `input.threadId` as proposed by `by`, with no search: for a draft the
+     * server made from that thread's reply, which looks for repeats itself.
+     */
+    readonly file: (
+      input: Omit<FindingCapture, "searchId">,
+      by: KanbanActor,
+    ) => Effect.Effect<KanbanFindingPlacement, KanbanError>;
     /** Sets the disposition as `by`, who may not be the proposer; `open` reopens it. */
     readonly review: (
       input: KanbanFindingReviewInput,
@@ -218,6 +226,41 @@ const make = Effect.gen(function* () {
       };
     });
 
+  /** The change that files `input` as proposed by `by`, for `store.transact`. */
+  const filing =
+    (input: Omit<FindingCapture, "searchId">, by: KanbanActor) =>
+    (issues: ReadonlyMap<string, KanbanIssue>, at: string) =>
+      Effect.gen(function* () {
+        const taken = new Set([...issues.values()].flatMap((i) => i.findings.map((f) => f.id)));
+        const finding: KanbanFinding = {
+          id: uniqueSlug(slugOf(input.title), (slug) => taken.has(slug)),
+          title: input.title,
+          evidence: input.evidence,
+          truthStatus: input.truthStatus,
+          scopeRelation: input.scopeRelation,
+          disposition: "open",
+          proposedBy: by,
+          proposedAt: at,
+          threadId: input.threadId,
+          review: null,
+        };
+        const issue = yield* placed(
+          issues,
+          input.issueId,
+          finding,
+          by,
+          at,
+          `${finding.id} added: ${finding.title}`,
+        );
+        return {
+          result: { projectId: input.projectId, issueId: issue.id, finding },
+          save: [issue],
+        };
+      });
+
+  const file: FindingService["Service"]["file"] = (input, by) =>
+    store.transact(input.projectId, filing(input, by));
+
   const capture: FindingService["Service"]["capture"] = (input) =>
     Effect.gen(function* () {
       const now = yield* Clock.currentTimeMillis;
@@ -235,35 +278,10 @@ const make = Effect.gen(function* () {
       // the capture is refused before anything is written, such as for an unknown issue: once the
       // write may have landed, a retry with it could file the finding twice.
       searches.delete(input.searchId);
-      const by = `thread:${input.threadId}`;
       return yield* store.transact(input.projectId, (issues, at) =>
-        Effect.gen(function* () {
-          const taken = new Set([...issues.values()].flatMap((i) => i.findings.map((f) => f.id)));
-          const finding: KanbanFinding = {
-            id: uniqueSlug(slugOf(input.title), (slug) => taken.has(slug)),
-            title: input.title,
-            evidence: input.evidence,
-            truthStatus: input.truthStatus,
-            scopeRelation: input.scopeRelation,
-            disposition: "open",
-            proposedBy: by,
-            proposedAt: at,
-            threadId: input.threadId,
-            review: null,
-          };
-          const issue = yield* placed(
-            issues,
-            input.issueId,
-            finding,
-            by,
-            at,
-            `${finding.id} added: ${finding.title}`,
-          );
-          return {
-            result: { projectId: input.projectId, issueId: issue.id, finding },
-            save: [issue],
-          };
-        }).pipe(Effect.tapError(() => Effect.sync(() => searches.set(input.searchId, made)))),
+        filing(input, `thread:${input.threadId}`)(issues, at).pipe(
+          Effect.tapError(() => Effect.sync(() => searches.set(input.searchId, made))),
+        ),
       );
     });
 
@@ -330,7 +348,7 @@ const make = Effect.gen(function* () {
       }),
     );
 
-  return FindingService.of({ search, capture, review, move });
+  return FindingService.of({ search, capture, file, review, move });
 });
 
 export const layer = Layer.effect(FindingService, make);
