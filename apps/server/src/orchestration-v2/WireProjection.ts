@@ -11,6 +11,8 @@ import {
   toolOutputIndicatesFailure,
 } from "@t3tools/shared/toolOutput";
 
+import { withCapturedRecord } from "../plugins/capturedRecords.ts";
+
 const MAX_DETAIL_STRING_BYTES = 32_768;
 const MAX_DYNAMIC_VALUE_BYTES = 16_384;
 const MAX_ON_DEMAND_BYTES = 256 * 1024;
@@ -112,7 +114,7 @@ export function projectTurnItemForWire(item: OrchestrationV2TurnItem): Orchestra
       };
     case "dynamic_tool": {
       const { output: rawOutput, ...projected } = item;
-      const output = compactDynamicToolOutput(rawOutput);
+      const output = withCapturedRecord(item, compactDynamicToolOutput(rawOutput));
       return {
         ...projected,
         input: summarizeDynamicValue(item.input),

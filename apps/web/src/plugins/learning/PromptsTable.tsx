@@ -38,13 +38,18 @@ import { When } from "./When";
 
 /**
  * A project's prompt library, narrowed by state and by the words of a search, both on the server;
- * the search waits for typing to pause. A row's title opens the drawer, as does New prompt;
- * whatever the drawer changes refetches the list.
+ * the search waits for typing to pause. A row's title opens the drawer, as does New prompt, and
+ * `initialOpen`, a prompt a link names, opens it at first; whatever the drawer changes refetches
+ * the list.
  */
-export function PromptsTable({ environmentId, projectId }: LearningScope) {
+export function PromptsTable({
+  environmentId,
+  projectId,
+  initialOpen,
+}: LearningScope & { readonly initialOpen: number | null }) {
   const [state, setState] = useState<PromptState | null>(null);
   const [query, setQuery] = useState("");
-  const [open, setOpen] = useState<number | "new" | null>(null);
+  const [open, setOpen] = useState<number | "new" | null>(initialOpen);
   const search = useDebouncedValue(query, 250);
   const prompts = usePrompts({ environmentId, projectId }, { state, query: search });
   const { canWrite } = usePromptCommands(environmentId);

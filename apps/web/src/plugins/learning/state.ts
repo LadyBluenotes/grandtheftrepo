@@ -125,7 +125,7 @@ export function followOpenItem(
   return { projectId: itemProjectId ?? choice.projectId, followed: itemProjectId };
 }
 
-/** The item a `/plugins/learning` link names by `recordId`, or null for anything but an item id. */
+/** The item or prompt a `/plugins/learning` link names by `recordId`, or null for anything but an id. */
 export function learningItemId(recordId: string | undefined): number | null {
   if (recordId === undefined || !/^\d+$/.test(recordId)) return null;
   const id = Number(recordId);

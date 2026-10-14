@@ -28,10 +28,15 @@ describe("validatePluginScreenSearch", () => {
     });
   });
 
-  it("trims the machine, an environment id, and keeps a tab's and record's exact text", () => {
+  it("trims the machine and the project, and keeps a tab's and record's exact text", () => {
     expect(
-      validatePluginScreenSearch({ machine: " env-1 ", tab: " a ", recordId: " 7" }),
-    ).toStrictEqual({ machine: "env-1", tab: " a ", recordId: " 7" });
+      validatePluginScreenSearch({
+        machine: " env-1 ",
+        projectId: " project-1 ",
+        tab: " a ",
+        recordId: " 7",
+      }),
+    ).toStrictEqual({ machine: "env-1", projectId: "project-1", tab: " a ", recordId: " 7" });
   });
 
   it("drops blank values and keys a screen does not read", () => {

@@ -14,7 +14,8 @@ directories and never edit an upstream file. Upstream is merged nightly by
   `/plugins/<id>`; every plugin is listed, with an on/off switch, at `/plugins`. Both show the
   primary environment, or the one their `machine` search names; screens and settings panels read
   `usePluginEnvironmentId` so they follow it. A screen keeps its tab and open record in the URL
-  (`tab` and `recordId`, through `usePluginScreenSearch`), so a link can open the thing it is about.
+  (`tab` and `recordId`, through `usePluginScreenSearch`), and a screen with a project picker
+  starts on the URL's `projectId`, so a link can open the thing it is about.
 
 Enabled state is `plugins.json` under the server state directory. A missing entry means enabled.
 Changes apply on the next server start.
@@ -81,6 +82,9 @@ resolved by keeping the line.
 | `third-party-licenses.config.json`                           | the `Caveman reply rules` and `Ponytail ladder` entries at the end of `customNotices`, so the adapted policy text is credited in the app's license list             |
 | `scripts/build-desktop-artifact.ts`                          | in `createBuildConfig`, unsigned Mac builds get `identity: "-"`, `hardenedRuntime: false` and no GitHub update feed, plus their tests                               |
 | `packages/provider-core/.../orchestrationInstructions.ts`    | `export let` on `T3_CODE_ORCHESTRATION_INSTRUCTIONS` and `setPluginOrchestrationInstructions` at the end, which the host calls with the capture rule                |
+| `apps/server/src/orchestration-v2/WireProjection.ts`         | `withCapturedRecord(item, ...)` around a dynamic tool's compact output, plus its import                                                                             |
+| `apps/web/.../chat/MessagesTimeline.logic.ts`                | the message row's `capturedRecords`: its field, the `capturedRecordsByRun` call, its value and its equality line, plus imports                                      |
+| `apps/web/.../chat/MessagesTimeline.tsx`                     | `<RecordedThisTurnCard />` after `AssistantChangedFilesSection`, plus its import                                                                                    |
 
 ## Plugin services and the type system
 
@@ -136,9 +140,16 @@ them half-evaluated. The host hands `toolkitRegistration` to `ServerPlugin.mcp` 
   correction or a knowledge page, to the orchestration instructions, which
   every adapter sends only to a turn with the `t3-code` MCP server. Each line is dropped while its
   plugin is off. Pi bakes that text into its extension at import, before the host starts, and Muse
-  gets none, so neither sees the rule. Server: `apps/server/src/plugins/kanban/`. Contracts:
-  `packages/contracts/src/plugins/kanban.ts`. Web: `apps/web/src/plugins/kanban/`. Mobile:
-  `apps/mobile/src/features/kanban/`. User guide: [Kanban board](./user/kanban.md).
+  gets none, so neither sees the rule. The wire projection reads the record each completed capture
+  call made, a decision from `kanban_write`, `finding_capture`, `learning_correction_add`,
+  `knowledge_propose` or `prompt_save`, from the call's own input and output and adds it to the
+  call's compact output as `capturedRecord` (`plugins/capturedRecords.ts`), because that output
+  otherwise keeps only ids the core knows. The web's **Recorded this turn** card under a run's last
+  reply lists them from the tool items it already has (`apps/web/src/plugins/recorded/`); a record
+  shows the state it was made in. Mobile does not show it, having no screen to open most records.
+  Server: `apps/server/src/plugins/kanban/`. Contracts: `packages/contracts/src/plugins/kanban.ts`.
+  Web: `apps/web/src/plugins/kanban/`. Mobile: `apps/mobile/src/features/kanban/`. User guide:
+  [Kanban board](./user/kanban.md).
 - **telemetry**: the eighteen efficiency measures of #1, #35 and #36 over a project's window, from the
   `telemetry.measures` gateway method and the `telemetry_measures` MCP tool. Its reactor keeps
   runs, tool calls, threads and provider turn token usage from the event log in the plugin's own
@@ -260,7 +271,7 @@ them half-evaluated. The host hands `toolkitRegistration` to `ServerPlugin.mcp` 
   open, as it does once the record is rolled back; the sweep never closes or reroutes an item, and
   never judges `local_only`. Server:
   `apps/server/src/plugins/learning/`. Contracts:
-  `packages/contracts/src/plugins/learning.ts` and `prompts.ts`. Web: `apps/web/src/plugins/learning/`, the Learning screen at `/plugins/learning` with the items, corrections, prompts and reviews of a project; `recordId` opens an item. No mobile screen. User guide: [Learning](./user/learning.md).
+  `packages/contracts/src/plugins/learning.ts` and `prompts.ts`. Web: `apps/web/src/plugins/learning/`, the Learning screen at `/plugins/learning` with the items, corrections, prompts and reviews of a project; `recordId` opens an item, or a prompt on the prompts tab. No mobile screen. User guide: [Learning](./user/learning.md).
 - **policy**: reviewed working rules per project (`*` is the whole environment), versioned in the
   plugin's database and rendered as one marked block each, with `<state dir>/RULES.md` ahead of
   the body, into the instruction file each agent reads from the user's home. Verify re-reads the
