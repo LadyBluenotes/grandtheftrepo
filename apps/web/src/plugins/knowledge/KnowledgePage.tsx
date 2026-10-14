@@ -3,7 +3,7 @@ import {
   squashAtomCommandFailure,
   type AtomCommandResult,
 } from "@t3tools/client-runtime/state/runtime";
-import { knowledgePagePath, type KnowledgeEntry, type ProjectId } from "@t3tools/contracts";
+import { knowledgePagePath, type KnowledgeEntry } from "@t3tools/contracts";
 import { BookOpenTextIcon } from "lucide-react";
 import { useState } from "react";
 
@@ -32,6 +32,7 @@ import { WorkspacePageHeader } from "~/components/WorkspacePageHeader";
 import { isElectron } from "~/env";
 import { useProjects } from "~/state/entities";
 import { PluginNotice } from "../PluginsPage";
+import { usePluginScreenSearch } from "../pluginScreenSearch";
 import { usePluginEnvironmentId } from "../pluginState";
 import {
   AGENT_LABEL,
@@ -50,7 +51,8 @@ import {
 } from "./state";
 
 /**
- * `/plugins/knowledge`: one project's knowledge pages on the plugin environment. Drafts are
+ * `/plugins/knowledge`: one project's knowledge pages on the plugin environment, the URL's
+ * `projectId` until a person picks another, else the environment's first. Drafts are
  * accepted or discarded, accepted pages retired, retired ones proposed again, and the delivery
  * to each agent's instruction file reinstalled. Both lists reread after every command, whatever
  * its outcome: an accept or retire stands even when the install after it fails.
@@ -58,7 +60,8 @@ import {
 export default function KnowledgePage() {
   const environmentId = usePluginEnvironmentId();
   const projects = useProjects().filter((project) => project.environmentId === environmentId);
-  const [chosen, setChosen] = useState<ProjectId | null>(null);
+  const search = usePluginScreenSearch();
+  const [chosen, setChosen] = useState(search.projectId ?? null);
   const project = projects.find((candidate) => candidate.id === chosen) ?? projects[0];
   const projectId = project?.id ?? null;
 
@@ -110,7 +113,7 @@ export default function KnowledgePage() {
                   <Select
                     value={project.id}
                     onValueChange={(value) => {
-                      if (typeof value === "string") setChosen(value as ProjectId);
+                      if (typeof value === "string") setChosen(value);
                     }}
                   >
                     <SelectTrigger size="xs" variant="ghost" aria-label="Project">

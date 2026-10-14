@@ -46,7 +46,10 @@ import { useEnvironmentQuery } from "~/state/query";
 import { useAtomCommand } from "~/state/use-atom-command";
 import { buildThreadRouteParams } from "~/threadRoutes";
 import { STATUS_LABEL, labelColor, reportFailure } from "./BoardPage";
-import { DecisionForm, DecisionRow } from "./DecisionsView";
+import { DecisionDrawer, useOpenBoardIssue } from "./DecisionDrawer";
+import { DecisionForm } from "./DecisionForm";
+import { DecisionRow, type DecisionTarget } from "./DecisionRow";
+import { decisionRef, sortDecisions } from "./decisionList";
 import { FindingRow } from "./FindingRow";
 import { ReopenDialog } from "./ReopenDialog";
 import { buildIssuePrompt, kanbanDecisions, kanbanIssue, kanbanWrite } from "./state";
@@ -130,6 +133,8 @@ function IssueDetails({
   const [noDecision, setNoDecision] = useState<string | null>(null);
   const [reopenTo, setReopenTo] = useState<KanbanStatus | null>(null);
   const [recording, setRecording] = useState(false);
+  const [decisionTarget, setDecisionTarget] = useState<DecisionTarget | null>(null);
+  const openIssue = useOpenBoardIssue();
   const [starting, setStarting] = useState(false);
 
   const change = async (input: Omit<Parameters<typeof write>[0]["input"], "projectId">) => {
@@ -577,7 +582,6 @@ function IssueDetails({
               <DecisionForm
                 environmentId={environmentId}
                 projectId={projectId}
-                categories={categories}
                 initialIssues={[issue.id]}
                 onDone={() => setRecording(false)}
               />
@@ -589,15 +593,15 @@ function IssueDetails({
                   : "None about this ticket."}
               </p>
             ) : (
-              <ul className="flex flex-col gap-2">
-                {decisions.map((decision) => (
+              <ul className="flex flex-col gap-1.5">
+                {sortDecisions(decisions).map((decision) => (
                   <DecisionRow
-                    key={`${decision.category}:${decision.id}`}
+                    key={decisionRef(decision)}
                     environmentId={environmentId}
                     projectId={projectId}
                     decision={decision}
-                    categories={categories}
                     canWrite={canWrite}
+                    onOpen={(editing) => setDecisionTarget({ ref: decisionRef(decision), editing })}
                   />
                 ))}
               </ul>
@@ -613,6 +617,14 @@ function IssueDetails({
                 onBlur={() => void saveNoDecision()}
               />
             ) : null}
+            <DecisionDrawer
+              environmentId={environmentId}
+              projectId={projectId}
+              target={decisionTarget}
+              onTargetChange={setDecisionTarget}
+              canWrite={canWrite}
+              onOpenIssue={openIssue}
+            />
           </Field>
 
           <Field label="Log">

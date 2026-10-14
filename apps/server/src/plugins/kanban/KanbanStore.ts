@@ -449,6 +449,21 @@ const make = Effect.gen(function* () {
     );
   });
 
+  /**
+   * The project's state when it has a board: loaded already, or its `issues/` or `decisions/`
+   * folder exists; the project folder alone is no board. Null when it has none, and nothing is
+   * created, so a read for any project's thread leaves no folder behind.
+   */
+  const loadExisting = Effect.fn("KanbanStore.loadExisting")(function* (projectId: ProjectId) {
+    if (!loaded.has(projectId)) {
+      const { directory } = yield* resolveDirectory(projectId);
+      const exists = (dir: string) =>
+        fs.exists(path.join(directory, dir)).pipe(Effect.orElseSucceed(() => false));
+      if (!(yield* exists("issues")) && !(yield* exists("decisions"))) return null;
+    }
+    return yield* load(projectId);
+  });
+
   const summary = ({
     description: _description,
     log: _log,
@@ -1043,11 +1058,8 @@ const make = Effect.gen(function* () {
   const advance: KanbanStore["Service"]["advance"] = Effect.fn("KanbanStore.advance")(
     function* (projectId, threadId, status) {
       // Thread events arrive for every project; only one with a board folder is worth loading.
-      if (!loaded.has(projectId)) {
-        const { directory } = yield* resolveDirectory(projectId);
-        if (!(yield* fs.exists(directory).pipe(Effect.orElseSucceed(() => false)))) return [];
-      }
-      const state = yield* load(projectId);
+      const state = yield* loadExisting(projectId);
+      if (state === null) return [];
       // Under the write lock, so a decision, finding or reason written meanwhile is neither missed
       // by the check nor overwritten by the move.
       const { held, changed } = yield* state.lock.withPermits(1)(
@@ -1183,14 +1195,17 @@ const make = Effect.gen(function* () {
           ? Effect.fail(notFound(`No issue "${id}".`))
           : Effect.succeed(issue);
       }),
-    listDecisions: ({ projectId, category, issue, state: wanted, query }) =>
-      Effect.map(load(projectId), (state) => {
+    // A project without a board has no decisions; reading them never creates its folder.
+    listDecisions: ({ projectId, category, issue, thread, state: wanted, query }) =>
+      Effect.map(loadExisting(projectId), (state) => {
+        if (state === null) return [];
         const listed = Array.from(state.decisions.values())
           .flat()
           .filter(
             (d) =>
               (category === undefined || d.category === category) &&
               (issue === undefined || d.issues.includes(issue)) &&
+              (thread === undefined || d.threads.includes(thread)) &&
               (wanted === undefined || d.state === wanted),
           );
         return query === undefined ? listed : search(listed, query);

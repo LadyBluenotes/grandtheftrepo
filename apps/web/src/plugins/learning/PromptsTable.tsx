@@ -30,6 +30,7 @@ import {
   PROMPT_STATE_VARIANT,
   PROMPT_STATES,
   isPromptState,
+  refreshPromptLists,
   usePromptCommands,
   usePrompts,
 } from "./promptState";
@@ -38,13 +39,27 @@ import { When } from "./When";
 
 /**
  * A project's prompt library, narrowed by state and by the words of a search, both on the server;
- * the search waits for typing to pause. A row's title opens the drawer, as does New prompt;
- * whatever the drawer changes refetches the list.
+ * the search waits for typing to pause. A row's title opens the drawer on `openId`, the URL's
+ * record, through `onOpen`, so a link, the browser's history and a reload show the same prompt;
+ * New prompt opens the form, which is not in the URL. Whatever the drawer changes refetches the
+ * list.
  */
-export function PromptsTable({ environmentId, projectId }: LearningScope) {
+export function PromptsTable({
+  environmentId,
+  projectId,
+  openId,
+  onOpen,
+}: LearningScope & {
+  readonly openId: number | null;
+  readonly onOpen: (id: number | null) => void;
+}) {
   const [state, setState] = useState<PromptState | null>(null);
   const [query, setQuery] = useState("");
-  const [open, setOpen] = useState<number | "new" | null>(null);
+  const [creating, setCreating] = useState(false);
+  const show = (id: number | null) => {
+    setCreating(false);
+    if (id !== openId) onOpen(id);
+  };
   const search = useDebouncedValue(query, 250);
   const prompts = usePrompts({ environmentId, projectId }, { state, query: search });
   const { canWrite } = usePromptCommands(environmentId);
@@ -91,7 +106,14 @@ export function PromptsTable({ environmentId, projectId }: LearningScope) {
               : `${rows.length} prompts`}
         </span>
         <div className="ml-auto">
-          <Button size="sm" disabled={!canWrite} onClick={() => setOpen("new")}>
+          <Button
+            size="sm"
+            disabled={!canWrite}
+            onClick={() => {
+              show(null);
+              setCreating(true);
+            }}
+          >
             <PlusIcon />
             New prompt
           </Button>
@@ -127,7 +149,7 @@ export function PromptsTable({ environmentId, projectId }: LearningScope) {
             {rows.map((row) => (
               <TableRow key={row.id}>
                 <TableCell>
-                  <InlineButton onClick={() => setOpen(row.id)}>{row.title}</InlineButton>
+                  <InlineButton onClick={() => show(row.id)}>{row.title}</InlineButton>
                 </TableCell>
                 <TableCell>{PROMPT_KIND_LABEL[row.kind]}</TableCell>
                 <TableCell>
@@ -151,10 +173,14 @@ export function PromptsTable({ environmentId, projectId }: LearningScope) {
       <PromptDrawer
         environmentId={environmentId}
         projectId={projectId}
-        open={open}
-        onOpen={setOpen}
-        onClose={() => setOpen(null)}
-        onChanged={prompts.refresh}
+        open={creating ? "new" : openId}
+        onOpen={show}
+        onClose={() => show(null)}
+        onChanged={() => {
+          prompts.refresh();
+          // The composer's `/` menu lists the active prompts from a list of its own.
+          refreshPromptLists({ environmentId, projectId });
+        }}
       />
     </div>
   );
