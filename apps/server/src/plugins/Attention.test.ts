@@ -30,7 +30,7 @@ const fixture = Effect.gen(function* () {
       Attention.layer.pipe(Layer.provide(Layer.succeed(HostDatabase.HostDatabase, sql))),
     ),
   );
-  return { attention, rows: sql<FlagRow>`SELECT * FROM attention ORDER BY id` };
+  return { attention, sql, rows: sql<FlagRow>`SELECT * FROM attention ORDER BY id` };
 });
 
 const key = { pluginId: "budget", threadId: "thread-1", kind: "budget_breach" } as const;
@@ -116,6 +116,49 @@ it.effect("without a plugin or kind, lists every open flag, oldest first", () =>
       assert.deepEqual(yield* attention.listOpen({ kind: "two_writers" }), [
         { threadId: "thread-2", text: "Two writers." },
       ]);
+    }),
+  ),
+);
+
+it.effect("flags stored before plugin targets decode as they were, beside a plugin target", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const { attention, sql } = yield* fixture;
+      // The JSON the earlier schema wrote, one row per target it knew.
+      for (const [threadId, json] of [
+        ["thread-1", '{"label":"Open thread","target":"thread"}'],
+        ["thread-2", '{"label":"Open board","target":"board"}'],
+        ["thread-3", '{"label":"Open budgets","target":"settings"}'],
+      ] as const) {
+        yield* sql`
+          INSERT INTO attention (plugin_id, thread_id, kind, text, resume_action, raised_at)
+          VALUES ('kanban', ${threadId}, 'two_writers', 'Old.', ${json}, '2026-10-01T00:00:00.000Z')
+        `;
+      }
+      const openItem = {
+        label: "Open item",
+        target: "plugin",
+        pluginId: "learning",
+        tab: "items",
+        recordId: "12",
+      } as const;
+      yield* attention.raise({
+        pluginId: "learning",
+        threadId: "promotion:project-1:3",
+        kind: "promotion_ineffective",
+        text: "The handover did not help.",
+        resumeAction: openItem,
+      });
+
+      assert.deepEqual(
+        (yield* attention.listAllOpen).map((flag) => flag.resumeAction),
+        [
+          { label: "Open thread", target: "thread" },
+          { label: "Open board", target: "board" },
+          { label: "Open budgets", target: "settings" },
+          openItem,
+        ],
+      );
     }),
   ),
 );

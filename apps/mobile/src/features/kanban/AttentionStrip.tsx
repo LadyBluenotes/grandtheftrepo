@@ -10,6 +10,7 @@ import { Platform, View } from "react-native";
 import { AppText as Text } from "../../components/AppText";
 import { RowPressable } from "../../components/RowPressable";
 import { useEnvironmentQuery } from "../../state/query";
+import { attentionRowThread } from "./attentionTarget";
 import { kanbanAttention } from "./state";
 
 const ROW_RADIUS = 20;
@@ -17,8 +18,9 @@ const ROW_RADIUS = 20;
 /**
  * Everything in the project waiting on a person, above the board's groups, oldest first:
  * questions and permission requests agents are waiting on, and flags other plugins raised. A row
- * about a thread opens it; a row about the project, such as a budget, shows its text only. There
- * is no dismiss: a row leaves once the server stops returning it. Hidden while nothing waits.
+ * about a thread opens it; a row about the project, such as a budget, or one that leads to a
+ * plugin's screen shows its text only. There is no dismiss: a row leaves once the server stops
+ * returning it. Hidden while nothing waits.
  */
 export function AttentionStrip(props: {
   readonly environmentId: EnvironmentId;
@@ -71,7 +73,7 @@ const AttentionRowView = memo(function AttentionRowView(props: {
   readonly onOpen: (threadId: ThreadId) => void;
 }) {
   const { row, onOpen } = props;
-  const threadId = row.threadId;
+  const threadId = attentionRowThread(row);
   return (
     <RowPressable
       accessibilityRole={threadId === null ? "text" : "button"}

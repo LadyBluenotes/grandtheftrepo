@@ -254,14 +254,32 @@ const INLINE_OPTIONS: ReadonlyMap<string, ReadonlySet<string>> = new Map([
   ["ruby", words("-e")],
 ]);
 
-/** Whether a heredoc or here-string comes before any argument but `-`, the stdin marker. */
+/**
+ * Whether a heredoc or here-string feeds the program its script: one before any argument, or
+ * any after `-`, the stdin marker, whose later words are the script's own arguments.
+ */
 const readsHeredocScript = (tokens: ReadonlyArray<string>, at: number): boolean => {
+  let stdin = false;
   for (let index = at + 1; index < tokens.length; index += 1) {
     const token = tokens[index]!;
     if (token.startsWith("<<")) return true;
-    if (token !== "-" && !token.startsWith("-")) return false;
+    if (token === "-") stdin = true;
+    else if (!stdin && !token.startsWith("-")) return false;
   }
   return false;
+};
+
+/** A loop, a branch, a function or several lines: what no single command runs. */
+const SHELL_PROGRAM = /(?:^|[\s;&|(])(?:for|while|until|if|case|function)\s|\n/;
+
+/**
+ * Whether a shell's `-c` body is a program of its own, such as `bash -c 'for f in *; do …; done'`,
+ * rather than a wrapper around commands, such as `bash -lc 'cd app && pnpm test'`.
+ */
+const shellRunsProgram = (tokens: ReadonlyArray<string>, at: number): boolean => {
+  if (!SHELLS.has(programOf(tokens[at]!) ?? "")) return false;
+  const script = tokens[scriptIndex(tokens, at)];
+  return script !== undefined && SHELL_PROGRAM.test(script);
 };
 
 /**
@@ -275,6 +293,7 @@ export const runsInlineScript = (command: string, depth = 0): boolean => {
   for (const tokens of segmentsOf(command)) {
     const found = segmentProgram(tokens, depth);
     if (found === undefined) continue;
+    if (shellRunsProgram(tokens, found.at)) return true;
     if (found.program === null || !INTERPRETERS.has(found.program)) return false;
     const { at } = found;
     if (readsHeredocScript(tokens, at)) return true;
@@ -286,6 +305,9 @@ export const runsInlineScript = (command: string, depth = 0): boolean => {
     for (let index = at + 1; index < tokens.length; index += 1) {
       const token = tokens[index]!;
       if (inline?.has(token)) return true;
+      // `--eval=<script>` is one word; a short option never takes `=`.
+      const equals = token.indexOf("=");
+      if (token.startsWith("--") && equals > 0 && inline?.has(token.slice(0, equals))) return true;
       if (!token.startsWith("-") || token === "--") {
         return found.program === "deno" && token === "eval";
       }

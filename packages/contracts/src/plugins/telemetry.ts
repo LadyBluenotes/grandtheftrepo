@@ -85,16 +85,11 @@ export const TelemetryExtractionCandidate = Schema.Struct({
   /** Output and input of every occurrence, in estimated tokens: characters over four. */
   estimatedTokens: NonNegativeInt,
   form: TelemetryExtractionForm,
-  /**
-   * One occurrence to look at. `runId` is null for a provider's subagent's calls. `scripts` holds,
-   * for each step, a script's command line as stored, at most its first 512 characters, so a
-   * longer script is cut short; null for a step that is not a script.
-   */
+  /** One occurrence to look at. `runId` is null for a provider's subagent's calls. */
   example: Schema.Struct({
     threadId: Schema.String,
     runId: Schema.NullOr(Schema.String),
     itemIds: Schema.Array(Schema.String),
-    scripts: Schema.Array(Schema.NullOr(Schema.String)),
   }),
 });
 export type TelemetryExtractionCandidate = typeof TelemetryExtractionCandidate.Type;

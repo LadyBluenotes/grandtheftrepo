@@ -366,9 +366,6 @@ const candidateOf = (window: Found, fixed: boolean): TelemetryExtractionCandidat
       threadId: example.run.threadId,
       runId: example.run.runId,
       itemIds: stepsAt(example, length).map((step) => step.call.item_id),
-      scripts: stepsAt(example, length).map((step) =>
-        step.exact.startsWith(SCRIPT) ? step.call.command : null,
-      ),
     },
   };
 };

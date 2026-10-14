@@ -14,7 +14,10 @@ import {
   FAILURE_KINDS,
   failureModeLabel,
   filterCorrections,
+  followOpenItem,
   itemRows,
+  learningItemId,
+  NO_PROJECT_CHOICE,
   pluginActive,
   threadLabel,
   threadsByActivity,
@@ -180,5 +183,55 @@ describe("threadsByActivity", () => {
   it("labels a thread without a title", () => {
     expect(threadLabel({ title: "  " })).toBe("Untitled thread");
     expect(threadLabel({ title: "Fix login" })).toBe("Fix login");
+  });
+});
+
+describe("learningItemId", () => {
+  it("reads a link's record as an item id, and nothing else as one", () => {
+    expect(learningItemId("12")).toBe(12);
+    for (const recordId of [undefined, "", "0", "-3", "1.5", "12abc", "9007199254740993"]) {
+      expect(learningItemId(recordId)).toBeNull();
+    }
+  });
+});
+
+describe("followOpenItem", () => {
+  // Each step is the open item's project as the screen sees it: undefined while none is open or
+  // it is loading, or a person's pick.
+  type Step = { readonly item: string | undefined } | { readonly pick: string };
+  const projectAfter = (steps: ReadonlyArray<Step>) => {
+    let choice = NO_PROJECT_CHOICE;
+    for (const step of steps) {
+      choice =
+        "pick" in step ? { ...choice, projectId: step.pick } : followOpenItem(choice, step.item);
+    }
+    return choice.projectId;
+  };
+
+  it("selects the project of the item a link opens, and keeps it once the item closes", () => {
+    expect(projectAfter([{ item: undefined }, { item: "b" }, { item: undefined }])).toBe("b");
+  });
+
+  it("selects the item's project again when history reopens it after another pick", () => {
+    expect(
+      projectAfter([
+        { item: "a" },
+        { item: undefined },
+        { pick: "b" },
+        // Back to the item's URL: loading, then loaded.
+        { item: undefined },
+        { item: "a" },
+      ]),
+    ).toBe("a");
+  });
+
+  it("keeps a pick made while the item is still open, as the item closes", () => {
+    expect(projectAfter([{ item: "a" }, { pick: "b" }, { item: "a" }, { item: undefined }])).toBe(
+      "b",
+    );
+  });
+
+  it("leaves the environment's first project with no item and no pick", () => {
+    expect(projectAfter([{ item: undefined }])).toBeNull();
   });
 });
