@@ -89,8 +89,8 @@ export type PromptSearchResult = typeof PromptSearchResult.Type;
 export const PROMPTS_LIST_LIMIT = 100;
 
 /** How many of a query's words a list or search matches on, and how much of each. */
-export const PROMPT_QUERY_MAX_WORDS = 8;
-export const PROMPT_QUERY_WORD_MAX_LENGTH = 64;
+const PROMPT_QUERY_MAX_WORDS = 8;
+const PROMPT_QUERY_WORD_MAX_LENGTH = 64;
 
 export const PROMPT_QUERY_MAX_LENGTH = 500;
 /** Words to find in a prompt's title or body. */
