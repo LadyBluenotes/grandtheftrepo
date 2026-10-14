@@ -241,7 +241,8 @@ const make = Effect.gen(function* () {
               ORDER BY id DESC
               LIMIT ${room}`;
       return yield* Effect.forEach([...undecided, ...decided], toProposal);
-    }).pipe(Effect.catchTags({ SqlError: failed, SchemaError: failed }));
+      // Under the lock decisions take, so a row decided between the two reads is not listed twice.
+    }).pipe(lock.withPermits(1), Effect.catchTags({ SqlError: failed, SchemaError: failed }));
 
   const inRange: ProposalStore["Service"]["inRange"] = ({ projectId, from, to }) =>
     sql<Row>`SELECT * FROM deterministic_proposals
@@ -316,7 +317,7 @@ const make = Effect.gen(function* () {
       const at = yield* nowIso;
       const [moved] = yield* sql<Row>`UPDATE deterministic_proposals
         SET state = 'dismissed', decided_by = ${by}, decided_at = ${at},
-          dismiss_reason = ${reason}, updated_at = ${at}
+          dismiss_reason = ${reason}, waiting_reason = NULL, updated_at = ${at}
         WHERE id = ${id} AND state IN ('waiting', 'pending')
         RETURNING *`;
       return yield* toProposal(moved!);
