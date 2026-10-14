@@ -27,6 +27,7 @@ import { v2Now, v2ThreadShell } from "../state/orchestrationV2TestFixtures.ts";
 import {
   createKanbanActiveAtomFamily,
   createKanbanAttentionAtomFamily,
+  createKanbanProjectsAttentionAtomFamily,
   kanbanAttentionStripRows,
 } from "./kanban.ts";
 
@@ -178,13 +179,16 @@ describe("kanbanAttentionStripRows", () => {
     ]);
   });
 
-  it("calls a thread with a blank title Untitled thread", () => {
+  it.each([
+    ["a blank title", "  "],
+    ["no title", null],
+  ])("calls a thread with %s Untitled thread", (_name, threadTitle) => {
     const [row] = kanbanAttentionStripRows([
       attentionRow({
         id: "flag:1",
         kind: "two_writers",
         threadId: ThreadId.make("thread-3"),
-        threadTitle: "  ",
+        threadTitle,
         since: "2026-10-13T08:00:00.000Z",
       }),
     ]);
@@ -321,6 +325,53 @@ describe("createKanbanAttentionAtomFamily", () => {
       expect(harness.reads).toHaveLength(3);
     } finally {
       harness.dispose();
+    }
+  });
+});
+
+describe("createKanbanProjectsAttentionAtomFamily", () => {
+  it("reads several projects at once, and again when their boards change", async () => {
+    const other = ProjectId.make("project-2");
+    const reads: unknown[] = [];
+    const waiters: Array<{ readonly count: number; readonly resolve: () => void }> = [];
+    const asked = (count: number) =>
+      new Promise<void>((resolve) => {
+        if (reads.length >= count) return resolve();
+        waiters.push({ count, resolve });
+      });
+    // The client's signal for the boards it subscribes to; `other` need not have one.
+    const boards = Atom.make(0);
+    const attention = createKanbanProjectsAttentionAtomFamily(
+      connectedRuntime({
+        [PLUGIN_GATEWAY_WS_METHODS.read]: (call) =>
+          Effect.sync(() => {
+            reads.push(call);
+            for (const waiter of waiters) if (reads.length >= waiter.count) waiter.resolve();
+            return [];
+          }),
+      }),
+      {
+        boards: () => boards,
+        threadShells: () => Atom.make<ReadonlyArray<EnvironmentThreadShell>>([]),
+      },
+    );
+    const registry = AtomRegistry.make();
+    const atom = attention({ environmentId: env, input: { projectIds: [projectId, other] } });
+    const unmount = registry.subscribe(atom, () => undefined, { immediate: true });
+    try {
+      await asked(1);
+      expect(reads).toEqual([
+        {
+          method: KANBAN_METHODS.attentionListProjects.method,
+          input: { projectIds: [projectId, other] },
+        },
+      ]);
+      registry.set(boards, 1);
+      await asked(2);
+      expect(reads).toHaveLength(2);
+    } finally {
+      unmount();
+      registry.dispose();
     }
   });
 });

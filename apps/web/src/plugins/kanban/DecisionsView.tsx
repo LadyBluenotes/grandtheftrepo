@@ -4,7 +4,7 @@ import {
   type KanbanDecisionState,
   type ProjectId,
 } from "@t3tools/contracts";
-import { useMemo, useState } from "react";
+import { useMemo, useState, type ReactNode } from "react";
 
 import { Button } from "~/components/ui/button";
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "~/components/ui/empty";
@@ -50,6 +50,7 @@ export function DecisionsView({
   openRef,
   onOpenRef,
   canWrite,
+  projectSelect,
 }: Scope & {
   readonly category: string | undefined;
   readonly categories: Categories;
@@ -57,6 +58,8 @@ export function DecisionsView({
   readonly openRef: string | null;
   readonly onOpenRef: (ref: string | null) => void;
   readonly canWrite: boolean;
+  /** Picks the project whose decisions show, when the board covers more than one. */
+  readonly projectSelect?: ReactNode;
 }) {
   // Every decision of the project, so the drawer resolves any supersession link from this read.
   const decisions = useEnvironmentQuery(kanbanDecisions({ environmentId, input: { projectId } }));
@@ -76,7 +79,7 @@ export function DecisionsView({
     setEditingRef(next?.editing === true ? next.ref : null);
     if ((next?.ref ?? null) !== openRef) onOpenRef(next?.ref ?? null);
   };
-  const openIssue = useOpenBoardIssue();
+  const openIssue = useOpenBoardIssue({ environmentId, projectId });
   const all = decisions.data;
   const list = useMemo(
     () => filterDecisions(all ?? [], { query, state, category: category ?? null, showSuperseded }),
@@ -93,6 +96,7 @@ export function DecisionsView({
     <ScrollArea className="min-h-0 flex-1">
       <div className="mx-auto flex w-full max-w-3xl flex-col gap-3 px-5 pt-4 pb-12 sm:px-6">
         <div className="flex flex-wrap items-center gap-2">
+          {projectSelect}
           <Input
             className="min-w-48 flex-1"
             size="sm"

@@ -8,4 +8,7 @@
  * weekly report both attribute flags with this.
  */
 export const flagKeyedToProject = (key: string, projectId: string) =>
-  key.endsWith(`:${projectId}`) || key.includes(`:${projectId}:`) || key.startsWith("policy:*:");
+  key.endsWith(`:${projectId}`) || key.includes(`:${projectId}:`) || flagKeyedToEveryProject(key);
+
+/** A `policy:*:` key: a policy of the whole environment, which every project's board lists. */
+export const flagKeyedToEveryProject = (key: string) => key.startsWith("policy:*:");

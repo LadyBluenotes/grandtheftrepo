@@ -12,9 +12,16 @@ import { kanbanStop, kanbanStopClear } from "./state";
 /**
  * Shown above the board while the emergency stop is set, with the way out. The stop is the
  * environment's, not a project's: it holds back every launch the supervisor would make, and
- * nothing else. Running agents and work started by hand carry on.
+ * nothing else. Running agents and work started by hand carry on. A board over several
+ * environments shows one per environment, named by `environmentLabel`.
  */
-export function StopBanner({ environmentId }: { readonly environmentId: EnvironmentId }) {
+export function StopBanner({
+  environmentId,
+  environmentLabel,
+}: {
+  readonly environmentId: EnvironmentId;
+  readonly environmentLabel: string | null;
+}) {
   const stop = useEnvironmentQuery(kanbanStop({ environmentId, input: {} }));
   const clear = useAtomCommand(kanbanStopClear, { reportFailure: false });
   const canClear = useAtomValue(kanbanStopClear.permissionAtom(environmentId));
@@ -24,7 +31,9 @@ export function StopBanner({ environmentId }: { readonly environmentId: Environm
     <div className="px-5 pt-3 sm:px-6">
       <Alert variant="warning">
         <OctagonXIcon />
-        <AlertTitle>Emergency stop is set</AlertTitle>
+        <AlertTitle>
+          Emergency stop is set{environmentLabel === null ? "" : ` on ${environmentLabel}`}
+        </AlertTitle>
         <AlertDescription>
           <p>
             Nothing the supervisor starts will launch until you clear it. Running agents carry on,

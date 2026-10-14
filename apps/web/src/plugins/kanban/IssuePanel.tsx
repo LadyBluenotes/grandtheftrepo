@@ -58,6 +58,11 @@ interface IssuePanelProps {
   readonly environmentId: EnvironmentId;
   readonly projectId: ProjectId;
   readonly issueId: string | null;
+  /**
+   * Whether the project has a board; null until known. The issue is read only then, since reading
+   * it loads the board, which creates its folder.
+   */
+  readonly board: boolean | null;
   readonly categories: ReadonlyArray<{ readonly category: string; readonly count: number }>;
   /** The board's issues, where a finding can move to. */
   readonly issues: ReadonlyArray<KanbanIssueSummary>;
@@ -71,16 +76,19 @@ export function IssuePanel({
   environmentId,
   projectId,
   issueId,
+  board,
   categories,
   issues,
   canWrite,
   onClose,
 }: IssuePanelProps) {
   const issue = useEnvironmentQuery(
-    issueId === null ? null : kanbanIssue({ environmentId, input: { projectId, id: issueId } }),
+    issueId === null || board !== true
+      ? null
+      : kanbanIssue({ environmentId, input: { projectId, id: issueId } }),
   );
   const decisions = useEnvironmentQuery(
-    issueId === null
+    issueId === null || board !== true
       ? null
       : kanbanDecisions({ environmentId, input: { projectId, issue: issueId } }),
   );
@@ -89,7 +97,9 @@ export function IssuePanel({
       <SheetPopup side="right" className="sm:max-w-lg">
         {issue.data === null ? (
           <SheetHeader>
-            <SheetTitle>{issue.error ?? "Loading…"}</SheetTitle>
+            <SheetTitle>
+              {board === false ? `No issue "${issueId}".` : (issue.error ?? "Loading…")}
+            </SheetTitle>
           </SheetHeader>
         ) : (
           <IssueDetails
@@ -116,7 +126,7 @@ function IssueDetails({
   categories,
   issues,
   canWrite,
-}: Omit<IssuePanelProps, "issueId" | "onClose"> & {
+}: Omit<IssuePanelProps, "issueId" | "board" | "onClose"> & {
   readonly issue: KanbanIssue;
   readonly decisions: ReadonlyArray<KanbanDecision>;
 }) {
@@ -134,7 +144,7 @@ function IssueDetails({
   const [reopenTo, setReopenTo] = useState<KanbanStatus | null>(null);
   const [recording, setRecording] = useState(false);
   const [decisionTarget, setDecisionTarget] = useState<DecisionTarget | null>(null);
-  const openIssue = useOpenBoardIssue();
+  const openIssue = useOpenBoardIssue({ environmentId, projectId });
   const [starting, setStarting] = useState(false);
 
   const change = async (input: Omit<Parameters<typeof write>[0]["input"], "projectId">) => {
