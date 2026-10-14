@@ -15,6 +15,7 @@ import {
 } from "@t3tools/client-runtime/state/entities";
 import {
   KANBAN_METHODS,
+  KanbanDecisionRef,
   type EnvironmentId,
   type KanbanAttentionRow,
   type KanbanBoard,
@@ -27,6 +28,7 @@ import {
 } from "@t3tools/contracts";
 import * as Option from "effect/Option";
 import { AsyncResult, Atom } from "effect/reactivity";
+import * as Schema from "effect/Schema";
 
 import { connectionAtomRuntime } from "~/connection/runtime";
 import { environmentSummaries } from "~/state/presentation";
@@ -37,6 +39,32 @@ import type { BoardSearch } from "./BoardPage";
 import { projectIdsByEnvironment, type BoardEnvironment } from "./boardScope";
 
 export const kanbanBoard = createKanbanBoardAtomFamily(connectionAtomRuntime);
+
+const isDecisionRef = Schema.is(KanbanDecisionRef);
+
+/**
+ * What a `/board` URL names: the project, the open issue, the decisions view with its category
+ * and the decision open in its drawer (`category/id`), and the board's filters. Anything else is
+ * dropped.
+ */
+export function validateBoardSearch(raw: Record<string, unknown>): BoardSearch {
+  return {
+    ...(typeof raw.environmentId === "string" && raw.environmentId
+      ? { environmentId: raw.environmentId as EnvironmentId }
+      : {}),
+    ...(typeof raw.projectId === "string" && raw.projectId
+      ? { projectId: raw.projectId as ProjectId }
+      : {}),
+    ...(typeof raw.issue === "string" && raw.issue ? { issue: raw.issue.slice(0, 80) } : {}),
+    ...(raw.view === "decisions" ? { view: raw.view } : {}),
+    ...(typeof raw.category === "string" && raw.category
+      ? { category: raw.category.slice(0, 80) }
+      : {}),
+    ...(isDecisionRef(raw.decision) ? { decision: raw.decision } : {}),
+    ...(raw.needsYou === true ? { needsYou: true } : {}),
+    ...(raw.archived === true ? { archived: true } : {}),
+  };
+}
 
 /** One issue with its body and log; re-read whenever the board changes. */
 export const kanbanIssue = createPluginRpcQueryAtomFamily(connectionAtomRuntime, {
@@ -148,8 +176,8 @@ export const kanbanStopClear = createPluginRpcCommand(connectionAtomRuntime, {
  * Where a strip row's button leads, always on the row's environment: the row's thread, the
  * board (its decisions view for a decision conflict) on the row's project, or on no project for a
  * row about every project, that environment's Plugins page, where budgets and other plugin
- * settings live, or a plugin's screen on the tab and record the flag names. Null when a thread row
- * has no thread.
+ * settings live, or a plugin's screen on the row's project, if it has one, and the tab and record
+ * the flag names. Null when a thread row has no thread.
  */
 export function attentionResumeTarget(
   row: Pick<KanbanAttentionRow, "resumeAction" | "threadId" | "kind">,
@@ -181,6 +209,7 @@ export function attentionResumeTarget(
         params: { pluginId },
         search: {
           machine: board.environmentId,
+          ...(board.projectId === null ? {} : { projectId: board.projectId }),
           ...(tab === undefined ? {} : { tab }),
           ...(recordId === undefined ? {} : { recordId }),
         },

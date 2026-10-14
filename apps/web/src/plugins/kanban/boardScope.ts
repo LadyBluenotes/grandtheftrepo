@@ -151,19 +151,20 @@ export function pickBoardProject(
 }
 
 /**
- * The decisions view's category filter. A category is a project's, so it holds only for the
- * project it was picked in, which the URL carries with it; once the view shows another project,
- * however the scope changed, it shows every category.
+ * The decisions view's category filter and open decision (`category/id`). Both are a project's, so
+ * they hold only for the project they were picked in, which the URL carries with them; once the
+ * view shows another project, however the scope changed, it shows every category and no decision.
  */
-export function decisionsCategory(
+export function decisionsViewSearch(
   search: {
     readonly environmentId?: EnvironmentId;
     readonly projectId?: ProjectId;
     readonly category?: string;
+    readonly decision?: string;
   },
   project: ScopedProjectRef,
-): string | undefined {
+): { readonly category: string | undefined; readonly decision: string | undefined } {
   return search.environmentId === project.environmentId && search.projectId === project.projectId
-    ? search.category
-    : undefined;
+    ? { category: search.category, decision: search.decision }
+    : { category: undefined, decision: undefined };
 }

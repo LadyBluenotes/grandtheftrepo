@@ -32,8 +32,9 @@ import { decisionRef } from "./decisionList";
 import { kanbanBoard, kanbanDecisions } from "./state";
 
 /**
- * Opens an issue's panel on the board, keeping the rest of the board's view as it is. The URL
- * carries the issue's project with its slug, since slugs are unique per project only.
+ * Opens an issue's panel on the board, keeping the rest of the board's view as it is but the open
+ * decision, whose drawer gives way to the panel. The URL carries the issue's project with its
+ * slug, since slugs are unique per project only.
  */
 export function useOpenBoardIssue({ environmentId, projectId }: DecisionScope) {
   const navigate = useNavigate();
@@ -41,7 +42,12 @@ export function useOpenBoardIssue({ environmentId, projectId }: DecisionScope) {
     (id: string) =>
       void navigate({
         to: "/board",
-        search: (previous: BoardSearch) => ({ ...previous, environmentId, projectId, issue: id }),
+        search: ({ decision: _decision, ...previous }: BoardSearch) => ({
+          ...previous,
+          environmentId,
+          projectId,
+          issue: id,
+        }),
       }),
     [environmentId, navigate, projectId],
   );

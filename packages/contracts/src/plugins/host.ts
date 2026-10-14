@@ -15,6 +15,7 @@ import {
 } from "./kanban.ts";
 import { definePluginMethods } from "./method.ts";
 
+export * from "./capturedRecord.ts";
 export * from "./caveman.ts";
 export * from "./kanban.ts";
 export * from "./knowledge.ts";

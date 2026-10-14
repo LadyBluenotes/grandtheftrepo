@@ -5,7 +5,7 @@ import { buildSidebarProjectSnapshots } from "~/sidebarProjectGrouping";
 import type { Project } from "~/types";
 import {
   boardFanOut,
-  decisionsCategory,
+  decisionsViewSearch,
   pickBoardProject,
   projectIdsByEnvironment,
   scopedBoardProjects,
@@ -184,20 +184,26 @@ describe("pickBoardProject", () => {
   });
 });
 
-describe("decisionsCategory", () => {
+describe("decisionsViewSearch", () => {
   const here = { environmentId: local, projectId: notes.id };
-  const search = { ...here, category: "auth" };
+  const search = { ...here, category: "auth", decision: "auth/use-oauth" };
+  const none = { category: undefined, decision: undefined };
 
-  it("filters by the category only in the project it was picked in", () => {
-    expect(decisionsCategory(search, here)).toBe("auth");
+  it("keeps the category and open decision only in the project they were picked in", () => {
+    expect(decisionsViewSearch(search, here)).toStrictEqual({
+      category: "auth",
+      decision: "auth/use-oauth",
+    });
     // The sidebar's scope moved the view to another project; the URL still names the old one.
-    expect(decisionsCategory(search, { environmentId: local, projectId: appHere.id })).toBe(
-      undefined,
-    );
-    expect(decisionsCategory(search, { environmentId: remote, projectId: notes.id })).toBe(
-      undefined,
-    );
-    expect(decisionsCategory({ category: "auth" }, here)).toBe(undefined);
+    expect(
+      decisionsViewSearch(search, { environmentId: local, projectId: appHere.id }),
+    ).toStrictEqual(none);
+    expect(
+      decisionsViewSearch(search, { environmentId: remote, projectId: notes.id }),
+    ).toStrictEqual(none);
+    expect(
+      decisionsViewSearch({ category: "auth", decision: "auth/use-oauth" }, here),
+    ).toStrictEqual(none);
   });
 });
 

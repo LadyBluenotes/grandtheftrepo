@@ -37,7 +37,9 @@ const isState = (value: unknown): value is KanbanDecisionState =>
 
 /**
  * The project's decisions, searchable and filtered by state and category; superseded ones stay
- * hidden until asked for. A row opens the drawer with the decision in full.
+ * hidden until asked for. A row opens the drawer with the decision in full. The open decision is
+ * `openRef`, the URL's, so a link, the browser's history and a reload open the same one; whether
+ * it shows its edit form is not in the URL.
  */
 export function DecisionsView({
   environmentId,
@@ -45,12 +47,16 @@ export function DecisionsView({
   category,
   categories,
   onCategoryChange,
+  openRef,
+  onOpenRef,
   canWrite,
   projectSelect,
 }: Scope & {
   readonly category: string | undefined;
   readonly categories: Categories;
   readonly onCategoryChange: (category: string | undefined) => void;
+  readonly openRef: string | null;
+  readonly onOpenRef: (ref: string | null) => void;
   readonly canWrite: boolean;
   /** Picks the project whose decisions show, when the board covers more than one. */
   readonly projectSelect?: ReactNode;
@@ -61,7 +67,18 @@ export function DecisionsView({
   const [state, setState] = useState<KanbanDecisionState | null>(null);
   const [showSuperseded, setShowSuperseded] = useState(false);
   const [recording, setRecording] = useState(false);
-  const [target, setTarget] = useState<DecisionTarget | null>(null);
+  const [editingRef, setEditingRef] = useState<string | null>(null);
+  // However the decision closed, by the drawer or by the URL, its edit form goes with it.
+  if (openRef === null && editingRef !== null) setEditingRef(null);
+  // One object per decision and mode, as the drawer compares targets by identity.
+  const target = useMemo<DecisionTarget | null>(
+    () => (openRef === null ? null : { ref: openRef, editing: editingRef === openRef }),
+    [openRef, editingRef],
+  );
+  const setTarget = (next: DecisionTarget | null) => {
+    setEditingRef(next?.editing === true ? next.ref : null);
+    if ((next?.ref ?? null) !== openRef) onOpenRef(next?.ref ?? null);
+  };
   const openIssue = useOpenBoardIssue({ environmentId, projectId });
   const all = decisions.data;
   const list = useMemo(

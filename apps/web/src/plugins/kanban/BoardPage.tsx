@@ -75,7 +75,7 @@ import {
   boardFanOut,
   boardFolder,
   boardProjectKey,
-  decisionsCategory,
+  decisionsViewSearch,
   pickBoardProject,
   scopedBoardProjects,
   subscribedBoards,
@@ -108,6 +108,8 @@ export interface BoardSearch {
   readonly view?: "decisions";
   /** The decisions view's category, in the project above. */
   readonly category?: string;
+  /** The decision open in the decisions view's drawer, as `category/id`. */
+  readonly decision?: string;
   readonly needsYou?: true;
   readonly archived?: true;
 }
@@ -531,6 +533,10 @@ export function BoardPage({ search }: { readonly search: BoardSearch }) {
       : null;
   const newCardProject = pickBoardProject(writable, inHand, lastUsed);
   const viewProject = pickBoardProject(shown, inHand, lastUsed);
+  const viewSearch =
+    viewProject === null
+      ? { category: undefined, decision: undefined }
+      : decisionsViewSearch(search, viewProject);
   // The open issue is in the URL's project even outside the scope; the panel stays mounted to close.
   const panelProject = inHand ?? viewProject;
   // Keyed by the refs, so a new list with the same projects keeps the same subscriptions.
@@ -685,11 +691,13 @@ export function BoardPage({ search }: { readonly search: BoardSearch }) {
                   if (typeof value !== "string") return;
                   // The sidebar's scope: the thread list follows, and the choice persists.
                   setScope(value === ALL_PROJECTS ? null : value);
+                  // Issues, categories and decision refs belong to one project.
                   void setSearch({
                     environmentId: undefined,
                     projectId: undefined,
                     issue: undefined,
                     category: undefined,
+                    decision: undefined,
                   });
                 }}
               >
@@ -737,7 +745,11 @@ export function BoardPage({ search }: { readonly search: BoardSearch }) {
               variant="outline"
               pressed={search.view === "decisions"}
               onPressedChange={(pressed) =>
-                void setSearch({ view: pressed ? "decisions" : undefined, issue: undefined })
+                void setSearch({
+                  view: pressed ? "decisions" : undefined,
+                  issue: undefined,
+                  decision: undefined,
+                })
               }
               aria-label="Show decisions"
             >
@@ -808,13 +820,23 @@ export function BoardPage({ search }: { readonly search: BoardSearch }) {
               key={boardProjectKey(viewProject)}
               environmentId={viewProject.environmentId}
               projectId={viewProject.projectId}
-              category={decisionsCategory(search, viewProject)}
+              category={viewSearch.category}
               categories={boardOf(viewProject)?.decisionCategories ?? []}
               onCategoryChange={(category) =>
                 void setSearch({
                   environmentId: viewProject.environmentId,
                   projectId: viewProject.projectId,
+                  ...viewSearch,
                   category,
+                })
+              }
+              openRef={viewSearch.decision ?? null}
+              onOpenRef={(decision) =>
+                void setSearch({
+                  environmentId: viewProject.environmentId,
+                  projectId: viewProject.projectId,
+                  ...viewSearch,
+                  decision: decision ?? undefined,
                 })
               }
               canWrite={canWriteView}
@@ -830,6 +852,7 @@ export function BoardPage({ search }: { readonly search: BoardSearch }) {
                         environmentId: project.environmentId,
                         projectId: project.projectId,
                         category: undefined,
+                        decision: undefined,
                       });
                     }}
                   />
