@@ -1,6 +1,7 @@
 import {
   type DeterministicDraft,
   type KanbanActor,
+  type KanbanIssue,
   LearningError,
   MAX_SCRIPT_ID_LENGTH,
   PROMPT_PREVIEW_LENGTH,
@@ -92,6 +93,25 @@ const ownsTask = (
   task: { readonly id: string; readonly createdAt: string },
   draft: { readonly taskId: string; readonly createdAt: string },
 ) => task.id === draft.taskId && task.createdAt === draft.createdAt;
+
+/**
+ * The draft's own card: the issue under its id with the creation time the draft recorded. None when
+ * the card was deleted, or deleted and another filed under the id its title gives.
+ */
+const ownCard = (
+  store: KanbanStore.KanbanStore["Service"],
+  projectId: ProjectId,
+  draft: { readonly issueId: string; readonly createdAt: string },
+) =>
+  store.getIssue({ projectId, id: draft.issueId }).pipe(
+    Effect.map((issue) =>
+      issue.createdAt === draft.createdAt ? Option.some(issue) : Option.none<KanbanIssue>(),
+    ),
+    Effect.catchIf(
+      (error) => error.code === "not_found",
+      () => Effect.succeedNone,
+    ),
+  );
 
 /** The id a proposal's paused task is saved under first, so a retry finds it instead of adding one. */
 const taskIdOf = (proposalId: number) =>
@@ -238,23 +258,30 @@ export const make = Effect.gen(function* () {
           const card = cardDraft(candidate, windowFrom, proposal.id);
           // A card an earlier try filed has this title and label, and names the proposal. An
           // archived one is never it: the board keeps a dismissed proposal's card archived.
-          let saved: string | undefined;
+          let saved: KanbanIssue | undefined;
           for (const issue of (yield* store.value.board(projectId)).issues) {
             if (issue.archivedAt !== null) continue;
             if (issue.title !== card.title || !issue.labels.includes(CARD_LABEL)) continue;
             const full = yield* store.value.getIssue({ projectId, id: issue.id });
-            if (full.description.includes(card.marker)) saved = issue.id;
+            if (full.description.includes(card.marker)) saved = full;
           }
-          const issueId =
+          const filed =
             saved ??
-            (yield* store.value.write(projectId, "system", {
-              action: "issue.create",
-              title: card.title,
-              description: card.description,
-              status: "triage",
-              labels: [CARD_LABEL],
-            })).id;
-          return drafted({ kind: "kanban", issueId, title: card.title });
+            (yield* store.value
+              .write(projectId, "system", {
+                action: "issue.create",
+                title: card.title,
+                description: card.description,
+                status: "triage",
+                labels: [CARD_LABEL],
+              })
+              .pipe(Effect.flatMap(({ id }) => store.value.getIssue({ projectId, id }))));
+          return drafted({
+            kind: "kanban",
+            issueId: filed.id,
+            createdAt: filed.createdAt,
+            title: card.title,
+          });
         }
       }
     }).pipe(
@@ -342,14 +369,17 @@ export const make = Effect.gen(function* () {
         case "kanban": {
           const store = yield* kanban;
           if (Option.isNone(store)) return yield* inactive("The kanban plugin is off.");
-          const issue = yield* store.value.getIssue({ projectId, id: draft.issueId });
-          if (issue.archivedAt !== null) {
+          const issue = yield* ownCard(store.value, projectId, draft);
+          if (Option.isNone(issue)) {
+            return yield* invalid("The card was deleted; dismiss this proposal.");
+          }
+          if (issue.value.archivedAt !== null) {
             return yield* invalid("The card was archived; dismiss this proposal.");
           }
-          if (issue.status === "triage" || issue.status === "inbox") {
+          if (issue.value.status === "triage" || issue.value.status === "inbox") {
             yield* store.value.write(projectId, "user", {
               action: "issue.move",
-              id: issue.id,
+              id: issue.value.id,
               status: "todo",
             });
           }
@@ -413,14 +443,8 @@ export const make = Effect.gen(function* () {
               "The kanban plugin is off; turn it on so the card can be archived.",
             );
           }
-          const issue = yield* store.value.getIssue({ projectId, id: draft.issueId }).pipe(
-            Effect.map(Option.some),
-            // A card deleted since needs no withdrawing.
-            Effect.catchIf(
-              (error) => error.code === "not_found",
-              () => Effect.succeedNone,
-            ),
-          );
+          // A card deleted since, or filed again under its id, needs no withdrawing.
+          const issue = yield* ownCard(store.value, projectId, draft);
           if (
             Option.isSome(issue) &&
             (issue.value.status === "triage" || issue.value.status === "inbox") &&

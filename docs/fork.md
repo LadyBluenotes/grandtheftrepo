@@ -315,8 +315,9 @@ them half-evaluated. The host hands `toolkitRegistration` to `ServerPlugin.mcp` 
   next free `-2`, `-3` beside someone else's live page there; a scheduled task a paused task
   `learning-repeated-work:<id>` on the project's default model, or the next free `-2`, `-3` id
   beside someone else's task there, which the draft owns by its creation time, so a task saved
-  again under that id is never enabled or deleted for it; a hook or MCP tool a Triage card labeled `deterministic`. A target that is off or absent leaves the
-  proposal `waiting` until a tick finds it. One `deterministic_proposals` flag per project,
+  again under that id is never enabled or deleted for it; a hook or MCP tool a Triage card labeled
+  `deterministic`, owned the same way, since a card filed later with its title gets its id. A target
+  that is off or absent leaves the proposal `waiting` until a tick finds it. One `deterministic_proposals` flag per project,
   `deterministic:<projectId>`, opens the Learning screen's Deterministic tab on that project, which
   the board strip's `projectId` selects. People accept and dismiss, with a reason, through the
   method whose gateway is the grant the draft's own target asks for (`deterministicGateway`):

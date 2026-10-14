@@ -57,7 +57,16 @@ export const DeterministicDraft = Schema.Union([
     title: Schema.String,
     prompt: Schema.String,
   }),
-  Schema.Struct({ kind: Schema.Literal("kanban"), issueId: KanbanSlug, title: Schema.String }),
+  Schema.Struct({
+    kind: Schema.Literal("kanban"),
+    issueId: KanbanSlug,
+    /**
+     * When the card was created: a card's id comes from its title, so a card filed later under the
+     * same id has another time, and is never moved or archived for this proposal.
+     */
+    createdAt: IsoDateTime,
+    title: Schema.String,
+  }),
 ]);
 export type DeterministicDraft = typeof DeterministicDraft.Type;
 

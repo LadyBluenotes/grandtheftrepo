@@ -815,6 +815,9 @@ it.effect("a task someone else saved under a draft's id is never enabled or dele
 /** An in-memory board, which files and moves cards. */
 const fakeKanban = Effect.gen(function* () {
   const issues = yield* Ref.make<ReadonlyArray<KanbanIssue>>([]);
+  // Each card gets a creation time of its own, as the real board's files do.
+  let filed = 0;
+  const filedAt = () => `2026-10-${String(10 + ++filed).padStart(2, "0")}T00:00:00.000Z`;
   const find = (id: string | undefined) =>
     Effect.flatMap(Ref.get(issues), (all) => {
       const issue = all.find((entry) => entry.id === id);
@@ -852,7 +855,7 @@ const fakeKanban = Effect.gen(function* () {
             blocked: null,
             reopened: null,
             threads: [],
-            createdAt: WEEK_2,
+            createdAt: filedAt(),
             createdBy: actor,
             updatedAt: WEEK_2,
             doneAt: null,
@@ -875,8 +878,52 @@ const fakeKanban = Effect.gen(function* () {
         return { id: issue.id };
       }),
   });
-  return { context: yield* Layer.build(layer), issues: Ref.get(issues) };
+  return {
+    context: yield* Layer.build(layer),
+    issues: Ref.get(issues),
+    /**
+     * A person deletes card `id` and files another with the same title, which the board's
+     * title-derived ids give the same id: a new card, created now.
+     */
+    refile: (id: string) =>
+      Effect.flatMap(find(id), (card) =>
+        save({ ...card, createdBy: "user", createdAt: filedAt(), description: "Mine." }),
+      ),
+  };
 });
+
+it.effect("a card filed again under a draft card's id is never moved or archived for it", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const world = yield* setup();
+      const kanban = yield* fakeKanban;
+      const hook = (id: string, command: string) =>
+        candidate(id, { steps: [`command:${command}`], form: "hook" });
+      world.weeks.set(WEEK_1, [
+        hook("4007000000000011", "vp fmt <path>"),
+        hook("4007000000000012", "vp lint <path>"),
+      ]);
+      yield* world.tick(kanban.context);
+      const [first, second] = (yield* world.store.list({ projectId: projectA.id })).toReversed();
+      const ids = [first, second].map((p) => (p?.draft?.kind === "kanban" ? p.draft.issueId : ""));
+      // A person deletes both cards and files new ones with the same titles, so the same ids.
+      for (const id of ids) yield* kanban.refile(id);
+
+      const refused = yield* Effect.flip(
+        world.store.accept(first!.id, "operate").pipe(Effect.provide(kanban.context)),
+      );
+      assert.strictEqual(refused.message, "The card was deleted; dismiss this proposal.");
+      const dismissed = yield* world.store
+        .dismiss({ id: second!.id, reason: "Not now." }, "user", "operate")
+        .pipe(Effect.provide(kanban.context));
+      assert.strictEqual(dismissed.state, "dismissed");
+      assert.deepEqual(
+        (yield* kanban.issues).map((card) => [card.id, card.status, card.archivedAt]),
+        ids.map((id) => [id, "triage", null]),
+      );
+    }),
+  ),
+);
 
 it.effect(
   "work that needs code is a Triage card labeled deterministic; dismissing archives it",
@@ -902,6 +949,7 @@ it.effect(
         assert.deepEqual(proposal?.draft, {
           kind: "kanban",
           issueId: card!.id,
+          createdAt: card!.createdAt,
           title: "Could be deterministic: vp fmt <path>",
         });
 
