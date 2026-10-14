@@ -30,6 +30,7 @@ import {
   PROMPT_STATE_VARIANT,
   PROMPT_STATES,
   isPromptState,
+  refreshPromptLists,
   usePromptCommands,
   usePrompts,
 } from "./promptState";
@@ -154,7 +155,11 @@ export function PromptsTable({ environmentId, projectId }: LearningScope) {
         open={open}
         onOpen={setOpen}
         onClose={() => setOpen(null)}
-        onChanged={prompts.refresh}
+        onChanged={() => {
+          prompts.refresh();
+          // The composer's `/` menu lists the active prompts from a list of its own.
+          refreshPromptLists({ environmentId, projectId });
+        }}
       />
     </div>
   );
