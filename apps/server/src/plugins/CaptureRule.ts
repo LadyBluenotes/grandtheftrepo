@@ -11,7 +11,7 @@ import * as Effect from "effect/Effect";
 const lines: ReadonlyArray<{ readonly plugin: string; readonly text: string }> = [
   {
     plugin: "kanban",
-    text: "When you choose one approach over another, look for it with `kanban_list` kind `decision`, then record it with `kanban_write` `decision.create` if it is not there.",
+    text: "When you choose one approach over another, look for it with `kanban_list` kind `decision`, then record it with `kanban_write` action `decision.create` if it is not there.",
   },
   // A problem found outside the task goes here, with the findings tool, once that tool exists.
   {

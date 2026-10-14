@@ -36,7 +36,7 @@ it.effect("tells every turn with the MCP server when to record, while kanban run
       Effect.gen(function* () {
         yield* CaptureRule.install(allActive);
         for (const instructions of turnInstructions(true)) {
-          assert.include(instructions, "`kanban_write` `decision.create`");
+          assert.include(instructions, "`kanban_write` action `decision.create`");
           assert.include(instructions, "`learning_correction_add` with a `declaredMode`");
           assert.include(instructions, "`knowledge_propose`");
         }

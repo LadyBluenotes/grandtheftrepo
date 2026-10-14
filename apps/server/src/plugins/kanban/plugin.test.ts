@@ -129,7 +129,7 @@ it.effect(
           // A turn with the MCP server is told to record decisions, and not to use tools of
           // plugins that are off.
           const instructions = t3OrchestrationSystemPrompt(true);
-          assert.include(instructions, "`kanban_write` `decision.create`");
+          assert.include(instructions, "`kanban_write` action `decision.create`");
           assert.notInclude(instructions, "learning_correction_add");
           const sql = host.databases.get("kanban")!;
           const tables = yield* sql<{ readonly name: string }>`
