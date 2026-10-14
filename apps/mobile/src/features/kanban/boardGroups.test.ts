@@ -48,6 +48,7 @@ function issue(
 
 const board = (issues: ReadonlyArray<KanbanIssueSummary>): KanbanBoard => ({
   directory: "/wiki/project",
+  capture: false,
   issues,
   decisionCategories: [],
 });

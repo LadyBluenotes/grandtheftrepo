@@ -5,15 +5,22 @@ import * as Layer from "effect/Layer";
 
 import { forkParked } from "../../../serverActivation.ts";
 import * as PluginReactor from "../../PluginReactor.ts";
+import * as SettleCapture from "../capture/SettleCapture.ts";
 import * as SpecService from "./SpecService.ts";
 
 /**
- * Only `run.updated`: a drafting thread's final message is read from its thread once the run
- * ends, so the stream of turn-item updates every thread produces never opens a transaction here.
+ * `run.updated` and `thread.settled`: a drafting or capture thread's final message is read from
+ * its thread once the run ends, so the stream of turn-item updates every thread produces never
+ * opens a transaction here.
  */
-export const handlers = (spec: SpecService.SpecService["Service"]) =>
+export const handlers = (
+  spec: SpecService.SpecService["Service"],
+  capture: SettleCapture.SettleCapture["Service"],
+) =>
   ({
-    "run.updated": ({ event }) => spec.finish(event.payload),
+    "run.updated": ({ event }) =>
+      Effect.andThen(spec.finish(event.payload), capture.finish(event.payload)),
+    "thread.settled": ({ event }) => capture.settled(event.threadId),
   }) satisfies PluginReactor.Handlers<KanbanError>;
 
 /**
@@ -25,10 +32,15 @@ export const handlers = (spec: SpecService.SpecService["Service"]) =>
 export const layer = Layer.effectDiscard(
   Effect.gen(function* () {
     const spec = yield* SpecService.SpecService;
+    const capture = yield* SettleCapture.SettleCapture;
     // Taken while the layer builds, before activation lets commands in: an attempt stored before
     // this belongs to an earlier process, however late the forked reconciliation runs.
     const cutoff = DateTime.formatIso(yield* DateTime.now);
-    yield* PluginReactor.start({ plugin: "kanban", from: "now", handlers: handlers(spec) });
+    yield* PluginReactor.start({
+      plugin: "kanban",
+      from: "now",
+      handlers: handlers(spec, capture),
+    });
     yield* forkParked(
       spec
         .reconcile(cutoff)

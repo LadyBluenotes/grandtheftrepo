@@ -144,6 +144,11 @@ export const kanbanSetDirectory = createPluginRpcCommand(connectionAtomRuntime, 
   method: KANBAN_METHODS.setDirectory,
 });
 
+export const kanbanSetCapture = createPluginRpcCommand(connectionAtomRuntime, {
+  label: "kanban:set-capture",
+  method: KANBAN_METHODS.setCapture,
+});
+
 /**
  * The emergency stop: null while it is clear. Nothing pushes a change, so while the board is open
  * it re-reads every 30 seconds to show a stop set or cleared through MCP or another client; a

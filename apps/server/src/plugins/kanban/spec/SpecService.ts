@@ -44,14 +44,6 @@ const ISSUE_DELETED = "The issue was deleted while the spec was drafted.";
 /** Why a restart closes an attempt: its thread or first run was never created, so no run can end it. */
 const NEVER_STARTED = "The drafting thread was never started. Run specify again.";
 
-/** The run statuses that end a drafting thread's attempt. `waiting` still has a person to answer. */
-const ENDED = new Set<OrchestrationV2Run["status"]>([
-  "completed",
-  "interrupted",
-  "failed",
-  "cancelled",
-]);
-
 /**
  * The modes the drafting thread runs with. Only a caller that has them checked against its own,
  * such as the MCP tool, passes them; the gateway does not, and gets the strictest pair.
@@ -204,7 +196,7 @@ const acceptedLadder = Effect.serviceOption(Ponytail.Ponytail).pipe(
 );
 
 /** Plan mode answers with a proposed plan; without one, the last thing the agent said counts. */
-const finalMessage = (items: ReadonlyArray<OrchestrationV2TurnItem>) => {
+export const finalMessage = (items: ReadonlyArray<OrchestrationV2TurnItem>) => {
   let plan: string | undefined;
   let message: string | undefined;
   // The projection returns items in ordinal order, so the last of each kind wins.
@@ -479,7 +471,7 @@ const make = Effect.gen(function* () {
   });
 
   const finish: SpecService["Service"]["finish"] = Effect.fn("SpecService.finish")(function* (run) {
-    if (!ENDED.has(run.status)) return;
+    if (!ThreadManagementService.isTerminalRunStatus(run.status)) return;
     const rows = yield* sql<AttemptRow>`SELECT * FROM spec_attempt
         WHERE child_thread_id = ${run.threadId} AND status = 'running'`.pipe(
       Effect.catchTags({ SqlError: io }),

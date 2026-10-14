@@ -13,6 +13,10 @@ import type { PluginMigration } from "../Plugin.ts";
  * drafting thread's run to end, found by `child_thread_id`. `source_hash` is the hash of the
  * issue's creation time, title and description when the attempt started: the issue is admitted
  * only while it still has them.
+ *
+ * `settle_capture` holds each turn started to read a settled thread's last reply for decisions and
+ * findings it did not record, keyed by that turn's thread, one per settlement (`thread_id` and
+ * `settled_at`). A `running` one waits for its run to end.
  */
 export const migrations: ReadonlyArray<PluginMigration> = [
   [
@@ -54,6 +58,24 @@ export const migrations: ReadonlyArray<PluginMigration> = [
       yield* sql`
         CREATE INDEX spec_attempt_running ON spec_attempt (child_thread_id)
         WHERE status = 'running'
+      `;
+    }),
+  ],
+  [
+    3,
+    "settle_capture",
+    Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      yield* sql`
+        CREATE TABLE settle_capture (
+          child_thread_id TEXT PRIMARY KEY,
+          project_id TEXT NOT NULL,
+          thread_id TEXT NOT NULL,
+          settled_at TEXT NOT NULL,
+          status TEXT NOT NULL,
+          created_at TEXT NOT NULL,
+          UNIQUE (thread_id, settled_at)
+        )
       `;
     }),
   ],

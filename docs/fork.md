@@ -105,7 +105,11 @@ whole server require it and fails to typecheck. See
 
 A sweep's `run` executes in the supervisor's tick with every active plugin's services, so it can
 read a sibling plugin's service with `Effect.serviceOption` without either plugin listing the other
-in `dependsOn`. A plugin's layer still cannot see its siblings while it builds.
+in `dependsOn`. A plugin's layer still cannot see its siblings while it builds, and neither can a
+fiber it forks, such as its reactor's, which keeps the layer's context; such a fiber gets them by
+running an effect through `PluginServices.provide`
+([`plugins/PluginServices.ts`](../apps/server/src/plugins/PluginServices.ts)), which waits until
+every plugin layer is built.
 
 Plugin methods go through three gateway RPCs, `plugins.read`, `plugins.operate` and
 `plugins.settingsWrite`, one per scope, because the WebSocket RPC group sits at TypeScript's
@@ -123,9 +127,10 @@ them half-evaluated. The host hands `toolkitRegistration` to `ServerPlugin.mcp` 
 - **kanban**: a board per project. Issues and decisions are files under
   `<T3 home>/wiki/<project-slug>/`; the folder is changeable per project from the board.
   Its own database, `plugins/kanban.sqlite`, holds the emergency stop (`StopGate`, which anything
-  that starts a thread must ask first; the spec drafting thread is the one launch that asks so far)
-  and spec attempts. The `writers` sweep raises an attention flag when two agents write one
-  project, and the `decisions` sweep one per conflicted decision, keyed
+  that starts a thread must ask first; the spec drafting and settle capture threads are the
+  launches that ask so far), spec attempts and settle captures. The `writers` sweep raises an
+  attention flag when two agents write one project, and the `decisions` sweep one per conflicted
+  decision, keyed
   `decision:<projectId>:<category>/<id>`; it sees only projects the store has loaded, so a flag on
   one not loaded since the server started stays until the store next loads it. Done also needs a
   decision listing the issue or a `noDecision` reason, and no open finding, for an issue carrying
@@ -160,16 +165,22 @@ them half-evaluated. The host hands `toolkitRegistration` to `ServerPlugin.mcp` 
   correction or a knowledge page, to the orchestration instructions, which
   every adapter sends only to a turn with the `t3-code` MCP server. Each line is dropped while its
   plugin is off. Pi bakes that text into its extension at import, before the host starts, and Muse
-  gets none, so neither sees the rule. The wire projection reads the record each completed capture
-  call made, a decision from `kanban_write`, `finding_capture`, `learning_correction_add`,
-  `knowledge_propose` or `prompt_save`, from the call's own input and output and adds it to the
-  call's compact output as `capturedRecord` (`plugins/capturedRecords.ts`), because that output
-  otherwise keeps only ids the core knows. The web's **Recorded this turn** card under a run's last
-  reply lists them from the tool items it already has (`apps/web/src/plugins/recorded/`); a record
-  shows the state it was made in. Mobile does not show it, having no screen to open most records.
-  Server: `apps/server/src/plugins/kanban/`. Contracts: `packages/contracts/src/plugins/kanban.ts`.
-  Web: `apps/web/src/plugins/kanban/`. Mobile: `apps/mobile/src/features/kanban/`. User guide:
-  [Kanban board](./user/kanban.md).
+  gets none, so neither sees the rule. Settle-time capture catches what an agent said but did not
+  record: for a project listed in `kanban.json`'s `capture`, set from the board, the reactor reads
+  a settled thread's last reply from the read model and starts one turn on routing's cheap tier,
+  through `PluginServices`, whose answer it files as proposed decisions and open findings linked to
+  the thread, leaving out titles the thread already recorded (`kanban/capture/`). It needs no
+  instructions, so it covers every provider's threads, Pi's and Muse's included; kanban's own
+  threads, capture and spec drafting, are never read. The wire projection reads the record each
+  completed capture call made, a decision from `kanban_write`, `finding_capture`,
+  `learning_correction_add`, `knowledge_propose` or `prompt_save`, from the call's own input and
+  output and adds it to the call's compact output as `capturedRecord` (`plugins/capturedRecords.ts`),
+  because that output otherwise keeps only ids the core knows. The web's **Recorded this turn** card
+  under a run's last reply lists them from the tool items it already has
+  (`apps/web/src/plugins/recorded/`); a record shows the state it was made in. Mobile does not show
+  it, having no screen to open most records. Server: `apps/server/src/plugins/kanban/`. Contracts:
+  `packages/contracts/src/plugins/kanban.ts`. Web: `apps/web/src/plugins/kanban/`. Mobile:
+  `apps/mobile/src/features/kanban/`. User guide: [Kanban board](./user/kanban.md).
 - **telemetry**: the eighteen efficiency measures of #1, #35 and #36 over a project's window, from the
   `telemetry.measures` gateway method and the `telemetry_measures` MCP tool. Its reactor keeps
   runs, tool calls, threads and provider turn token usage from the event log in the plugin's own
