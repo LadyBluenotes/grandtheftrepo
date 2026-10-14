@@ -1,4 +1,10 @@
-import type { EnvironmentId, KanbanDecision, KanbanStance, ProjectId } from "@t3tools/contracts";
+import {
+  KANBAN_DECISION_STATES,
+  type EnvironmentId,
+  type KanbanDecision,
+  type KanbanDecisionState,
+  type ProjectId,
+} from "@t3tools/contracts";
 import { useState, type FormEvent } from "react";
 
 import { Badge } from "~/components/ui/badge";
@@ -28,6 +34,20 @@ interface Scope {
 
 const NO_ISSUES: ReadonlyArray<string> = [];
 
+/** The states a person picks; `superseded` comes only from superseding. */
+const PICKABLE_STATES = KANBAN_DECISION_STATES.filter((state) => state !== "superseded");
+const isPickable = (value: unknown): value is KanbanDecisionState =>
+  PICKABLE_STATES.some((state) => state === value);
+
+const STATE_BADGE = {
+  proposed: "info",
+  accepted: "success",
+  rejected: "error",
+  deferred: "secondary",
+  conflicted: "warning",
+  superseded: "outline",
+} as const satisfies Record<KanbanDecisionState, string>;
+
 const slugLike = (value: string) =>
   value
     .trim()
@@ -53,7 +73,7 @@ export function DecisionForm({
   const [category, setCategory] = useState(
     decision?.category ?? categories[0]?.category ?? "general",
   );
-  const [stance, setStance] = useState<KanbanStance>(decision?.stance ?? "for");
+  const [state, setState] = useState<KanbanDecisionState>(decision?.state ?? "accepted");
   const [title, setTitle] = useState(decision?.title ?? "");
   const [why, setWhy] = useState(decision?.why ?? "");
   const [issues, setIssues] = useState((decision?.issues ?? initialIssues).join(", "));
@@ -63,14 +83,31 @@ export function DecisionForm({
       .split(",")
       .map(slugLike)
       .filter((id) => id.length > 0);
-    const base = { projectId, stance, title: title.trim(), why: why.trim(), issues: issueIds };
-    const result = await write({
+    const base = { projectId, title: title.trim(), why: why.trim(), issues: issueIds };
+    let result = await write({
       environmentId,
       input:
         decision === undefined
-          ? { ...base, action: "decision.create", category: slugLike(category) || "general" }
+          ? {
+              ...base,
+              action: "decision.create",
+              state,
+              category: slugLike(category) || "general",
+            }
           : { ...base, action: "decision.update", category: decision.category, id: decision.id },
     });
+    // A state change is its own write, so its revision says what it was.
+    if (result._tag === "Success" && decision !== undefined && state !== decision.state)
+      result = await write({
+        environmentId,
+        input: {
+          projectId,
+          action: "decision.setState",
+          category: decision.category,
+          id: decision.id,
+          state,
+        },
+      });
     reportFailure("Could not save the decision", result);
     if (result._tag === "Success") onDone();
   };
@@ -78,17 +115,18 @@ export function DecisionForm({
     <form className="flex flex-col gap-2 rounded-lg border border-border p-3" onSubmit={submit}>
       <div className="flex gap-2">
         <Select
-          value={stance}
-          onValueChange={(value) =>
-            value === "for" || value === "against" ? setStance(value) : undefined
-          }
+          value={state}
+          onValueChange={(value) => (isPickable(value) ? setState(value) : undefined)}
         >
-          <SelectTrigger size="sm" className="w-28 min-w-0" aria-label="Stance">
-            <SelectValue>{stance}</SelectValue>
+          <SelectTrigger size="sm" className="w-32 min-w-0" aria-label="State">
+            <SelectValue>{state}</SelectValue>
           </SelectTrigger>
           <SelectPopup>
-            <SelectItem value="for">for</SelectItem>
-            <SelectItem value="against">against</SelectItem>
+            {PICKABLE_STATES.map((option) => (
+              <SelectItem key={option} value={option}>
+                {option}
+              </SelectItem>
+            ))}
           </SelectPopup>
         </Select>
         <Input
@@ -168,8 +206,8 @@ export function DecisionRow({
   return (
     <li className="flex flex-col gap-1 rounded-lg border border-border/60 p-3 text-sm">
       <div className="flex items-start gap-2">
-        <Badge size="sm" variant={decision.stance === "for" ? "success" : "warning"}>
-          {decision.stance}
+        <Badge size="sm" variant={STATE_BADGE[decision.state]}>
+          {decision.state}
         </Badge>
         <span className="min-w-0 flex-1 font-medium">{decision.title}</span>
         {canWrite ? (
@@ -206,6 +244,7 @@ export function DecisionRow({
       <p className="text-xs text-muted-foreground">
         {decision.category} · {decision.by} · {new Date(decision.at).toLocaleString()}
         {decision.issues.length > 0 ? ` · ${decision.issues.join(", ")}` : ""}
+        {decision.supersededBy === null ? "" : ` · superseded by ${decision.supersededBy}`}
       </p>
     </li>
   );
@@ -271,7 +310,7 @@ export function DecisionsView({
             <EmptyHeader>
               <EmptyTitle>No decisions yet</EmptyTitle>
               <EmptyDescription>
-                Record the calls you make for or against something, so the next agent inherits them.
+                Record the calls you make and why, so the next agent inherits them.
               </EmptyDescription>
             </EmptyHeader>
           </Empty>

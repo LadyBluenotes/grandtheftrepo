@@ -114,7 +114,10 @@ them half-evaluated. The host hands `toolkitRegistration` to `ServerPlugin.mcp` 
   Its own database, `plugins/kanban.sqlite`, holds the emergency stop (`StopGate`, which anything
   that starts a thread must ask first; the spec drafting thread is the one launch that asks so far)
   and spec attempts. The `writers` sweep raises an attention flag when two agents write one
-  project. `kanban.attention.list` feeds the strip above the board from the project's open host
+  project, and the `decisions` sweep one per conflicted decision, keyed
+  `decision:<projectId>:<category>/<id>`; it sees only projects the store has loaded, so a flag on
+  one not loaded since the server started stays until the store next loads it.
+  `kanban.attention.list` feeds the strip above the board from the project's open host
   flags, its threads' pending questions and permission requests, and, while routing runs, its
   routing mismatches. `kanban.ticket.specify` (MCP `kanban_ticket_specify`) checks a Triage or
   Inbox issue's description against the Goal, Approach and Acceptance format, or starts a plan-mode
