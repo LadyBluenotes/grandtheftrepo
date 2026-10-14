@@ -151,6 +151,12 @@ export const make = Effect.gen(function* () {
         case "scheduled_task": {
           const service = yield* tasks;
           if (Option.isNone(service)) return waiting("Scheduled tasks are not available.");
+          // Checked before the task list is read: a model-less project's proposal waits every tick.
+          const shell = yield* projects.getShell(projectId);
+          const modelSelection = Option.isSome(shell) ? shell.value.defaultModelSelection : null;
+          if (modelSelection === null) {
+            return waiting("The project has no default model for a task to run on.");
+          }
           const text = taskDraft(candidate, windowFrom);
           const saved = (yield* service.value.list()).tasks;
           // The first of `<base>`, `<base>-2`, ... that no task holds, or that holds the paused
@@ -173,11 +179,6 @@ export const make = Effect.gen(function* () {
               });
             }
             id = ScheduledTaskId.make(`${taskIdOf(proposal.id)}-${n}`);
-          }
-          const shell = yield* projects.getShell(projectId);
-          const modelSelection = Option.isSome(shell) ? shell.value.defaultModelSelection : null;
-          if (modelSelection === null) {
-            return waiting("The project has no default model for a task to run on.");
           }
           const { task } = yield* service.value.upsert({
             id,
