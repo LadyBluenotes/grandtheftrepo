@@ -3,7 +3,7 @@ import { Link } from "@tanstack/react-router";
 import { Suspense } from "react";
 
 import { PLUGINS_UNSUPPORTED, pluginScreenView } from "./pluginRoute";
-import { PluginEnvironmentContext, usePluginStatuses } from "./pluginState";
+import { PluginEnvironmentContext, usePluginEnvironmentId, usePluginStatuses } from "./pluginState";
 import { PluginNotice, PluginPageShell } from "./PluginsPage";
 import { pluginRegistry } from "./registry";
 
@@ -20,14 +20,21 @@ export function PluginScreen({
 }) {
   return (
     <PluginEnvironmentContext.Provider value={environmentId}>
-      {/* Keyed by environment: a screen's state, such as a selected project, belongs to one. */}
-      <PluginScreenBody
-        key={environmentId ?? "primary"}
-        pluginId={pluginId}
-        environmentId={environmentId}
-      />
+      <KeyedPluginScreenBody pluginId={pluginId} environmentId={environmentId} />
     </PluginEnvironmentContext.Provider>
   );
+}
+
+/**
+ * Keyed by the environment the screen shows, the primary one resolved: a screen's state, such as
+ * a selected project, belongs to one environment.
+ */
+function KeyedPluginScreenBody(props: {
+  readonly pluginId: string;
+  readonly environmentId: EnvironmentId | null;
+}) {
+  const shown = usePluginEnvironmentId();
+  return <PluginScreenBody key={shown ?? "none"} {...props} />;
 }
 
 function PluginScreenBody({

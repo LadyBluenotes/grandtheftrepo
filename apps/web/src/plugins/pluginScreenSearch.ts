@@ -24,7 +24,8 @@ const searchText = (value: unknown) => {
 
 /** Keeps the three keys a screen reads, as strings, and drops the rest. */
 export function validatePluginScreenSearch(raw: Record<string, unknown>): PluginScreenSearch {
-  const machine = searchText(raw.machine);
+  // An environment id is trimmed; tabs and record ids keep their exact text.
+  const machine = searchText(raw.machine)?.trim();
   const tab = searchText(raw.tab);
   const recordId = searchText(raw.recordId);
   return {

@@ -28,6 +28,12 @@ describe("validatePluginScreenSearch", () => {
     });
   });
 
+  it("trims the machine, an environment id, and keeps a tab's and record's exact text", () => {
+    expect(
+      validatePluginScreenSearch({ machine: " env-1 ", tab: " a ", recordId: " 7" }),
+    ).toStrictEqual({ machine: "env-1", tab: " a ", recordId: " 7" });
+  });
+
   it("drops blank values and keys a screen does not read", () => {
     expect(
       validatePluginScreenSearch({ machine: " ", tab: "", recordId: "7", project: "p1" }),
