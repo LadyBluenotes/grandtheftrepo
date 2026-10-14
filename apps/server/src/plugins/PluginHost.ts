@@ -22,6 +22,7 @@ import * as SqlClient from "effect/sql/SqlClient";
 import * as ServerConfig from "../config.ts";
 import * as RuntimeLayer from "../orchestration-v2/runtimeLayer.ts";
 import * as Attention from "./Attention.ts";
+import * as CaptureRule from "./CaptureRule.ts";
 import * as HostDatabase from "./HostDatabase.ts";
 import * as PluginDatabase from "./PluginDatabase.ts";
 import * as PluginRpc from "./PluginRpc.ts";
@@ -272,11 +273,19 @@ const mergeActive = <R>(
  * supervisor and `Attention` share one connection to the host's own file. A plugin's reactor reads
  * the event sink the orchestrator publishes to; the runtime layer keeps it to itself, so the same
  * layer is provided here, and layer memoization makes it the one instance. The supervisor's ticker
- * is built over the same plugin layers, so a sweep sees every active plugin's services.
+ * is built over the same plugin layers, so a sweep sees every active plugin's services. While the
+ * host runs, turns with the `t3-code` MCP server carry the capture rule for the active plugins.
  */
 export const layerOf = (plugins: typeof registry) => {
   const layerPlugins = Layer.unwrap(mergeActive(plugins, (plugin) => plugin.layer));
-  return Layer.merge(layerPlugins, PluginSupervisor.ticker.pipe(Layer.provide(layerPlugins))).pipe(
+  const layerCaptureRule = Layer.effectDiscard(
+    Effect.flatMap(PluginHost, (host) => CaptureRule.install(host.activeIds)),
+  );
+  return Layer.mergeAll(
+    layerPlugins,
+    PluginSupervisor.ticker.pipe(Layer.provide(layerPlugins)),
+    layerCaptureRule,
+  ).pipe(
     Layer.provideMerge(
       Layer.merge(PluginSupervisor.layer(plugins.map((plugin) => plugin.id)), Attention.layer).pipe(
         Layer.provide(HostDatabase.layer),
