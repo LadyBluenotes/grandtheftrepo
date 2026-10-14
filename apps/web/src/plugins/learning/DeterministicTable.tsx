@@ -145,7 +145,7 @@ function ProposalDetails({
   readonly proposal: DeterministicProposal;
   readonly onChanged: () => void;
 }) {
-  const commands = useDeterministicCommands(environmentId);
+  const commands = useDeterministicCommands(environmentId, proposal.draft);
   const [reason, setReason] = useState("");
   const [saving, setSaving] = useState(false);
   const undecided = proposal.state === "waiting" || proposal.state === "pending";

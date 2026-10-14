@@ -53,7 +53,11 @@ export const table = {
   }),
   ...PluginRpc.defineHandlers(DETERMINISTIC_METHODS)({
     list: (input) => Effect.flatMap(proposals, (s) => s.list(input)),
-    accept: ({ id }) => Effect.flatMap(proposals, (s) => s.accept(id)),
-    dismiss: (input) => Effect.flatMap(proposals, (s) => s.dismiss(input, "user")),
+    // Each decision's method checks the grant its gateway carries against the draft's target.
+    accept: ({ id }) => Effect.flatMap(proposals, (s) => s.accept(id, "operate")),
+    acceptSettings: ({ id }) => Effect.flatMap(proposals, (s) => s.accept(id, "settingsWrite")),
+    dismiss: (input) => Effect.flatMap(proposals, (s) => s.dismiss(input, "user", "operate")),
+    dismissSettings: (input) =>
+      Effect.flatMap(proposals, (s) => s.dismiss(input, "user", "settingsWrite")),
   }),
 };

@@ -130,9 +130,24 @@ export const DeterministicDismissInput = Schema.Struct({
 export type DeterministicDismissInput = typeof DeterministicDismissInput.Type;
 
 /**
+ * The grant a decision on a proposal needs: the one its draft's own target asks for, since the
+ * decision applies or withdraws that draft. Accepting a script or a knowledge page writes settings
+ * or instruction files (`settingsWrite`), as discarding a knowledge draft does; every other
+ * decision, and dismissing a proposal with no draft, is `operate`, as the prompt library, scheduled
+ * tasks and the board ask. Each grant has its own method, which refuses a proposal of the other.
+ */
+export const deterministicGateway = (
+  decision: "accept" | "dismiss",
+  draft: DeterministicDraft | null,
+): "operate" | "settingsWrite" =>
+  draft?.kind === "knowledge" || (decision === "accept" && draft?.kind === "script")
+    ? "settingsWrite"
+    : "operate";
+
+/**
  * The review of repeated work lives in the learning plugin, so its methods answer with
- * `LearningError` and are named under `learning.`. Accepting writes project settings, instruction
- * files or schedules, so it needs the settings grant.
+ * `LearningError` and are named under `learning.`. A decision goes through the method for the
+ * grant `deterministicGateway` names for its draft.
  */
 export const DETERMINISTIC_METHODS = definePluginMethods({
   list: {
@@ -143,25 +158,44 @@ export const DETERMINISTIC_METHODS = definePluginMethods({
     error: LearningError,
   },
   /**
-   * Only a `pending` proposal: a script joins the project's scripts, a prompt becomes active, a
-   * knowledge page is accepted and installed, a task is turned on, a card moves to Todo.
+   * Only a `pending` proposal whose draft is a prompt, a task or a card: the prompt becomes active,
+   * the task is turned on, the card moves to Todo.
    */
   accept: {
     method: "learning.deterministicAccept",
+    gateway: "operate",
+    input: DeterministicAcceptInput,
+    output: DeterministicProposal,
+    error: LearningError,
+  },
+  /**
+   * Only a `pending` proposal whose draft is a script or a knowledge page: the script joins the
+   * project's scripts, the page is accepted and installed.
+   */
+  acceptSettings: {
+    method: "learning.deterministicAcceptSettings",
     gateway: "settingsWrite",
     input: DeterministicAcceptInput,
     output: DeterministicProposal,
     error: LearningError,
   },
   /**
-   * A `waiting` or `pending` proposal, with a reason. A draft still undecided in its target is
-   * withdrawn: the prompt archived, the knowledge draft discarded, the paused task deleted, the
+   * A `waiting` or `pending` proposal, with a reason, unless its draft is a knowledge page. A draft
+   * still undecided in its target is withdrawn: the prompt archived, the paused task deleted, the
    * Triage card archived. While that target is off, or the withdrawal fails, the proposal stays
    * undecided and the call fails.
    */
   dismiss: {
     method: "learning.deterministicDismiss",
     gateway: "operate",
+    input: DeterministicDismissInput,
+    output: DeterministicProposal,
+    error: LearningError,
+  },
+  /** `dismiss` for a proposal whose draft is a knowledge page, which is discarded. */
+  dismissSettings: {
+    method: "learning.deterministicDismissSettings",
+    gateway: "settingsWrite",
     input: DeterministicDismissInput,
     output: DeterministicProposal,
     error: LearningError,

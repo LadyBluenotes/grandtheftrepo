@@ -281,7 +281,11 @@ it.effect("a dismissed candidate is not proposed again until its weekly cost dou
       yield* world.tick();
       const [first] = yield* world.store.list({ projectId: projectA.id });
 
-      const dismissed = yield* world.store.dismiss({ id: first!.id, reason: "Noise." }, "user");
+      const dismissed = yield* world.store.dismiss(
+        { id: first!.id, reason: "Noise." },
+        "user",
+        "operate",
+      );
       assert.deepInclude(dismissed, {
         state: "dismissed",
         decidedBy: "user",
@@ -311,7 +315,9 @@ it.effect("a dismissed candidate is not proposed again until its weekly cost dou
         ["proposed", "archived"],
       );
       // A decided proposal is not decided again.
-      const again = yield* Effect.flip(world.store.dismiss({ id: first!.id, reason: "x" }, "user"));
+      const again = yield* Effect.flip(
+        world.store.dismiss({ id: first!.id, reason: "x" }, "user", "operate"),
+      );
       assert.strictEqual(again.code, "invalid");
     }),
   ),
@@ -688,7 +694,11 @@ it.effect(
 
         // With the board off the card cannot be archived, so the proposal stays undecided.
         const off = yield* Effect.flip(
-          world.store.dismiss({ id: proposal!.id, reason: "We format on save." }, "user"),
+          world.store.dismiss(
+            { id: proposal!.id, reason: "We format on save." },
+            "user",
+            "operate",
+          ),
         );
         assert.deepEqual(
           [off.code, off.message],
@@ -701,7 +711,7 @@ it.effect(
         assert.isNull((yield* kanban.issues)[0]?.archivedAt);
 
         yield* world.store
-          .dismiss({ id: proposal!.id, reason: "We format on save." }, "user")
+          .dismiss({ id: proposal!.id, reason: "We format on save." }, "user", "operate")
           .pipe(Effect.provide(kanban.context));
         assert.isNotNull((yield* kanban.issues)[0]?.archivedAt);
       }),
@@ -724,7 +734,7 @@ it.effect("dismissing archives a draft card a person moved to Inbox", () =>
 
       const [proposal] = yield* world.store.list({ projectId: projectA.id });
       yield* world.store
-        .dismiss({ id: proposal!.id, reason: "Not worth a hook." }, "user")
+        .dismiss({ id: proposal!.id, reason: "Not worth a hook." }, "user", "operate")
         .pipe(Effect.provide(kanban.context));
       const [after] = yield* kanban.issues;
       assert.strictEqual(after?.status, "inbox");
@@ -750,7 +760,7 @@ it.effect(
         yield* world.tick(kanban.context);
         const [first] = yield* world.store.list({ projectId: projectA.id });
         yield* world.store
-          .dismiss({ id: first!.id, reason: "Not yet." }, "user")
+          .dismiss({ id: first!.id, reason: "Not yet." }, "user", "operate")
           .pipe(Effect.provide(kanban.context));
 
         yield* TestClock.adjust("7 days");
@@ -768,7 +778,9 @@ it.effect(
         );
         assert.deepInclude(again?.draft, { kind: "kanban", issueId: "card-2" });
 
-        const accepted = yield* world.store.accept(again!.id).pipe(Effect.provide(kanban.context));
+        const accepted = yield* world.store
+          .accept(again!.id, "operate")
+          .pipe(Effect.provide(kanban.context));
         assert.strictEqual(accepted.state, "accepted");
         assert.strictEqual(
           (yield* kanban.issues).find((card) => card.id === "card-2")?.status,
@@ -791,7 +803,7 @@ it.effect(
         yield* world.tick(knowledge.context);
         const [proposal] = yield* world.store.list({ projectId: projectA.id });
         const dismiss = world.store
-          .dismiss({ id: proposal!.id, reason: "Already in AGENTS.md." }, "user")
+          .dismiss({ id: proposal!.id, reason: "Already in AGENTS.md." }, "user", "settingsWrite")
           .pipe(Effect.provide(knowledge.context));
 
         // The draft page cannot be discarded: nothing is recorded, and a retry can follow.
@@ -828,7 +840,7 @@ it.effect("accepting a page that was accepted but never installed installs it", 
       yield* knowledge.setState(1, "accepted");
 
       const accepted = yield* world.store
-        .accept(proposal!.id)
+        .accept(proposal!.id, "settingsWrite")
         .pipe(Effect.provide(knowledge.context));
       assert.strictEqual(accepted.state, "accepted");
       assert.strictEqual(yield* knowledge.installs, 1);
@@ -845,7 +857,9 @@ it.effect("accepting a draft script adds it to the project's scripts, once", () 
       const [proposal] = yield* world.store.list({ projectId: projectA.id });
       const settings = yield* Layer.build(ServerSettings.layerTest());
 
-      const accepted = yield* world.store.accept(proposal!.id).pipe(Effect.provide(settings));
+      const accepted = yield* world.store
+        .accept(proposal!.id, "settingsWrite")
+        .pipe(Effect.provide(settings));
       assert.deepInclude(accepted, { state: "accepted", decidedBy: "user" });
       const saved = yield* Effect.provide(
         ServerSettings.ServerSettingsService.pipe(Effect.flatMap((s) => s.getSettings)),
@@ -857,7 +871,7 @@ it.effect("accepting a draft script adds it to the project's scripts, once", () 
       );
       // Accepted once: a second accept is refused, and the flag clears on the next tick.
       const again = yield* Effect.flip(
-        world.store.accept(proposal!.id).pipe(Effect.provide(settings)),
+        world.store.accept(proposal!.id, "settingsWrite").pipe(Effect.provide(settings)),
       );
       assert.strictEqual(again.code, "invalid");
       assert.deepEqual(yield* world.tick(), { examined: 0, acted: 1, flags: 0 });
@@ -889,7 +903,7 @@ it.effect(
 
         const draft = proposal?.draft;
         if (draft?.kind !== "script") return assert.fail("Expected a script draft.");
-        yield* world.store.accept(proposal!.id).pipe(Effect.provide(settings));
+        yield* world.store.accept(proposal!.id, "settingsWrite").pipe(Effect.provide(settings));
         const saved = yield* Effect.provide(
           ServerSettings.ServerSettingsService.pipe(Effect.flatMap((s) => s.getSettings)),
           settings,

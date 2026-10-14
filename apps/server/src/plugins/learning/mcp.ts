@@ -205,7 +205,7 @@ const DeterministicProposalsTool = Tool.make("learning_deterministic_proposals",
 const DeterministicDismissTool = Tool.make("learning_deterministic_dismiss", {
   ...shared,
   description:
-    "Dismiss a waiting or pending proposal from learning_deterministic_proposals, with a reason of at most 500 characters, such as the repeated work being noise. A draft its target still holds undecided is withdrawn: the proposed prompt archived, the knowledge draft discarded, the paused task deleted, the Triage card archived; while that draft's plugin is off, or the withdrawal fails, the proposal stays undecided and the call fails. The candidate is proposed again only once its weekly cost doubles. From a T3 thread only. Answers with the proposal.",
+    "Dismiss a waiting or pending proposal from learning_deterministic_proposals, with a reason of at most 500 characters, such as the repeated work being noise. A draft its target still holds undecided is withdrawn: the proposed prompt archived, the knowledge draft discarded, the paused task deleted, the Triage card archived; while that draft's plugin is off, or the withdrawal fails, the proposal stays undecided and the call fails. A proposal whose draft is a knowledge page is refused: a person dismisses it, as only a person discards knowledge drafts. The candidate is proposed again only once its weekly cost doubles. From a T3 thread only. Answers with the proposal.",
   parameters: DeterministicDismissInput,
   success: DeterministicProposal,
 })
@@ -384,7 +384,8 @@ export const handlers = McpToolAccess.toLayer(
         Effect.gen(function* () {
           const actor = yield* threadActor("A dismissal");
           const proposals = yield* proposalStore;
-          return yield* proposals.dismiss(input, actor);
+          // An agent cannot discard a knowledge draft through the knowledge plugin either.
+          return yield* proposals.dismiss(input, actor, "operate");
         }).pipe(Effect.catchTags({ LearningError: (error) => Effect.fail(failure(error)) })),
       ),
     };

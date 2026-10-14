@@ -315,12 +315,16 @@ them half-evaluated. The host hands `toolkitRegistration` to `ServerPlugin.mcp` 
   or MCP tool a Triage card labeled `deterministic`. A target that is off or absent leaves the
   proposal `waiting` until a tick finds it. One `deterministic_proposals` flag per project,
   `deterministic:<projectId>`, opens the Learning screen's Deterministic tab on that project, which
-  the board strip's `projectId` selects. People accept (`learning.deterministicAccept`, behind `settingsWrite`) and dismiss
-  with a reason (`learning.deterministicDismiss`), which withdraws a draft its target still holds
+  the board strip's `projectId` selects. People accept and dismiss, with a reason, through the
+  method whose gateway is the grant the draft's own target asks for (`deterministicGateway`):
+  `learning.deterministicAcceptSettings` for a script or a page and `deterministicDismissSettings`
+  for a page, `learning.deterministicAccept` and `deterministicDismiss` for the rest, each refusing
+  the other kinds, since a plugin handler cannot see the caller's scopes. Dismissing withdraws a
+  draft its target still holds
   undecided, and fails, leaving the proposal undecided, while that target is off or the withdrawal
   fails; each draft carries what it said when saved, which the drawer shows, cut to its target's
   contract, and one its target still refuses is dismissed as `supervisor`. Agents read and
-  dismiss with `learning_deterministic_proposals` and
+  dismiss, a page's proposal excepted, with `learning_deterministic_proposals` and
   `learning_deterministic_dismiss`. The weekly report's `deterministic` section reads them. The
   `outcomes` sweep checks each adopted bet once its 28 days after adoption are complete: it
   counts the project's corrections declaring the item's mode in the 28 days before and after the

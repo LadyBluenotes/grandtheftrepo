@@ -1,5 +1,7 @@
 import {
+  DETERMINISTIC_METHODS,
   DETERMINISTIC_PROPOSALS_LIMIT,
+  deterministicGateway,
   DeterministicDraft,
   type DeterministicDismissInput,
   type DeterministicProposal,
@@ -22,6 +24,9 @@ import type * as SqlError from "effect/sql/SqlError";
 
 import { proposalTitle, shownSteps } from "./drafts.ts";
 import * as Targets from "./targets.ts";
+
+/** The grant a decision on a proposal arrived with: its gateway's. */
+type DeterministicGrant = ReturnType<typeof deterministicGateway>;
 
 /** A candidate the weekly review proposes: most occurrences identical, in at least three threads. */
 const MIN_DETERMINISTIC_RATIO = 0.8;
@@ -109,16 +114,25 @@ export class ProposalStore extends Context.Service<
       readonly from: string;
       readonly to: string;
     }) => Effect.Effect<ReadonlyArray<DeterministicProposal>, LearningError>;
-    /** A person accepts a `pending` proposal: its draft is applied in its target, then recorded. */
-    readonly accept: (id: number) => Effect.Effect<DeterministicProposal, LearningError>;
+    /**
+     * A person accepts a `pending` proposal: its draft is applied in its target, then recorded.
+     * `grant` is the one the caller was authorized with; a draft whose target asks for the other,
+     * as `deterministicGateway` says, is refused.
+     */
+    readonly accept: (
+      id: number,
+      grant: DeterministicGrant,
+    ) => Effect.Effect<DeterministicProposal, LearningError>;
     /**
      * Dismisses a `waiting` or `pending` proposal with a reason, as `by` (`user` or `thread:<id>`),
      * and withdraws its draft where the target still holds it undecided. While that target is off,
      * or the withdrawal fails, nothing is recorded and the call fails, so the person can retry.
+     * `grant` is checked as for `accept`.
      */
     readonly dismiss: (
       input: DeterministicDismissInput,
       by: string,
+      grant: DeterministicGrant,
     ) => Effect.Effect<DeterministicProposal, LearningError>;
     /**
      * Records this week's proposals for a project from its candidates, as `waiting` until drafted,
@@ -240,7 +254,34 @@ const make = Effect.gen(function* () {
       Effect.catchTags({ SqlError: failed, SchemaError: failed }),
     );
 
-  const accept: ProposalStore["Service"]["accept"] = (id) =>
+  /**
+   * Refuses a decision made with a grant other than the one its draft's target asks for, naming
+   * the method that has it.
+   */
+  const granted = (
+    proposal: DeterministicProposal,
+    decision: "accept" | "dismiss",
+    grant: DeterministicGrant,
+  ) => {
+    const needed = deterministicGateway(decision, proposal.draft);
+    if (needed === grant) return Effect.void;
+    const method =
+      decision === "accept"
+        ? needed === "settingsWrite"
+          ? DETERMINISTIC_METHODS.acceptSettings.method
+          : DETERMINISTIC_METHODS.accept.method
+        : needed === "settingsWrite"
+          ? DETERMINISTIC_METHODS.dismissSettings.method
+          : DETERMINISTIC_METHODS.dismiss.method;
+    return Effect.fail(
+      new LearningError({
+        code: "invalid",
+        message: `Proposal ${proposal.id} is decided with ${method}, which needs the ${needed} grant.`,
+      }),
+    );
+  };
+
+  const accept: ProposalStore["Service"]["accept"] = (id, grant) =>
     Effect.gen(function* () {
       const row = yield* existing(id);
       const { proposal } = yield* read(row);
@@ -250,6 +291,7 @@ const make = Effect.gen(function* () {
           message: `Proposal ${id} is ${proposal.state}; only a pending one is accepted.`,
         });
       }
+      yield* granted(proposal, "accept", grant);
       yield* targets.accept(proposal.projectId, proposal.draft);
       const at = yield* nowIso;
       const [moved] = yield* sql<Row>`UPDATE deterministic_proposals
@@ -259,7 +301,7 @@ const make = Effect.gen(function* () {
       return yield* toProposal(moved!);
     }).pipe(lock.withPermits(1), Effect.catchTags({ SqlError: failed, SchemaError: failed }));
 
-  const dismiss: ProposalStore["Service"]["dismiss"] = ({ id, reason }, by) =>
+  const dismiss: ProposalStore["Service"]["dismiss"] = ({ id, reason }, by, grant) =>
     Effect.gen(function* () {
       const row = yield* existing(id);
       const { proposal } = yield* read(row);
@@ -269,6 +311,7 @@ const make = Effect.gen(function* () {
           message: `Proposal ${id} is ${proposal.state}; only a waiting or pending one is dismissed.`,
         });
       }
+      yield* granted(proposal, "dismiss", grant);
       if (proposal.draft !== null) yield* targets.withdraw(proposal.projectId, proposal.draft, by);
       const at = yield* nowIso;
       const [moved] = yield* sql<Row>`UPDATE deterministic_proposals

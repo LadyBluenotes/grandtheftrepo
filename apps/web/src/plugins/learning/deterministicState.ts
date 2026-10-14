@@ -6,6 +6,7 @@ import {
 import {
   DETERMINISTIC_METHODS,
   type DeterministicDraft,
+  deterministicGateway,
   type DeterministicProposalState,
   type EnvironmentId,
   type TelemetryExtractionForm,
@@ -30,9 +31,17 @@ const proposalAccept = createPluginRpcCommand(connectionAtomRuntime, {
   label: "learning:deterministic-accept",
   method: DETERMINISTIC_METHODS.accept,
 });
+const proposalAcceptSettings = createPluginRpcCommand(connectionAtomRuntime, {
+  label: "learning:deterministic-accept-settings",
+  method: DETERMINISTIC_METHODS.acceptSettings,
+});
 const proposalDismiss = createPluginRpcCommand(connectionAtomRuntime, {
   label: "learning:deterministic-dismiss",
   method: DETERMINISTIC_METHODS.dismiss,
+});
+const proposalDismissSettings = createPluginRpcCommand(connectionAtomRuntime, {
+  label: "learning:deterministic-dismiss-settings",
+  method: DETERMINISTIC_METHODS.dismissSettings,
 });
 
 /** A project's proposals in every state, newest first. */
@@ -41,17 +50,32 @@ export function useDeterministicProposals({ environmentId, projectId }: Learning
 }
 
 /**
- * A person's decisions on `environmentId`'s proposals. Accepting writes project settings, so it
- * needs the settings grant; dismissing needs the operate grant.
+ * A person's decisions on one of `environmentId`'s proposals, each through the method, and so the
+ * grant, its draft's target asks for (`deterministicGateway`): settings for a script or a page,
+ * operate for the rest. `canAccept` and `canDismiss` follow that grant.
  */
-export function useDeterministicCommands(environmentId: EnvironmentId) {
+export function useDeterministicCommands(
+  environmentId: EnvironmentId,
+  draft: DeterministicDraft | null,
+) {
   const runAccept = useAtomCommand(proposalAccept, { reportFailure: false });
+  const runAcceptSettings = useAtomCommand(proposalAcceptSettings, { reportFailure: false });
   const runDismiss = useAtomCommand(proposalDismiss, { reportFailure: false });
+  const runDismissSettings = useAtomCommand(proposalDismissSettings, { reportFailure: false });
+  const canOperate = useAtomValue(proposalAccept.permissionAtom(environmentId));
+  const canWriteSettings = useAtomValue(proposalAcceptSettings.permissionAtom(environmentId));
+  const acceptsWithSettings = deterministicGateway("accept", draft) === "settingsWrite";
+  const dismissesWithSettings = deterministicGateway("dismiss", draft) === "settingsWrite";
   return {
-    canAccept: useAtomValue(proposalAccept.permissionAtom(environmentId)),
-    canDismiss: useAtomValue(proposalDismiss.permissionAtom(environmentId)),
-    accept: (id: number) => runAccept({ environmentId, input: { id } }),
-    dismiss: (id: number, reason: string) => runDismiss({ environmentId, input: { id, reason } }),
+    canAccept: acceptsWithSettings ? canWriteSettings : canOperate,
+    canDismiss: dismissesWithSettings ? canWriteSettings : canOperate,
+    accept: (id: number) =>
+      (acceptsWithSettings ? runAcceptSettings : runAccept)({ environmentId, input: { id } }),
+    dismiss: (id: number, reason: string) =>
+      (dismissesWithSettings ? runDismissSettings : runDismiss)({
+        environmentId,
+        input: { id, reason },
+      }),
   };
 }
 
