@@ -91,8 +91,8 @@ const kanbanProjectsAttention = createKanbanProjectsAttentionAtomFamily(connecti
 
 /**
  * Where a strip row's button leads, always on the row's environment: the row's thread, the
- * board, or that environment's Plugins page, where budgets and other plugin settings live. Null
- * when a thread row has no thread.
+ * board, that environment's Plugins page, where budgets and other plugin settings live, or a
+ * plugin's screen on the tab and record the flag names. Null when a thread row has no thread.
  */
 export function attentionResumeTarget(
   row: Pick<KanbanAttentionRow, "resumeAction" | "threadId">,
@@ -116,6 +116,18 @@ export function attentionResumeTarget(
       } as const;
     case "settings":
       return { to: "/plugins", search: { machine: board.environmentId } } as const;
+    case "plugin": {
+      const { pluginId, tab, recordId } = row.resumeAction;
+      return {
+        to: "/plugins/$pluginId",
+        params: { pluginId },
+        search: {
+          machine: board.environmentId,
+          ...(tab === undefined ? {} : { tab }),
+          ...(recordId === undefined ? {} : { recordId }),
+        },
+      } as const;
+    }
   }
 }
 

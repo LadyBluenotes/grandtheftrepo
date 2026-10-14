@@ -68,7 +68,9 @@ export type TelemetryExtractionForm = typeof TelemetryExtractionForm.Type;
  * A tool call shape, or two to six in a row, that runs of at least three threads repeated. A step
  * is the command line with paths made relative to the project, integers as `<n>` and quoted
  * strings as `<str>`, or a dynamic tool's name with its pattern and path, or its input's keys.
- * `<path>` and `<pattern>` in a step mean the occurrences differ there.
+ * `<path>` and `<pattern>` in a step mean the occurrences differ there. A script, an interpreter
+ * running one written into the command line or any command line of 512 characters or more, is
+ * `script:<program>:<digest prefix>` and matches only the same script.
  */
 export const TelemetryExtractionCandidate = Schema.Struct({
   /** The same for the same steps in any window. */

@@ -25,7 +25,7 @@ import { WorkspacePageHeader } from "~/components/WorkspacePageHeader";
 import { isElectron } from "~/env";
 import { useEnvironment, usePrimaryEnvironmentId } from "~/state/environments";
 import { useAtomCommand } from "~/state/use-atom-command";
-import { PLUGINS_UNSUPPORTED, pluginBadge } from "./pluginRoute";
+import { PLUGINS_UNSUPPORTED, pluginBadge, pluginScreenLink } from "./pluginRoute";
 import { PluginEnvironmentContext, pluginSetEnabled, usePluginStatuses } from "./pluginState";
 import { ReadinessChecklist } from "./readiness/Checklist";
 import { pluginRowId, useReadinessChanged } from "./readiness/state";
@@ -148,9 +148,7 @@ function PluginsList() {
                           <Button
                             size="xs"
                             variant="outline"
-                            render={
-                              <Link to="/plugins/$pluginId" params={{ pluginId: status.id }} />
-                            }
+                            render={<Link {...pluginScreenLink(status.id, environmentId)} />}
                           >
                             Open
                           </Button>
