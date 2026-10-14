@@ -140,8 +140,8 @@ a problem outside their task, without being asked.
 
 Under the last reply of a turn, **Recorded this turn** lists what the agent recorded during it:
 decisions, findings, corrections, knowledge pages and prompts, each with the state it had then.
-Click one to open it where it lives; a decision opens its category in the board's decisions, and a
-correction or a knowledge page opens its project's list. The mobile app does not show it.
+Click one to open it where it lives; a correction or a knowledge page opens its project's list.
+The mobile app does not show it.
 
 `kanban_ticket_specify` turns a rough card in Triage or Inbox into a spec. By default it starts a
 drafting thread in plan mode on the routing plugin's cheap model; with `useExisting` it checks a

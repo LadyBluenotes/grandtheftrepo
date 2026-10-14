@@ -10,6 +10,7 @@ import {
 import { scopeThreadRef } from "@t3tools/client-runtime/environment";
 import {
   KANBAN_METHODS,
+  KanbanDecisionRef,
   type EnvironmentId,
   type KanbanAttentionRow,
   type KanbanDecision,
@@ -18,6 +19,7 @@ import {
   type ThreadId,
 } from "@t3tools/contracts";
 import { Atom } from "effect/reactivity";
+import * as Schema from "effect/Schema";
 
 import { connectionAtomRuntime } from "~/connection/runtime";
 import { environmentSummaries } from "~/state/presentation";
@@ -26,6 +28,32 @@ import { buildThreadRouteParams } from "~/threadRoutes";
 import type { BoardSearch } from "./BoardPage";
 
 export const kanbanBoard = createKanbanBoardAtomFamily(connectionAtomRuntime);
+
+const isDecisionRef = Schema.is(KanbanDecisionRef);
+
+/**
+ * What a `/board` URL names: the project, the open issue, the decisions view with its category
+ * and the decision open in its drawer (`category/id`), and the board's filters. Anything else is
+ * dropped.
+ */
+export function validateBoardSearch(raw: Record<string, unknown>): BoardSearch {
+  return {
+    ...(typeof raw.environmentId === "string" && raw.environmentId
+      ? { environmentId: raw.environmentId as EnvironmentId }
+      : {}),
+    ...(typeof raw.projectId === "string" && raw.projectId
+      ? { projectId: raw.projectId as ProjectId }
+      : {}),
+    ...(typeof raw.issue === "string" && raw.issue ? { issue: raw.issue.slice(0, 80) } : {}),
+    ...(raw.view === "decisions" ? { view: raw.view } : {}),
+    ...(typeof raw.category === "string" && raw.category
+      ? { category: raw.category.slice(0, 80) }
+      : {}),
+    ...(isDecisionRef(raw.decision) ? { decision: raw.decision } : {}),
+    ...(raw.needsYou === true ? { needsYou: true } : {}),
+    ...(raw.archived === true ? { archived: true } : {}),
+  };
+}
 
 /** One issue with its body and log; re-read whenever the board changes. */
 export const kanbanIssue = createPluginRpcQueryAtomFamily(connectionAtomRuntime, {

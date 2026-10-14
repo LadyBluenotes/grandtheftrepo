@@ -78,9 +78,9 @@ export function groupCapturedRecords(records: ReadonlyArray<CapturedRecord>) {
 
 /**
  * Where a row leads, on the thread's environment and the record's project (the thread's when the
- * call left it out): a decision to the board's decisions in its category, a finding to the panel
- * of the issue that holds it, a correction to the Learning screen's corrections, a knowledge page
- * to the Knowledge screen, a prompt to its drawer on the Learning screen. Null without a project.
+ * call left it out): a decision to its drawer in the board's decisions, a finding to the panel of
+ * the issue that holds it, a correction to the Learning screen's corrections, a knowledge page to
+ * the Knowledge screen, a prompt to its drawer on the Learning screen. Null without a project.
  */
 export function capturedRecordTarget(
   record: CapturedRecord,
@@ -99,18 +99,11 @@ export function capturedRecordTarget(
       search: { machine: environmentId, projectId, ...search },
     }) as const;
   switch (record.kind) {
-    case "decision": {
-      const [category] = record.id.split("/");
+    case "decision":
       return {
         to: "/board",
-        search: {
-          environmentId,
-          projectId,
-          view: "decisions",
-          ...(category ? { category } : {}),
-        },
+        search: { environmentId, projectId, view: "decisions", decision: record.id },
       } as const;
-    }
     case "finding":
       return {
         to: "/board",

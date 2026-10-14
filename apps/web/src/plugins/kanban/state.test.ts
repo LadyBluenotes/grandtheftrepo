@@ -1,7 +1,13 @@
 import { EnvironmentId, ProjectId, ThreadId } from "@t3tools/contracts";
+import { defaultParseSearch, defaultStringifySearch } from "@tanstack/react-router";
 import { describe, expect, it } from "vite-plus/test";
 
-import { attentionResumeTarget, buildIssuePrompt, findDecisionSearch } from "./state";
+import {
+  attentionResumeTarget,
+  buildIssuePrompt,
+  findDecisionSearch,
+  validateBoardSearch,
+} from "./state";
 
 const issue = {
   id: "fix-login-redirect",
@@ -168,5 +174,25 @@ describe("findDecisionSearch", () => {
       projectId: board.projectId,
     });
     expect(findDecisionSearch({ diff: "1" }, undefined)).toEqual({ view: "decisions" });
+  });
+});
+
+describe("validateBoardSearch", () => {
+  /** What the board reads after a link wrote `search` into the URL and the router read it back. */
+  const throughUrl = (search: Record<string, unknown>) =>
+    validateBoardSearch(defaultParseSearch(defaultStringifySearch(search)));
+
+  it("brings back the decision a link opens, by its category and id", () => {
+    expect(
+      throughUrl({ projectId: "p-1", view: "decisions", decision: "storage/use-sqlite" }),
+    ).toStrictEqual({ projectId: "p-1", view: "decisions", decision: "storage/use-sqlite" });
+  });
+
+  it("drops a decision that is not a category and id, and keys the board does not read", () => {
+    for (const decision of ["use-sqlite", "Storage/Use SQLite", "a/b/c", "", 12]) {
+      expect(validateBoardSearch({ view: "decisions", decision, other: "x" })).toStrictEqual({
+        view: "decisions",
+      });
+    }
   });
 });

@@ -151,10 +151,15 @@ describe("capturedRecordsByRun", () => {
 describe("capturedRecordTarget", () => {
   const thread = { environmentId: EnvironmentId.make("remote"), projectId: ProjectId.make("p-2") };
 
-  it("opens a decision in the board's decisions, in its category, on the thread's project", () => {
+  it("opens a decision's drawer in the board's decisions, on the thread's project", () => {
     expect(capturedRecordTarget(decision, thread)).toEqual({
       to: "/board",
-      search: { environmentId: "remote", projectId: "p-2", view: "decisions", category: "storage" },
+      search: {
+        environmentId: "remote",
+        projectId: "p-2",
+        view: "decisions",
+        decision: "storage/keep-findings-in-frontmatter",
+      },
     });
   });
 
