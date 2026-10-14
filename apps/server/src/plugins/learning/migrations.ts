@@ -115,6 +115,81 @@ const promotionOutcome: PluginMigration[2] = Effect.gen(function* () {
   )`;
 });
 
+// Security corrections recorded before the security scan declared its mode stayed `unclassified`;
+// declaring it now and clearing the mark hands them to the classify sweep like new ones.
+const securityDeclaredMode: PluginMigration[2] = Effect.gen(function* () {
+  const sql = yield* SqlClient.SqlClient;
+  yield* sql`UPDATE corrections
+    SET declared_mode = 'security', cause_class = 'unclassified', classified_at = NULL,
+      classification_reason = NULL
+    WHERE failure_kind = 'security' AND declared_mode IS NULL`;
+});
+
+// A promotion is reviewed before it is adopted. `pending` becomes `proposed`; a written draft is
+// `in_review` until someone other than its proposer adopts or rejects it, and an adopted one can be
+// rolled back. Its proposer is a person (`user`) when a person routed the item, else the rules
+// (`supervisor`). A record delivered before reviews existed was acted on as adopted, so it is
+// adopted at its delivery time, which keeps its outcome window where it was.
+const promotionReview: PluginMigration[2] = Effect.gen(function* () {
+  const sql = yield* SqlClient.SqlClient;
+  yield* sql`ALTER TABLE learning_promotions
+    ADD COLUMN proposed_by TEXT NOT NULL DEFAULT 'supervisor'`;
+  yield* sql`ALTER TABLE learning_promotions ADD COLUMN delivered_at TEXT`;
+  yield* sql`ALTER TABLE learning_promotions ADD COLUMN adopted_at TEXT`;
+  yield* sql`ALTER TABLE learning_promotions ADD COLUMN rolled_back_at TEXT`;
+  yield* sql`ALTER TABLE learning_promotions ADD COLUMN rolled_back_by TEXT`;
+  yield* sql`UPDATE learning_promotions SET proposed_by = 'user'
+    WHERE item_id IN (SELECT id FROM learning_items WHERE disposition_by = 'person')`;
+  yield* sql`UPDATE learning_promotions SET state = 'proposed' WHERE state = 'pending'`;
+  yield* sql`UPDATE learning_promotions
+    SET state = 'adopted', delivered_at = updated_at, adopted_at = updated_at
+    WHERE state = 'delivered'`;
+  yield* sql`CREATE TABLE promotion_reviews (
+    id INTEGER PRIMARY KEY,
+    promotion_id INTEGER NOT NULL REFERENCES learning_promotions (id),
+    verdict TEXT NOT NULL,
+    reviewer TEXT NOT NULL,
+    note TEXT,
+    created_at TEXT NOT NULL
+  )`;
+  yield* sql`CREATE INDEX promotion_reviews_promotion ON promotion_reviews (promotion_id)`;
+});
+
+// The prompt library. `prompts` holds the latest version's text, so a list reads one table;
+// `prompt_versions` is append-only. `source_key` names what proposed a prompt, such as a learning
+// promotion, so a repeat of that proposal finds it; a key is unique within its project, since a
+// source such as repeated work can name the same key in two. `accepted_at` is set once a person
+// accepted or saved it, and decides whether unarchiving makes it active again or proposed.
+const prompts: PluginMigration[2] = Effect.gen(function* () {
+  const sql = yield* SqlClient.SqlClient;
+  yield* sql`CREATE TABLE prompts (
+    id INTEGER PRIMARY KEY,
+    project_id TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    state TEXT NOT NULL,
+    origin TEXT NOT NULL,
+    title TEXT NOT NULL,
+    body TEXT NOT NULL,
+    version INTEGER NOT NULL,
+    use_count INTEGER NOT NULL DEFAULT 0,
+    last_used_at TEXT,
+    source_key TEXT,
+    accepted_at TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  )`;
+  yield* sql`CREATE INDEX prompts_project ON prompts (project_id, updated_at)`;
+  yield* sql`CREATE UNIQUE INDEX prompts_source ON prompts (project_id, source_key)`;
+  yield* sql`CREATE TABLE prompt_versions (
+    prompt_id INTEGER NOT NULL REFERENCES prompts (id),
+    version INTEGER NOT NULL,
+    title TEXT NOT NULL,
+    body TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    PRIMARY KEY (prompt_id, version)
+  )`;
+});
+
 export const migrations = [
   [1, "Corrections", corrections],
   [2, "LearningItems", learningItems],
@@ -122,4 +197,7 @@ export const migrations = [
   [4, "RegressionRuns", regressionRuns],
   [5, "DispositionAt", dispositionAt],
   [6, "PromotionOutcome", promotionOutcome],
+  [7, "SecurityDeclaredMode", securityDeclaredMode],
+  [8, "PromotionReview", promotionReview],
+  [9, "Prompts", prompts],
 ] as const satisfies ReadonlyArray<PluginMigration>;
