@@ -576,6 +576,51 @@ it.effect(
 );
 
 it.effect(
+  "a card proposal dismissed and proposed again at twice the cost files a new card that accepting moves to Todo",
+  () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const world = yield* setup();
+        const kanban = yield* fakeKanban;
+        const hook = (estimatedTokens: number) =>
+          candidate("4007000000000002", {
+            steps: ["command:vp fmt <path>"],
+            form: "hook",
+            estimatedTokens,
+          });
+        world.weeks.set(WEEK_1, [hook(1000)]);
+        yield* world.tick(kanban.context);
+        const [first] = yield* world.store.list({ projectId: projectA.id });
+        yield* world.store
+          .dismiss({ id: first!.id, reason: "Not yet." }, "user")
+          .pipe(Effect.provide(kanban.context));
+
+        yield* TestClock.adjust("7 days");
+        world.weeks.set(WEEK_2, [hook(2000)]);
+        yield* world.tick(kanban.context);
+        const [again] = yield* world.store.list({ projectId: projectA.id, state: "pending" });
+        const cards = yield* kanban.issues;
+        // The first card stays archived; the new proposal has a card of its own.
+        assert.deepEqual(
+          cards.map((card) => [card.id, card.status, card.archivedAt === null]),
+          [
+            ["card-1", "triage", false],
+            ["card-2", "triage", true],
+          ],
+        );
+        assert.deepInclude(again?.draft, { kind: "kanban", issueId: "card-2" });
+
+        const accepted = yield* world.store.accept(again!.id).pipe(Effect.provide(kanban.context));
+        assert.strictEqual(accepted.state, "accepted");
+        assert.strictEqual(
+          (yield* kanban.issues).find((card) => card.id === "card-2")?.status,
+          "todo",
+        );
+      }),
+    ),
+);
+
+it.effect(
   "a dismissal fails while its draft cannot be withdrawn, and goes through once a person acted on it",
   () =>
     Effect.scoped(

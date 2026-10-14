@@ -154,9 +154,11 @@ export const make = Effect.gen(function* () {
           const store = yield* kanban;
           if (Option.isNone(store)) return waiting("The kanban plugin is off.");
           const card = cardDraft(candidate, windowFrom, proposal.id);
-          // A card an earlier try filed has this title and label, and names the proposal.
+          // A card an earlier try filed has this title and label, and names the proposal. An
+          // archived one is never it: the board keeps a dismissed proposal's card archived.
           let saved: string | undefined;
           for (const issue of (yield* store.value.board(projectId)).issues) {
+            if (issue.archivedAt !== null) continue;
             if (issue.title !== card.title || !issue.labels.includes(CARD_LABEL)) continue;
             const full = yield* store.value.getIssue({ projectId, id: issue.id });
             if (full.description.includes(card.marker)) saved = issue.id;
