@@ -112,7 +112,6 @@ const candidate = (steps: ReadonlyArray<string>, estimatedTokens: number, index:
     threadId: `thread:${index}`,
     runId: `run:${index}`,
     itemIds: [`item:${index}`],
-    scripts: steps.map(() => null),
   },
 });
 

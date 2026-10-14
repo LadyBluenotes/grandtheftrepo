@@ -161,8 +161,7 @@ them half-evaluated. The host hands `toolkitRegistration` to `ServerPlugin.mcp` 
   and replays the log; a call a compaction removed before then has no shape. A command's shape
   puts quoted strings as `<str>`, and only 512 characters of a command line are kept, so an
   interpreter's inline script (`node -e`, `python3 -c`, a heredoc) and any command line that long
-  are shaped by that sha256 instead, `script:<program>:<digest prefix>`, and the candidate shows
-  the command line as stored, at most its first 512 characters, with secrets redacted. Absolute paths that resolve under the project's
+  are shaped by that sha256 instead, `script:<program>:<digest prefix>`, and a candidate's example names the stored calls, never their text. Absolute paths that resolve under the project's
   directory, which `MeasureService` reads from `ProjectService` when it is built, are made relative
   to it. Neither measure reads a tier; the share is a rate the regression sweep compares, the count
   a volume it does not.

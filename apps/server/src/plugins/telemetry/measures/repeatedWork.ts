@@ -7,7 +7,6 @@ import type {
 } from "@t3tools/contracts";
 import * as NodePath from "node:path";
 
-import { redactSecrets } from "../../redactSecrets.ts";
 import { digest } from "../digest.ts";
 import { COMMAND_CHARS, type FieldPath } from "../fields.ts";
 import { programName, runsInlineScript, unwrapShell } from "./commandProgram.ts";
@@ -359,11 +358,6 @@ const candidateOf = (window: Found, fixed: boolean): TelemetryExtractionCandidat
       threadId: example.run.threadId,
       runId: example.run.runId,
       itemIds: stepsAt(example, length).map((step) => step.call.item_id),
-      scripts: stepsAt(example, length).map((step) =>
-        step.exact.startsWith(SCRIPT) && step.call.command !== null
-          ? redactSecrets(step.call.command)
-          : null,
-      ),
     },
   };
 };

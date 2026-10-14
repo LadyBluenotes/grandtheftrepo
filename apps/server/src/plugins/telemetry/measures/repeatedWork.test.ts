@@ -232,19 +232,12 @@ it("finds the same 900-character heredoc script in three threads as one script c
     },
   ]);
   assert.strictEqual(candidates[0]?.deterministicRatio, 1);
-  // Its example is the stored head, never the whole script.
-  assert.deepEqual(candidates[0]?.example.scripts, [HEREDOC.slice(0, COMMAND_CHARS)]);
-});
-
-it("shows a script's stored head with what looks like a secret redacted", () => {
-  const script = sh(
-    "node -e 'fetch(url, { headers: { Authorization: \"Bearer abc123\" } })' API_KEY=sk-live-42",
-  );
-  const [candidate] = candidatesOf(windowOf([1, 2, 3].flatMap((n) => inThread(n, script))));
-  const shown = candidate?.example.scripts[0] ?? "";
-  assert.include(shown, "[redacted]");
-  assert.notInclude(shown, "abc123");
-  assert.notInclude(shown, "sk-live-42");
+  // Its example names the stored calls; no read returns a script's text.
+  assert.deepEqual(Object.keys(candidates[0]?.example ?? {}).sort(), [
+    "itemIds",
+    "runId",
+    "threadId",
+  ]);
 });
 
 it("shapes a dynamic tool by its pattern and relative path, or else by its input's keys", () => {
@@ -340,7 +333,6 @@ it("finds pnpm lint then pnpm test in three threads as one script procedure, and
     threadId: "thread:1",
     runId: "run:1",
     itemIds: calls.slice(0, 2).map((c) => c.item_id),
-    scripts: [null, null],
   });
 
   const two = extractionCandidates(
