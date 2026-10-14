@@ -121,8 +121,12 @@ them half-evaluated. The host hands `toolkitRegistration` to `ServerPlugin.mcp` 
   active-plugin atoms, the attention atom and the strip's row model in
   `packages/client-runtime/src/plugins/kanban.ts`, and the contract's
   `KANBAN_ATTENTION_KIND_LABELS` names each kind, so a new kind needs a label there and nothing per
-  client. While kanban runs, the host appends the capture rule (`plugins/CaptureRule.ts`), when to
-  record a decision, a correction or a knowledge page, to the orchestration instructions, which
+  client. A finding, a problem an agent found outside its task, lives in its issue's frontmatter,
+  on the issue it concerns or on a Triage issue labeled `finding` opened for it
+  (`kanban/findings/`); `finding_capture` needs a `finding_search` the same thread made in the last
+  30 minutes, kept in memory, so after a restart an agent searches again. While kanban runs, the
+  host appends the capture rule (`plugins/CaptureRule.ts`), when to record a decision, a finding, a
+  correction or a knowledge page, to the orchestration instructions, which
   every adapter sends only to a turn with the `t3-code` MCP server. Each line is dropped while its
   plugin is off. Pi bakes that text into its extension at import, before the host starts, and Muse
   gets none, so neither sees the rule. Server: `apps/server/src/plugins/kanban/`. Contracts:
