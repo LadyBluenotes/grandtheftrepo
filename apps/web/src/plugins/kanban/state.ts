@@ -117,17 +117,21 @@ export function buildIssuePrompt(
   decisions: ReadonlyArray<KanbanDecision>,
   categories: ReadonlyArray<{ readonly category: string; readonly count: number }>,
 ): string {
-  const byCategory = new Map<string, { for: number; against: number }>();
+  // Per category, how many decisions are in each state, in the order the states first appear.
+  const byCategory = new Map<string, Map<KanbanDecision["state"], number>>();
   for (const decision of decisions) {
-    const counts = byCategory.get(decision.category) ?? { for: 0, against: 0 };
-    counts[decision.stance] += 1;
+    const counts = byCategory.get(decision.category) ?? new Map<KanbanDecision["state"], number>();
+    counts.set(decision.state, (counts.get(decision.state) ?? 0) + 1);
     byCategory.set(decision.category, counts);
   }
   const onTicket =
     decisions.length === 0
       ? "Decisions on this ticket: none."
       : `Decisions on this ticket (${decisions.length}): ${[...byCategory]
-          .map(([category, counts]) => `${category}: for ${counts.for}, against ${counts.against}`)
+          .map(
+            ([category, counts]) =>
+              `${category}: ${[...counts].map(([state, count]) => `${state} ${count}`).join(", ")}`,
+          )
           .join("; ")}`;
   const all =
     categories.length === 0

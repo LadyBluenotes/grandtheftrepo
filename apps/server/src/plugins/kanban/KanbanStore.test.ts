@@ -15,7 +15,7 @@ import * as Stream from "effect/Stream";
 
 import * as ServerConfig from "../../config.ts";
 import * as ProjectService from "../../project/ProjectService.ts";
-import { ISSUE_EXTENSION, serializeIssue } from "./KanbanFiles.ts";
+import { ISSUE_EXTENSION, parseDecisions, serializeIssue } from "./KanbanFiles.ts";
 import * as KanbanStore from "./KanbanStore.ts";
 
 const projectId = ProjectId.make("project-1");
@@ -409,15 +409,15 @@ it.layer(layerTest)("KanbanStore", (it) => {
         const { id } = yield* store.write(projectId, "user", {
           action: "decision.create",
           category: "auth",
-          stance: "for",
           title: "Keep session TTL at 30m",
           why: "Extending it hides the bug.",
           issues: ["fix-login-redirect"],
         });
         yield* store.write(projectId, "thread:t", {
           action: "decision.create",
-          stance: "against",
+          state: "rejected",
           title: "Retries on login",
+          why: "They hide the real failure.",
         });
         const board = yield* store.board(projectId);
         assert.deepStrictEqual(
@@ -529,6 +529,372 @@ it.layer(layerTest)("KanbanStore", (it) => {
       }),
     );
   });
+});
+
+/** A decisions file as written before decisions had a state. */
+const LEGACY_DECISIONS = `category: auth
+project: grand-theft-repo
+decisions:
+  - id: keep-ttl
+    stance: for
+    title: Keep session TTL at 30m
+    why: Extending it hides the bug.
+    issues: [fix-login-redirect]
+    by: user
+    at: "2026-10-12T14:00:00.000Z"
+  - id: retries-on-login
+    stance: against
+    title: Retries on login
+    why: They hide the real failure.
+    issues: []
+    by: thread:thr_1
+    at: "2026-10-12T15:00:00.000Z"
+`;
+
+/** Its own folder, so no other test's decisions show up in these. */
+it.layer(layerTest)("KanbanStore decisions", (it) => {
+  const revisions = (category: string, id: string) =>
+    Effect.gen(function* () {
+      const store = yield* KanbanStore.KanbanStore;
+      const found = (yield* store.listDecisions({ projectId, category })).find((d) => d.id === id);
+      return found?.revisions.map((r) => r.change) ?? [];
+    });
+
+  it.effect("loads a for/against file without losing anything and saves it in the new shape", () =>
+    Effect.gen(function* () {
+      const store = yield* KanbanStore.KanbanStore;
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const folder = yield* fs.makeTempDirectoryScoped({ prefix: "t3code-kanban-legacy-" });
+      const file = path.join(folder, "decisions", "auth.yaml");
+      yield* fs.makeDirectory(path.dirname(file), { recursive: true });
+      yield* fs.writeFileString(file, LEGACY_DECISIONS);
+      yield* store.setDirectory({ projectId, directory: folder });
+
+      const loaded = yield* store.listDecisions({ projectId });
+      assert.deepStrictEqual(
+        loaded.map((d) => [d.id, d.state, d.title, d.why, d.issues, d.by, d.at]),
+        [
+          [
+            "keep-ttl",
+            "accepted",
+            "Keep session TTL at 30m",
+            "Extending it hides the bug.",
+            ["fix-login-redirect"],
+            "user",
+            "2026-10-12T14:00:00.000Z",
+          ],
+          [
+            "retries-on-login",
+            "accepted",
+            "Retries on login",
+            "They hide the real failure.",
+            [],
+            "thread:thr_1",
+            "2026-10-12T15:00:00.000Z",
+          ],
+        ],
+      );
+      // The stance survives as the one alternative: chosen for `for`, rejected for `against`.
+      assert.deepStrictEqual(
+        loaded.map((d) => d.alternatives),
+        [
+          [
+            {
+              title: "Keep session TTL at 30m",
+              disposition: "chosen",
+              reason: "Extending it hides the bug.",
+              reasonKind: "contextual",
+            },
+          ],
+          [
+            {
+              title: "Retries on login",
+              disposition: "rejected",
+              reason: "They hide the real failure.",
+              reasonKind: "contextual",
+            },
+          ],
+        ],
+      );
+
+      yield* store.write(projectId, "user", {
+        action: "decision.setState",
+        category: "auth",
+        id: "retries-on-login",
+        state: "rejected",
+      });
+      const saved = yield* fs.readFileString(file);
+      assert.notInclude(saved, "stance");
+      // The whole file is rewritten in the new shape, and reads back as it loaded plus the write.
+      const [keep, retries] = loaded;
+      assert.deepStrictEqual(parseDecisions("auth", saved), [
+        keep!,
+        {
+          ...retries!,
+          state: "rejected",
+          revisions: [
+            { at: "1970-01-01T00:00:00.000Z", by: "user", change: "state: accepted → rejected" },
+          ],
+        },
+      ]);
+      yield* store.setDirectory({ projectId, directory: null });
+    }),
+  );
+
+  it.effect("keeps a chosen and a rejected alternative through the store and its file", () =>
+    Effect.gen(function* () {
+      const store = yield* KanbanStore.KanbanStore;
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const alternatives = [
+        {
+          title: "SQLite",
+          disposition: "chosen" as const,
+          reason: "Already bundled.",
+          reasonKind: "contextual" as const,
+        },
+        {
+          title: "Postgres",
+          disposition: "rejected" as const,
+          reason: "Needs a server on every machine.",
+          reasonKind: "permanent" as const,
+        },
+      ];
+      const { id } = yield* store.write(projectId, "thread:thr_db", {
+        action: "decision.create",
+        category: "storage",
+        title: "Store state in SQLite",
+        why: "One file per environment.",
+        alternatives,
+        reconsiderWhen: "Several machines share one environment.",
+      });
+      const [stored] = yield* store.listDecisions({ projectId, category: "storage" });
+      assert.deepStrictEqual(stored?.alternatives, alternatives);
+      assert.strictEqual(stored?.state, "accepted");
+      assert.strictEqual(stored?.reconsiderWhen, "Several machines share one environment.");
+      // Made by an agent: its thread is where the decision was made.
+      assert.deepStrictEqual(stored?.threads, [ThreadId.make("thr_db")]);
+      assert.deepStrictEqual(stored?.revisions, [
+        { at: "1970-01-01T00:00:00.000Z", by: "thread:thr_db", change: "created: accepted" },
+      ]);
+      const { directory } = yield* store.board(projectId);
+      const text = yield* fs.readFileString(path.join(directory, "decisions", "storage.yaml"));
+      assert.deepStrictEqual(parseDecisions("storage", text), [stored!]);
+      assert.strictEqual(id, "store-state-in-sqlite");
+    }),
+  );
+
+  it.effect("supersedes, links both sides, and unlinks them when the old one changes state", () =>
+    Effect.gen(function* () {
+      const store = yield* KanbanStore.KanbanStore;
+      const create = (title: string) =>
+        store.write(projectId, "user", {
+          action: "decision.create",
+          category: "cache",
+          title,
+          why: "Measured.",
+        });
+      const a = (yield* create("Cache in memory")).id;
+      const b = (yield* create("Cache in Redis")).id;
+      const decisions = () =>
+        Effect.map(
+          store.listDecisions({ projectId, category: "cache" }),
+          (list) => new Map(list.map((d) => [d.id, d])),
+        );
+
+      yield* store.write(projectId, "user", {
+        action: "decision.supersede",
+        category: "cache",
+        id: a,
+        by: `cache/${b}`,
+      });
+      let now = yield* decisions();
+      assert.strictEqual(now.get(a)?.state, "superseded");
+      assert.strictEqual(now.get(a)?.supersededBy, `cache/${b}`);
+      assert.deepStrictEqual(now.get(b)?.supersedes, [`cache/${a}`]);
+      assert.strictEqual(now.get(b)?.state, "accepted");
+
+      // Neither side can be superseded into a cycle or twice, nor deleted while linked.
+      const supersede = (id: string, by: string) =>
+        failureCode(
+          store.write(projectId, "user", {
+            action: "decision.supersede",
+            category: "cache",
+            id,
+            by,
+          }),
+        );
+      assert.strictEqual(yield* supersede(a, `cache/${b}`), "invalid");
+      assert.strictEqual(yield* supersede(b, `cache/${a}`), "invalid");
+      assert.strictEqual(yield* supersede(b, `cache/${b}`), "invalid");
+      assert.strictEqual(yield* supersede(b, "cache/missing"), "not_found");
+      assert.strictEqual(
+        yield* failureCode(
+          store.write(projectId, "user", { action: "decision.delete", category: "cache", id: b }),
+        ),
+        "invalid",
+      );
+      assert.strictEqual(
+        yield* failureCode(
+          store.write(projectId, "user", {
+            action: "decision.setState",
+            category: "cache",
+            id: b,
+            state: "superseded",
+          }),
+        ),
+        "invalid",
+      );
+
+      // The way back: leaving superseded clears the link on both sides.
+      yield* store.write(projectId, "user", {
+        action: "decision.setState",
+        category: "cache",
+        id: a,
+        state: "rejected",
+      });
+      now = yield* decisions();
+      assert.strictEqual(now.get(a)?.state, "rejected");
+      assert.isNull(now.get(a)?.supersededBy ?? null);
+      assert.deepStrictEqual(now.get(b)?.supersedes, []);
+      // And a rejected decision can be proposed again.
+      yield* store.write(projectId, "user", {
+        action: "decision.setState",
+        category: "cache",
+        id: a,
+        state: "proposed",
+      });
+      assert.deepStrictEqual(yield* revisions("cache", a), [
+        "created: accepted",
+        `state: accepted → superseded by cache/${b}`,
+        `state: superseded → rejected; no longer superseded by cache/${b}`,
+        "state: rejected → proposed",
+      ]);
+      assert.deepStrictEqual(yield* revisions("cache", b), [
+        "created: accepted",
+        `supersedes cache/${a}`,
+        `no longer supersedes cache/${a}`,
+      ]);
+    }),
+  );
+
+  it.effect("adds one revision per write and never drops one", () =>
+    Effect.gen(function* () {
+      const store = yield* KanbanStore.KanbanStore;
+      const { id } = yield* store.write(projectId, "user", {
+        action: "decision.create",
+        category: "ui",
+        title: "Virtualize the thread list",
+        why: "Long lists drop frames.",
+      });
+      const writes = [
+        { action: "decision.update", why: "Long lists drop frames on 120Hz.", issues: ["perf"] },
+        { action: "decision.setState", state: "conflicted" },
+        { action: "decision.update", reconsiderWhen: "Lists stay under 100 rows." },
+        { action: "decision.setState", state: "accepted" },
+      ] as const;
+      let before = yield* revisions("ui", id);
+      for (const write of writes) {
+        yield* store.write(projectId, "user", { ...write, category: "ui", id });
+        const after = yield* revisions("ui", id);
+        assert.strictEqual(after.length, before.length + 1);
+        assert.deepStrictEqual(after.slice(0, before.length), before);
+        before = after;
+      }
+      assert.strictEqual(before[1], "edited: why, issues");
+      // A write that changes nothing writes nothing, so it adds no revision.
+      yield* store.write(projectId, "user", { action: "decision.update", category: "ui", id });
+      yield* store.write(projectId, "user", {
+        action: "decision.setState",
+        category: "ui",
+        id,
+        state: "accepted",
+      });
+      assert.deepStrictEqual(yield* revisions("ui", id), before);
+      // State changes go through setState, not update.
+      assert.strictEqual(
+        yield* failureCode(
+          store.write(projectId, "user", {
+            action: "decision.update",
+            category: "ui",
+            id,
+            state: "rejected",
+          }),
+        ),
+        "invalid",
+      );
+    }),
+  );
+
+  it.effect("refuses an agent's decision without a why, and an agent's delete", () =>
+    Effect.gen(function* () {
+      const store = yield* KanbanStore.KanbanStore;
+      const agent = "thread:thr_agent";
+      const refused = yield* store
+        .write(projectId, agent, { action: "decision.create", category: "api", title: "No why" })
+        .pipe(Effect.flip);
+      assert.strictEqual(refused.code, "invalid");
+      assert.match(refused.message, /^why is required/);
+      const { id } = yield* store.write(projectId, agent, {
+        action: "decision.create",
+        category: "api",
+        title: "Paginate by cursor",
+        why: "Offsets skip rows under writes.",
+      });
+      assert.strictEqual(
+        yield* failureCode(
+          store.write(projectId, agent, { action: "decision.delete", category: "api", id }),
+        ),
+        "gated",
+      );
+      yield* store.write(projectId, "user", { action: "decision.delete", category: "api", id });
+      assert.deepStrictEqual(yield* store.listDecisions({ projectId, category: "api" }), []);
+    }),
+  );
+
+  it.effect("searches a decision's words, most matches first, within a state", () =>
+    Effect.gen(function* () {
+      const store = yield* KanbanStore.KanbanStore;
+      const create = (title: string, why: string, state?: "rejected") =>
+        store.write(projectId, "user", {
+          action: "decision.create",
+          category: "queue",
+          title,
+          why,
+          ...(state === undefined ? {} : { state }),
+          alternatives: [
+            {
+              title: "Kafka",
+              disposition: "rejected",
+              reason: "Too heavy for one machine.",
+              reasonKind: "contextual",
+            },
+          ],
+        });
+      yield* create("Retry failed jobs", "Backoff with jitter.");
+      yield* create("Queue jobs in SQLite", "No extra service; retry from the table.");
+      yield* create("Drop the job runner", "Nobody uses it.", "rejected");
+      const search = (query: string, state?: "rejected") =>
+        Effect.map(
+          store.listDecisions({
+            projectId,
+            category: "queue",
+            query,
+            ...(state === undefined ? {} : { state }),
+          }),
+          (found) => found.map((d) => d.id),
+        );
+      assert.deepStrictEqual(yield* search("sqlite RETRY"), [
+        "queue-jobs-in-sqlite",
+        "retry-failed-jobs",
+      ]);
+      // Alternatives are searched too.
+      assert.strictEqual((yield* search("kafka")).length, 3);
+      assert.deepStrictEqual(yield* search("job", "rejected"), ["drop-the-job-runner"]);
+      assert.deepStrictEqual(yield* search("postgres"), []);
+    }),
+  );
 });
 
 describe("watcher refresh", () => {

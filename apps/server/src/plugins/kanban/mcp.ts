@@ -1,5 +1,6 @@
 import {
   KANBAN_STATUSES,
+  KanbanDecisionState,
   KanbanSlug,
   KanbanStatus,
   KanbanWrite,
@@ -20,7 +21,7 @@ import * as McpInvocationContext from "../../mcp/McpInvocationContext.ts";
 import * as McpToolAccess from "../../mcp/McpToolAccess.ts";
 import { readCaller, resolveProjectId } from "../../mcp/threadAccess.ts";
 import * as ThreadManagementService from "../../orchestration-v2/ThreadManagementService.ts";
-import { formatLogEntry } from "./KanbanFiles.ts";
+import { decisionRef, formatLogEntry } from "./KanbanFiles.ts";
 import * as KanbanStore from "./KanbanStore.ts";
 import * as SpecService from "./spec/SpecService.ts";
 import * as StopGate from "./StopGate.ts";
@@ -38,7 +39,7 @@ const shared = {
 const KanbanListTool = Tool.make("kanban_list", {
   ...shared,
   description:
-    "List the project's kanban issues or decisions, one line each; pass id for one item in full (issue: description, acceptance criteria with ids, log, related decisions; decision: why). Issue line: id · status · priority · title · labels · verification · tier · criteria done/total · BLOCKED · threads. Columns in order: triage (found, verification unverified/partial/verified), inbox (reproduced, waiting for the user), todo, in_progress, in_review, done. Decisions are for/against calls grouped by category; narrow with category or issue.",
+    "List the project's kanban issues or decisions, one line each; pass id for one item in full (issue: description, acceptance criteria with ids, log, related decisions; decision: why, alternatives, reconsider-when, supersession, threads, revisions). Issue line: id · status · priority · title · labels · verification · tier · criteria done/total · BLOCKED · threads. Columns in order: triage (found, verification unverified/partial/verified), inbox (reproduced, waiting for the user), todo, in_progress, in_review, done. Decision line: category/id · state · title · issues; decisions are grouped by category; narrow with category or issue. To find one by its words, use kanban_decisions.",
   parameters: Schema.Struct({
     projectId: Schema.optional(ProjectId),
     kind: Schema.Literals(["issue", "decision"]),
@@ -56,9 +57,23 @@ const KanbanListTool = Tool.make("kanban_list", {
 const KanbanWriteTool = Tool.make("kanban_write", {
   ...shared,
   description:
-    "Change the kanban board; returns the id. issue.create files a ticket (status defaults to triage; use inbox once reproduced; set verification, priority p0-p5, labels, tier cheap/standard/strong). Agents cannot move a card out of triage or inbox into todo or beyond, nor link a thread to one: the user releases work. issue.move sets status; moving to done is refused while an acceptance criterion is unchecked, and leaving done needs reopenReason defect or scope_change. criterion.add with text defines done; criterion.update takes criterionId with checked and/or text; criterion.remove takes criterionId. issue.note appends to the log; issue.block with reason marks that it needs the user, issue.unblock clears it; issue.link attaches a thread (omit threadId for the calling thread); issue.archive hides it. decision.create records a for/against call under category (default general) with title, why and related issues; decision.update and decision.delete take category and id.",
+    "Change the kanban board; returns the id. issue.create files a ticket (status defaults to triage; use inbox once reproduced; set verification, priority p0-p5, labels, tier cheap/standard/strong). Agents cannot move a card out of triage or inbox into todo or beyond, nor link a thread to one: the user releases work. issue.move sets status; moving to done is refused while an acceptance criterion is unchecked, and leaving done needs reopenReason defect or scope_change. criterion.add with text defines done; criterion.update takes criterionId with checked and/or text; criterion.remove takes criterionId. issue.note appends to the log; issue.block with reason marks that it needs the user, issue.unblock clears it; issue.link attaches a thread (omit threadId for the calling thread); issue.archive hides it. decision.create records a call under category (default general) with title, why (required), state (default accepted; proposed, rejected, deferred or conflicted), alternatives (each title, disposition chosen/rejected/deferred/unverified/out_of_scope, reason, reasonKind permanent/contextual/lack_of_evidence), reconsiderWhen, related issues and threads; the calling thread is linked. decision.update, decision.setState (state; leaving superseded unlinks the replacement) and decision.supersede (by: the replacing decision as category/id) take category and id. Agents cannot delete a decision: supersede or reject it.",
   parameters: Schema.Struct({ projectId: Schema.optional(ProjectId), ...KanbanWrite.fields }),
 }).annotate(Tool.Destructive, true);
+
+const KanbanDecisionsTool = Tool.make("kanban_decisions", {
+  ...shared,
+  description:
+    "Search the project's kanban decisions by their words: any word of query matches a decision's title, why, alternatives, reconsider-when, category or id, and those matching most come first, then the newest; at most ten, in full. Narrow with state (proposed, accepted, rejected, deferred, conflicted, superseded) or category.",
+  parameters: Schema.Struct({
+    projectId: Schema.optional(ProjectId),
+    query: Schema.String,
+    state: Schema.optional(KanbanDecisionState),
+    category: Schema.optional(KanbanSlug),
+  }),
+})
+  .annotate(Tool.Readonly, true)
+  .annotate(Tool.Destructive, false);
 
 const KanbanStopTool = Tool.make("kanban_stop", {
   ...shared,
@@ -103,6 +118,7 @@ const KanbanSpecGetTool = Tool.make("kanban_spec_get", {
 export const KanbanToolkit = Toolkit.make(
   KanbanListTool,
   KanbanWriteTool,
+  KanbanDecisionsTool,
   KanbanStopTool,
   KanbanTicketSpecifyTool,
   KanbanSpecGetTool,
@@ -134,9 +150,31 @@ const issueLine = (issue: KanbanIssueSummary) =>
     .join(" · ");
 
 const decisionLine = (decision: KanbanDecision) =>
-  `${decision.category} · ${decision.stance} · ${decision.id} · ${decision.title}${
+  `${decisionRef(decision)} · ${decision.state} · ${decision.title}${
     decision.issues.length > 0 ? ` · ${decision.issues.join(",")}` : ""
   }`;
+
+/** One decision in full; the revisions only when asked for, as a search reads many decisions. */
+const decisionText = (decision: KanbanDecision, revisions: boolean) =>
+  [
+    decisionLine(decision),
+    `why: ${decision.why}`,
+    ...decision.alternatives.map(
+      (a) =>
+        `- ${a.disposition} (${a.reasonKind}): ${a.title}${a.reason.length > 0 ? ` | ${a.reason}` : ""}`,
+    ),
+    ...(decision.reconsiderWhen === null ? [] : [`reconsider when: ${decision.reconsiderWhen}`]),
+    ...(decision.supersedes.length > 0 ? [`supersedes: ${decision.supersedes.join(", ")}`] : []),
+    ...(decision.supersededBy === null ? [] : [`superseded by: ${decision.supersededBy}`]),
+    ...(decision.threads.length > 0 ? [`threads: ${decision.threads.join(", ")}`] : []),
+    `by ${decision.by} at ${decision.at}`,
+    ...(revisions && decision.revisions.length > 0
+      ? ["Revisions:", ...decision.revisions.map((r) => `- ${r.at} | ${r.by} | ${r.change}`)]
+      : []),
+  ].join("\n");
+
+/** How many decisions a search shows in full. */
+const SEARCH_LIMIT = 10;
 
 const issueText = (issue: KanbanIssue, decisions: ReadonlyArray<KanbanDecision>) =>
   [
@@ -230,9 +268,7 @@ export const handlers = McpToolAccess.toLayer(
             });
             if (input.id !== undefined) {
               const found = decisions.find((d) => d.id === input.id);
-              return found === undefined
-                ? `No decision "${input.id}".`
-                : `${decisionLine(found)}\nwhy: ${found.why}\nby ${found.by} at ${found.at}`;
+              return found === undefined ? `No decision "${input.id}".` : decisionText(found, true);
             }
             return decisions.length === 0
               ? "No decisions."
@@ -274,6 +310,23 @@ export const handlers = McpToolAccess.toLayer(
             ...(threadId === undefined ? {} : { threadId }),
           });
           return result.id;
+        }).pipe(Effect.catchTags({ KanbanError: (error) => Effect.fail(failure(error)) })),
+      ),
+      kanban_decisions: McpToolAccess.reads(({ projectId: given, query, state, category }) =>
+        Effect.gen(function* () {
+          const projectId = yield* resolveProjectId(yield* readCaller(), given);
+          const found = yield* (yield* store).listDecisions({
+            projectId,
+            query,
+            ...(state === undefined ? {} : { state }),
+            ...(category === undefined ? {} : { category }),
+          });
+          if (found.length === 0) return "No decisions match.";
+          const more = found.length - SEARCH_LIMIT;
+          return [
+            ...found.slice(0, SEARCH_LIMIT).map((d) => decisionText(d, false)),
+            ...(more > 0 ? [`${more} more; narrow the query.`] : []),
+          ].join("\n\n");
         }).pipe(Effect.catchTags({ KanbanError: (error) => Effect.fail(failure(error)) })),
       ),
       kanban_stop: McpToolAccess.writes(({ action, reason }) =>
