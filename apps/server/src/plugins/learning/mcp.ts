@@ -1,4 +1,7 @@
 import {
+  DeterministicDismissInput,
+  DeterministicProposal,
+  DeterministicProposalsInput,
   LearningCorrection,
   LearningCorrectionDeclareInput,
   LearningCorrectionInput,
@@ -32,6 +35,7 @@ import * as McpToolAccess from "../../mcp/McpToolAccess.ts";
 import { readCaller, resolveProjectId } from "../../mcp/threadAccess.ts";
 import * as ThreadManagementService from "../../orchestration-v2/ThreadManagementService.ts";
 import * as CorrectionStore from "./CorrectionStore.ts";
+import * as ProposalStore from "./deterministic/ProposalStore.ts";
 import * as ItemStore from "./items/ItemStore.ts";
 import * as PromptStore from "./prompts/PromptStore.ts";
 
@@ -185,6 +189,32 @@ const PromotionRollBackTool = Tool.make("learning_promotion_rollback", {
   .annotate(Tool.Idempotent, false)
   .annotate(Tool.OpenWorld, false);
 
+const DeterministicProposalsTool = Tool.make("learning_deterministic_proposals", {
+  ...shared,
+  description:
+    "List a project's proposals to do repeated work without a model: every waiting or pending one, newest first, however many there are, then the newest accepted or dismissed ones while the list holds fewer than 100. A weekly sweep picks up to five of telemetry's extraction candidates (deterministic ratio at least 0.8, in at least three threads, costliest first) and drafts each in its form's place: a project script held here until accepted (a script step is a comment naming the program and the example item to copy it from, since a script's text is never kept), a proposed prompt (skill), a knowledge draft (context_file), a paused scheduled task (scheduled_task), or a Triage card labeled deterministic (mcp_tool, hook). state is waiting (its target is off; waitingReason says why), pending (a draft waits for a person), accepted or dismissed (with dismissReason). steps holds at most six, each cut to 300 characters. estimatedTokens is the work's cost in the week it was found. Omit projectId for the calling thread's project; narrow with state. Only a person accepts.",
+  parameters: Schema.Struct({
+    ...DeterministicProposalsInput.fields,
+    projectId: Schema.optional(ProjectId),
+  }),
+  success: Schema.Array(DeterministicProposal),
+})
+  .annotate(Tool.Readonly, true)
+  .annotate(Tool.Destructive, false);
+
+const DeterministicDismissTool = Tool.make("learning_deterministic_dismiss", {
+  ...shared,
+  description:
+    "Dismiss a waiting or pending proposal from learning_deterministic_proposals, with a reason of at most 500 characters, such as the repeated work being noise. A draft its target still holds undecided is withdrawn: the proposed prompt archived, the knowledge draft discarded, the paused task deleted, the Triage card archived; while that draft's plugin is off, or the withdrawal fails, the proposal stays undecided and the call fails. A proposal whose draft is a knowledge page is refused: a person dismisses it, as only a person discards knowledge drafts. The candidate is proposed again only once its weekly cost doubles. From a T3 thread only. Answers with the proposal.",
+  parameters: DeterministicDismissInput,
+  success: DeterministicProposal,
+})
+  .annotate(Tool.Title, "Dismiss a deterministic proposal")
+  .annotate(Tool.Readonly, false)
+  .annotate(Tool.Destructive, true)
+  .annotate(Tool.Idempotent, false)
+  .annotate(Tool.OpenWorld, false);
+
 export const LearningToolkit = Toolkit.make(
   CorrectionsTool,
   CorrectionTool,
@@ -197,6 +227,8 @@ export const LearningToolkit = Toolkit.make(
   PromptGetTool,
   PromotionReviewTool,
   PromotionRollBackTool,
+  DeterministicProposalsTool,
+  DeterministicDismissTool,
 );
 
 const failure = (error: LearningError) =>
@@ -242,6 +274,7 @@ export const handlers = McpToolAccess.toLayer(
     const store = running(yield* Effect.serviceOption(CorrectionStore.CorrectionStore));
     const itemStore = running(yield* Effect.serviceOption(ItemStore.ItemStore));
     const promptStore = running(yield* Effect.serviceOption(PromptStore.PromptStore));
+    const proposalStore = running(yield* Effect.serviceOption(ProposalStore.ProposalStore));
     return {
       learning_corrections: McpToolAccess.reads(({ projectId: given, ...input }) =>
         Effect.gen(function* () {
@@ -337,6 +370,22 @@ export const handlers = McpToolAccess.toLayer(
           const actor = yield* threadActor("A rollback");
           const items = yield* itemStore;
           return yield* items.rollBackPromotion(input, actor);
+        }).pipe(Effect.catchTags({ LearningError: (error) => Effect.fail(failure(error)) })),
+      ),
+      learning_deterministic_proposals: McpToolAccess.reads(({ projectId: given, ...input }) =>
+        Effect.gen(function* () {
+          const context = yield* readCaller();
+          const projectId = yield* resolveProjectId(context, given);
+          const proposals = yield* proposalStore;
+          return yield* proposals.list({ projectId, ...input });
+        }).pipe(Effect.catchTags({ LearningError: (error) => Effect.fail(failure(error)) })),
+      ),
+      learning_deterministic_dismiss: McpToolAccess.actsAsCaller((input) =>
+        Effect.gen(function* () {
+          const actor = yield* threadActor("A dismissal");
+          const proposals = yield* proposalStore;
+          // An agent cannot discard a knowledge draft through the knowledge plugin either.
+          return yield* proposals.dismiss(input, actor, "operate");
         }).pipe(Effect.catchTags({ LearningError: (error) => Effect.fail(failure(error)) })),
       ),
     };

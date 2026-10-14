@@ -31,10 +31,12 @@ import * as PluginHost from "../PluginHost.ts";
 import * as PluginSupervisor from "../PluginSupervisor.ts";
 import * as ClassifySweep from "./ClassifySweep.ts";
 import * as CorrectionStore from "./CorrectionStore.ts";
+import * as ProposalStore from "./deterministic/ProposalStore.ts";
 import { plugin } from "./index.ts";
 import * as ItemStore from "./items/ItemStore.ts";
 import { migrations } from "./migrations.ts";
 import * as PromotionStore from "./PromotionStore.ts";
+import * as PromptStore from "./prompts/PromptStore.ts";
 
 const environmentId = EnvironmentId.make("env-1");
 const projectId = ProjectId.make("project-1");
@@ -159,6 +161,8 @@ it.effect(
         expect(tools).toContain('"learning_item"');
         expect(tools).toContain('"learning_promotion_review"');
         expect(tools).toContain('"learning_promotion_rollback"');
+        expect(tools).toContain('"learning_deterministic_proposals"');
+        expect(tools).toContain('"learning_deterministic_dismiss"');
 
         const added = decodeCorrection(
           resultText(
@@ -418,6 +422,107 @@ it.effect("an agent reviews and rolls back a promotion it did not propose, as it
           (yield* items.list({ projectId })).find((i) => i.failureMode === "scope_drift")!.id,
         )).reviews.map((review) => [review.verdict, review.reviewer]),
       ).toEqual([["adopt", "thread:reviewer"]]);
+    }),
+  ),
+);
+
+it.effect("an agent lists its project's proposals and dismisses one, as its thread", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const { sql } = yield* PluginDatabase.open({
+        id: "learning",
+        filename: ":memory:",
+        migrations,
+      });
+      const stores = yield* Layer.build(
+        ProposalStore.layer.pipe(
+          Layer.provideMerge(PromptStore.layer),
+          Layer.provideMerge(
+            Layer.mergeAll(
+              Layer.succeed(SqlClient.SqlClient, sql),
+              NodeServices.layer,
+              Layer.mock(ProjectService.ProjectService)({}),
+            ),
+          ),
+        ),
+      );
+      const services = yield* Layer.build(
+        plugin.mcp(McpHttpServer.toolkitRegistration).pipe(
+          Layer.provideMerge(McpServer.McpServer.layer),
+          Layer.provide(Layer.succeedContext(stores)),
+          Layer.provide(
+            Layer.mock(ThreadManagementService.ThreadManagementService)({
+              getThreadShell: (id) => Effect.succeed(liveThreadShell(id)),
+            }),
+          ),
+        ),
+      );
+      const server = Context.get(services, McpServer.McpServer);
+      const call = (scope: McpInvocationContext.McpInvocationScope, name: string, args: object) =>
+        server
+          .callTool({ name, arguments: args })
+          .pipe(
+            Effect.provideService(McpInvocationContext.McpInvocationContext, scope),
+            Effect.provideService(McpSchema.McpServerClient, mcpClient),
+          );
+      const textOf = (result: {
+        readonly content: ReadonlyArray<{ readonly type: string; readonly text?: string }>;
+      }) => JSON.parse(result.content[0]?.text ?? "null") as unknown;
+
+      // A skill the weekly review proposed in the project of every `liveThreadShell` thread.
+      const threadProject = liveThreadShell(ThreadId.make("agent")).projectId;
+      const proposals = Context.get(stores, ProposalStore.ProposalStore);
+      yield* proposals.propose({
+        projectId: threadProject,
+        windowFrom: "2026-10-05T00:00:00.000Z",
+        candidates: [
+          {
+            id: "5c111a0000000001",
+            kind: "procedure",
+            steps: ["Grep <pattern> <path>", "Read <path>"],
+            threads: 3,
+            occurrences: 4,
+            deterministicRatio: 1,
+            estimatedTokens: 1000,
+            form: "skill",
+            example: { threadId: "thread:example", runId: null, itemIds: ["a", "b"] },
+          },
+        ],
+        dryRun: false,
+      });
+      yield* proposals.draftWaiting({ projectIds: new Set([threadProject]), dryRun: false });
+      const agent = threadScope(ThreadId.make("agent"));
+
+      // With no projectId, the calling thread's project.
+      const listed = textOf(yield* call(agent, "learning_deterministic_proposals", {}));
+      expect(listed).toMatchObject([
+        { candidateId: "5c111a0000000001", form: "skill", state: "pending" },
+      ]);
+      const id = (listed as ReadonlyArray<{ readonly id: number }>)[0]!.id;
+
+      const outside = yield* call(clientScope, "learning_deterministic_dismiss", {
+        id,
+        reason: "Noise.",
+      });
+      expect(outside.isError).toBe(true);
+      expect(textOf(outside)).toMatchObject({ code: "thread_credential_required" });
+
+      const dismissed = yield* call(agent, "learning_deterministic_dismiss", {
+        id,
+        reason: "Noise.",
+      });
+      expect(dismissed.structuredContent).toMatchObject({
+        state: "dismissed",
+        decidedBy: "thread:agent",
+        dismissReason: "Noise.",
+      });
+      // The proposed prompt it drafted is withdrawn.
+      const prompts = yield* Context.get(stores, PromptStore.PromptStore).list({
+        projectId: threadProject,
+      });
+      expect(prompts.map((prompt) => [prompt.origin, prompt.state])).toEqual([
+        ["repeated_work", "archived"],
+      ]);
     }),
   ),
 );

@@ -115,6 +115,38 @@ Agents reach the library through the `prompt_search`, `prompt_save` and `prompt_
 agent has to search before it saves, so it finds a prompt that already covers the work, and what it
 saves is proposed until you accept it.
 
+## Deterministic
+
+Once a week the plugin looks at the work your agents kept repeating in each project, as the
+telemetry plugin finds it (see [Usage](./usage.md)), and drafts up to five proposals to do it
+without a model: work given the same inputs in at least four out of five of its occurrences, in at
+least three threads, the costliest first. Each proposal's draft goes where its kind of work belongs:
+
+- **Script**: a draft project action. Its command is the commands the agents ran, with `<str>` and
+  `<n>` where strings and numbers differed. A script an agent wrote into the command line is never
+  kept, so its line is a comment naming the program and the thread to copy it from.
+- **Prompt**: a proposed workflow in the **Prompts** tab.
+- **Knowledge page**: a draft page listing what runs read first, for you to replace with the facts
+  they were looking for.
+- **Scheduled task**: a paused task on the project's default model.
+- **MCP tool** and **Hook**: these need code, so the draft is a card in the board's Triage column
+  labeled `deterministic`.
+
+The **Deterministic** tab lists them, undecided first; open one to see its steps, the draft and a
+link to where it waits. **Accept** applies the draft: the action joins the project's actions, the
+prompt becomes active, the page is written, the task turns on, or the card moves to Todo. Edit it
+there before you rely on it. **Dismiss** needs a reason and withdraws a draft you have not acted on
+elsewhere; while the plugin holding that draft is off, dismissing fails and the proposal stays, so
+turn the plugin on and try again. A dismissed proposal comes back only when its work costs at least
+twice as much in a later week. While the knowledge or kanban plugin is
+off, or the project has no default model for a task, a proposal waits without a draft; it gets one
+once that is fixed. A draft the knowledge page, prompt, task or card refuses is dismissed for you,
+with the reason, rather than tried again.
+
+While proposals wait for you, the strip above the project's board flags them, and the flag's
+button opens this tab. Agents list proposals with `learning_deterministic_proposals` and dismiss one
+with `learning_deterministic_dismiss`; only you accept.
+
 ## Reviews
 
 With the review plugin on, the **Reviews** tab shows one thread's verdicts and review requests. See

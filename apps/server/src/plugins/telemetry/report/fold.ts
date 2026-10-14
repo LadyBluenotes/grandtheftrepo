@@ -1,4 +1,6 @@
 import type {
+  DeterministicProposal,
+  DeterministicProposalState,
   LearningCorrection,
   LearningItem,
   LearningOwnerKind,
@@ -84,6 +86,11 @@ export interface ReportInput {
         readonly promotions: ReadonlyArray<LearningPromotion>;
         /** Owner kinds a plugin hands items to. */
         readonly promoters: ReadonlyArray<LearningOwnerKind>;
+        /**
+         * Proposals decided in the range, and those still undecided that were found in a week
+         * starting before `to`: the review proposes from a week once it has ended.
+         */
+        readonly proposals: ReadonlyArray<DeterministicProposal>;
       }
     | undefined;
 }
@@ -128,6 +135,34 @@ const byKeys =
 
 const STATE_ORDER: Record<PullRequestState, number> = { open: 0, merged: 1, closed: 2 };
 
+const PROPOSAL_ORDER: Record<DeterministicProposalState, number> = {
+  accepted: 0,
+  pending: 1,
+  waiting: 2,
+  dismissed: 3,
+};
+
+/** Every listed proposal by decision, counted before the section keeps only its first items. */
+const tallyProposals = (
+  proposals: ReadonlyArray<{
+    readonly state: DeterministicProposalState;
+    readonly estimatedTokens: number;
+  }>,
+): TelemetryReport["deterministic"]["totals"] => {
+  const tally = (states: ReadonlyArray<DeterministicProposalState>) => {
+    const counted = proposals.filter((proposal) => states.includes(proposal.state));
+    return {
+      count: counted.length,
+      estimatedTokens: counted.reduce((total, proposal) => total + proposal.estimatedTokens, 0),
+    };
+  };
+  return {
+    accepted: tally(["accepted"]),
+    undecided: tally(["pending", "waiting"]),
+    dismissed: tally(["dismissed"]),
+  };
+};
+
 /**
  * The range a report covers, as normalized ISO instants: the one given, or with neither bound
  * given, the last seven whole UTC days before `now`.
@@ -159,6 +194,9 @@ export const reportRange = (
  * The report over loaded rows: no clock, no database, so the same input always gives the same
  * report. A section whose plugin is off is `unavailable`, naming the plugin.
  */
+
+/** A proposal's source window: an undecided one counts once its week ended inside the range. */
+const PROPOSAL_WEEK_MS = 7 * 24 * 60 * 60 * 1000;
 export const foldReport = (input: ReportInput): TelemetryReport => {
   const inRange = (at: string | null) => at !== null && at >= input.from && at < input.to;
   const threads = input.threads.toSorted(byKeys((thread) => thread.id));
@@ -257,6 +295,29 @@ export const foldReport = (input: ReportInput): TelemetryReport => {
             occurrences: item.occurrences,
             updatedAt: item.updatedAt,
           }));
+
+  const proposals: Section<"deterministic">["items"] = (learning?.proposals ?? [])
+    .filter((proposal) =>
+      proposal.decidedAt === null
+        ? Date.parse(proposal.windowFrom) + PROPOSAL_WEEK_MS <= Date.parse(input.to)
+        : inRange(proposal.decidedAt),
+    )
+    .toSorted(
+      byKeys(
+        (proposal) => PROPOSAL_ORDER[proposal.state],
+        (proposal) => -proposal.estimatedTokens,
+        (proposal) => proposal.id,
+      ),
+    )
+    .map((proposal) => ({
+      proposalId: proposal.id,
+      form: proposal.form,
+      title: proposal.title,
+      state: proposal.state,
+      estimatedTokens: proposal.estimatedTokens,
+      decidedAt: proposal.decidedAt,
+      dismissReason: proposal.dismissReason,
+    }));
 
   return {
     projectId: input.projectId,
@@ -405,5 +466,9 @@ export const foldReport = (input: ReportInput): TelemetryReport => {
         }),
     ),
     efficiency: ok(input.measures),
+    deterministic:
+      learning === undefined
+        ? { ...unavailable(notRunning("learning")), totals: tallyProposals([]) }
+        : { ...ok(proposals), totals: tallyProposals(proposals) },
   };
 };

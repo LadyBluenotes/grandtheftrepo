@@ -220,7 +220,9 @@ them half-evaluated. The host hands `toolkitRegistration` to `ServerPlugin.mcp` 
   project's runs repeat in at least three threads: one tool call's shape, or up to six in a row,
   ranked by estimated tokens with the form it suits (a script, hook, MCP tool, scheduled task,
   context file or skill). The `telemetry_extraction_candidates` MCP tool lists the twenty costliest
-  and the report five; nothing writes to the repo. A shape needs more than the earlier columns, so
+  and the report five; the learning plugin's weekly review drafts proposals from them, and nothing
+  runs or turns on before a person accepts one, though a hook's or MCP tool's draft is a Triage
+  issue file written to the board's folder at once. A shape needs more than the earlier columns, so
   migration 5 adds each call's provider turn, which groups a subagent's calls with no run, its
   search pattern, a dynamic tool's input keys, and the input's size and sha256, never the input,
   and replays the log; a call a compaction removed before then has no shape. A command's shape
@@ -231,7 +233,7 @@ them half-evaluated. The host hands `toolkitRegistration` to `ServerPlugin.mcp` 
   to it. Neither measure reads a tier; the share is a rate the regression sweep compares, the count
   a volume it does not.
   `telemetry.report` and the `telemetry_report` MCP tool fold a project's range
-  into ten sections, from the thread records, the learning and review plugins and the host's
+  into eleven sections, from the thread records, the learning and review plugins and the host's
   attention flags, with the same report as one self-contained HTML page; at start the plugin gives
   each project with a default model a `Weekly report` thread and a scheduled task that posts that
   page there every Monday, and never touches a task that already exists. The template plugin: it
@@ -301,9 +303,36 @@ them half-evaluated. The host hands `toolkitRegistration` to `ServerPlugin.mcp` 
   day, and opens or strengthens an `efficiency_regression:<measure>` item, with no owner kind, for
   each measure worse by its threshold in `regressions/thresholds.ts`, except a volume measure
   such as `tool_output_total`, which that file lists as not compared; with telemetry off it does
-  nothing. The `outcomes` sweep checks each adopted bet once its 28 days after adoption are
-  complete: it counts the project's corrections declaring the item's mode in the 28 days before
-  and after the promotion's `adopted_at`, writes one `promotion_outcome` row, and raises a
+  nothing. The `deterministic` sweep (`deterministic/`) reads telemetry's extraction candidates the
+  same way, once per project and week (the seven days before Monday 00:00 UTC), and records up to
+  five proposals in `deterministic_proposals` (migration 10): a deterministic ratio of at least 0.8
+  in at least three threads, costliest first, each candidate id once, a dismissed one again only at
+  twice its cost. Each proposal's draft goes to its form's target, read with `Effect.serviceOption`
+  where the call runs: a project script has no draft state in the core, so it is held in the row
+  and accepting appends it to the project's `defaultProjectScripts` override through
+  `ServerSettingsService`; a skill is a proposed prompt (`proposeFrom`, source
+  `deterministic:<id>`); a context file a knowledge draft keyed `repeated-<candidate id>`, or the
+  next free `-2`, `-3` beside someone else's live page there; a scheduled task a paused task
+  `learning-repeated-work:<id>` on the project's default model, or the next free `-2`, `-3` id
+  beside someone else's task there, which the draft owns by its creation time, so a task saved
+  again under that id is never enabled or deleted for it; a hook or MCP tool a Triage card labeled
+  `deterministic`, owned the same way, since a card filed later with its title gets its id. A target
+  that is off or absent leaves the proposal `waiting` until a tick finds it. One `deterministic_proposals` flag per project,
+  `deterministic:<projectId>`, opens the Learning screen's Deterministic tab on that project, which
+  the board strip's `projectId` selects. People accept and dismiss, with a reason, through the
+  method whose gateway is the grant the draft's own target asks for (`deterministicGateway`):
+  `learning.deterministicAcceptSettings` for a script or a page and `deterministicDismissSettings`
+  for a page, `learning.deterministicAccept` and `deterministicDismiss` for the rest, each refusing
+  the other kinds, since a plugin handler cannot see the caller's scopes. Dismissing withdraws a
+  draft its target still holds
+  undecided, and fails, leaving the proposal undecided, while that target is off or the withdrawal
+  fails; each draft carries what it said when saved, which the drawer shows, cut to its target's
+  contract, and one its target still refuses is dismissed as `supervisor`. Agents read and
+  dismiss, a page's proposal excepted, with `learning_deterministic_proposals` and
+  `learning_deterministic_dismiss`. The weekly report's `deterministic` section reads them. The
+  `outcomes` sweep checks each adopted bet once its 28 days after adoption are complete: it
+  counts the project's corrections declaring the item's mode in the 28 days before and after the
+  promotion's `adopted_at`, writes one `promotion_outcome` row, and raises a
   `promotion_ineffective` flag when three or more recurred after and more than half as many as
   before, or a `promotion_settled` flag when none did, keyed
   `promotion:<projectId>:<promotionId>` (the rule is `judge` in `compare.ts`). Below three before
@@ -321,7 +350,7 @@ them half-evaluated. The host hands `toolkitRegistration` to `ServerPlugin.mcp` 
   declares a review failure mode, never `security`, for one that has none and clears its
   classified mark, so the next tick classifies it before the count. Server:
   `apps/server/src/plugins/learning/`. Contracts:
-  `packages/contracts/src/plugins/learning.ts` and `prompts.ts`. Web: `apps/web/src/plugins/learning/`, the Learning screen at `/plugins/learning` with the items, corrections, prompts and reviews of a project; `recordId` opens an item, or a prompt on the prompts tab. No mobile screen, and the mobile composer does not list prompts. User guide: [Learning](./user/learning.md).
+  `packages/contracts/src/plugins/learning.ts`, `prompts.ts` and `deterministic.ts`. Web: `apps/web/src/plugins/learning/`, the Learning screen at `/plugins/learning` with the items, corrections, prompts, deterministic proposals and reviews of a project; `recordId` opens an item, or a prompt on the prompts tab. No mobile screen, and the mobile composer does not list prompts. User guide: [Learning](./user/learning.md).
 - **policy**: reviewed working rules per project (`*` is the whole environment), versioned in the
   plugin's database and rendered as one marked block each, with `<state dir>/RULES.md` ahead of
   the body, into the instruction file each agent reads from the user's home. Verify re-reads the

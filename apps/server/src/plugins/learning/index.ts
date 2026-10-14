@@ -9,6 +9,8 @@ import * as PolicyPromoter from "../policy/promoter.ts";
 import { fromService } from "../Readiness.ts";
 import * as ClassifySweep from "./ClassifySweep.ts";
 import * as CorrectionStore from "./CorrectionStore.ts";
+import * as DeterministicSweep from "./deterministic/DeterministicSweep.ts";
+import * as ProposalStore from "./deterministic/ProposalStore.ts";
 import * as ItemStore from "./items/ItemStore.ts";
 import * as Mcp from "./mcp.ts";
 import { migrations } from "./migrations.ts";
@@ -50,6 +52,7 @@ const start = Effect.gen(function* () {
   // After promote, so a draft written this tick is flagged for review in the same one.
   yield* supervisor.register(yield* ReviewSweep.sweep);
   yield* supervisor.register(yield* RegressionSweep.sweep);
+  yield* supervisor.register(yield* DeterministicSweep.sweep);
   // A verdict is permanent, so the outcome sweep waits for the reactor that records corrections.
   yield* supervisor.register(yield* OutcomeSweep.sweep(reactor.drain));
   // After classify, so a mode declared since the last tick is classified before it is counted.
@@ -68,17 +71,19 @@ const start = Effect.gen(function* () {
  * each handover waiting for that review, a fourth opens an item for each
  * efficiency measure that worsened from one week to the next, a fifth flags
  * an adopted handover whose failure mode kept recurring, or went quiet, in the
- * four weeks after its adoption, and a sixth flags corrections left without a
- * mode for a week. MCP tools expose corrections and items to agents, and take
- * an agent's verdict on a handover. It also keeps each project's prompt
- * library, saved prompts and workflows that agents search and propose to over
- * MCP and people manage on the Learning screen.
+ * four weeks after its adoption, a sixth flags corrections left without a mode
+ * for a week, and a seventh turns telemetry's repeated work into a weekly
+ * handful of drafts a person accepts or dismisses. MCP tools expose corrections
+ * and items to agents, and take an agent's verdict on a handover. It also keeps
+ * each project's prompt library, saved prompts and workflows that agents search
+ * and propose to over MCP and people manage on the Learning screen.
  */
 export const plugin = {
   id: "learning",
   dependsOn: [],
   migrations,
   layer: Layer.merge(Layer.effectDiscard(start), Checks.layer).pipe(
+    Layer.provideMerge(ProposalStore.layer),
     Layer.provideMerge(
       Layer.mergeAll(CorrectionStore.layer, ItemStore.layer, Promoter.layer, PromptStore.layer),
     ),

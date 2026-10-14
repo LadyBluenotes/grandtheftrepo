@@ -1,5 +1,9 @@
+import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import {
+  DETERMINISTIC_METHODS,
+  DeterministicProposal,
+  type KnowledgeEntry,
   LEARNING_METHODS,
   LearningCorrection,
   LearningError,
@@ -11,16 +15,23 @@ import {
 } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
+import * as Context from "effect/Context";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/sql/SqlClient";
+import * as ProjectService from "../../project/ProjectService.ts";
+import * as ServerSettings from "../../serverSettings.ts";
+import * as KnowledgeStore from "../knowledge/KnowledgeStore.ts";
 import * as PluginDatabase from "../PluginDatabase.ts";
 import * as PluginRpc from "../PluginRpc.ts";
 import * as CorrectionStore from "./CorrectionStore.ts";
+import * as ProposalStore from "./deterministic/ProposalStore.ts";
 import { table } from "./handlers.ts";
 import * as ItemStore from "./items/ItemStore.ts";
 import { migrations } from "./migrations.ts";
 import * as PromotionStore from "./PromotionStore.ts";
+import * as PromptStore from "./prompts/PromptStore.ts";
 
 const projectId = ProjectId.make("project:learning");
 const threadId = ThreadId.make("thread:learning");
@@ -218,4 +229,155 @@ it.effect("a client's verdict and rollback go through the operate gateway as a p
       assert.strictEqual((yield* items.get(ruled.item.id)).item.state, "open");
     }),
   ),
+);
+
+it.effect(
+  "a proposal is decided only through the gateway its draft's target asks for: settings for scripts and pages, operate for the rest",
+  () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { sql } = yield* PluginDatabase.open({
+          id: "learning",
+          filename: ":memory:",
+          migrations,
+        });
+        const project = {
+          id: projectId,
+          title: "Learning",
+          workspaceRoot: "/repos/learning",
+          defaultModelSelection: null,
+          scripts: [],
+          createdAt: "2026-01-01T00:00:00.000Z",
+          updatedAt: "2026-01-01T00:00:00.000Z",
+        };
+        // A knowledge plugin that saves and discards drafts in memory.
+        const pages: Array<KnowledgeEntry> = [];
+        const knowledge = Layer.mock(KnowledgeStore.KnowledgeStore)({
+          list: () => Effect.sync(() => [...pages]),
+          propose: (input, source) =>
+            Effect.sync(() => {
+              const page: KnowledgeEntry = {
+                id: pages.length + 1,
+                ...input,
+                state: "draft",
+                source,
+                createdAt: "2026-10-12T00:00:00.000Z",
+                acceptedAt: null,
+                retiredAt: null,
+              };
+              pages.push(page);
+              return page;
+            }),
+          discard: ({ id }) =>
+            Effect.sync(() => {
+              const index = pages.findIndex((page) => page.id === id);
+              pages[index] = { ...pages[index]!, state: "retired" };
+              return pages[index]!;
+            }),
+        });
+        const context = yield* Layer.build(
+          Layer.mergeAll(ProposalStore.layer, knowledge, ServerSettings.layerTest()).pipe(
+            Layer.provideMerge(PromptStore.layer),
+            Layer.provideMerge(
+              Layer.mergeAll(
+                Layer.succeed(SqlClient.SqlClient, sql),
+                NodeServices.layer,
+                Layer.mock(ProjectService.ProjectService)({
+                  getShell: () => Effect.succeed(Option.some(project)),
+                }),
+              ),
+            ),
+          ),
+        );
+        const store = Context.get(context, ProposalStore.ProposalStore);
+        const example = { threadId: "thread:example", runId: null, itemIds: ["item:a"] };
+        const candidate = (id: string, form: "script" | "skill" | "context_file") => ({
+          id,
+          kind: "step" as const,
+          steps: [form === "script" ? "command:vp run check" : "Read docs/arch.md"],
+          threads: 3,
+          occurrences: 3,
+          deterministicRatio: 1,
+          estimatedTokens: 1000,
+          form,
+          example,
+        });
+        yield* store.propose({
+          projectId,
+          windowFrom: "2026-10-05T00:00:00.000Z",
+          candidates: [
+            candidate("5c41970000000001", "script"),
+            candidate("5c111a0000000001", "skill"),
+            candidate("c0de000000000001", "context_file"),
+          ],
+          dryRun: false,
+        });
+        // As the sweep does, with the sibling plugins it would see.
+        yield* store
+          .draftWaiting({ projectIds: new Set([projectId]), dryRun: false })
+          .pipe(Effect.provide(context));
+        const byForm = new Map((yield* store.list({ projectId })).map((p) => [p.form, p.id]));
+
+        /** A decision through `gateway`, as a client sends it. */
+        const decide = (gateway: "operate" | "settingsWrite", method: string, input: unknown) =>
+          PluginRpc.dispatch(gateway, table, { method, input }).pipe(Effect.provide(context));
+        const refusal = (gateway: "operate" | "settingsWrite", method: string, input: unknown) =>
+          decide(gateway, method, input).pipe(
+            Effect.andThen(Effect.die("expected a failure")),
+            Effect.flip,
+            Effect.flatMap((failure) =>
+              failure._tag === "PluginMethodError"
+                ? Effect.map(decodeError(failure.error), (error) => error.message)
+                : Effect.succeed(failure.message),
+            ),
+          );
+        const decided = (gateway: "operate" | "settingsWrite", method: string, input: unknown) =>
+          decide(gateway, method, input).pipe(
+            Effect.flatMap(Schema.decodeUnknownEffect(DeterministicProposal)),
+          );
+        const { accept, acceptSettings, dismiss, dismissSettings } = DETERMINISTIC_METHODS;
+        const script = { id: byForm.get("script")! };
+        const prompt = { id: byForm.get("skill")! };
+        const page = { id: byForm.get("context_file")!, reason: "Covered already." };
+
+        // Each method answers only through its own gateway.
+        assert.strictEqual(
+          yield* refusal("operate", acceptSettings.method, script),
+          'Method "learning.deterministicAcceptSettings" needs the settingsWrite scope.',
+        );
+        assert.strictEqual(
+          yield* refusal("settingsWrite", accept.method, prompt),
+          'Method "learning.deterministicAccept" needs the operate scope.',
+        );
+        // A grant other than the one the draft's target asks for is refused, naming the method.
+        assert.strictEqual(
+          yield* refusal("operate", accept.method, script),
+          `Proposal ${script.id} is decided with learning.deterministicAcceptSettings, which needs the settingsWrite grant.`,
+        );
+        assert.strictEqual(
+          yield* refusal("settingsWrite", acceptSettings.method, prompt),
+          `Proposal ${prompt.id} is decided with learning.deterministicAccept, which needs the operate grant.`,
+        );
+        assert.strictEqual(
+          yield* refusal("operate", dismiss.method, page),
+          `Proposal ${page.id} is decided with learning.deterministicDismissSettings, which needs the settingsWrite grant.`,
+        );
+        assert.strictEqual(
+          yield* refusal("settingsWrite", dismissSettings.method, { ...prompt, reason: "No." }),
+          `Proposal ${prompt.id} is decided with learning.deterministicDismiss, which needs the operate grant.`,
+        );
+
+        // Through the right ones, each is decided.
+        assert.strictEqual(
+          (yield* decided("settingsWrite", acceptSettings.method, script)).state,
+          "accepted",
+        );
+        assert.strictEqual((yield* decided("operate", accept.method, prompt)).state, "accepted");
+        assert.strictEqual(
+          (yield* decided("settingsWrite", dismissSettings.method, page)).state,
+          "dismissed",
+        );
+        assert.strictEqual(pages[0]?.state, "retired");
+      }),
+    ),
 );

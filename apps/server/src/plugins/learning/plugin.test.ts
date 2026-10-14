@@ -33,7 +33,7 @@ const layerHost = PluginHost.layerAll.pipe(
     Layer.mergeAll(
       SqlitePersistence.layerMemory,
       Layer.mock(ThreadManagementService.ThreadManagementService)({}),
-      Layer.mock(ProjectService.ProjectService)({}),
+      Layer.mock(ProjectService.ProjectService)({ listShells: () => Effect.succeed([]) }),
       Layer.mock(ProviderRegistry.ProviderRegistry)({}),
       ServerSettings.layerTest(),
     ),
@@ -65,6 +65,7 @@ it.effect(
             { plugin: "learning", name: "promote" },
             { plugin: "learning", name: "reviews" },
             { plugin: "learning", name: "regressions" },
+            { plugin: "learning", name: "deterministic" },
             { plugin: "learning", name: "outcomes" },
             { plugin: "learning", name: "unclassified" },
           ]);
@@ -89,6 +90,8 @@ it.effect(
               ["reviews", "ok", 0, 0, 0],
               // Telemetry is off, so there is nothing to compare.
               ["regressions", "ok", 0, 0, 0],
+              // Telemetry is off and no project has a proposal waiting for its draft.
+              ["deterministic", "ok", 0, 0, 0],
               // The one promotion is still proposed, so nothing is adopted to judge.
               ["outcomes", "ok", 0, 0, 0],
               // The one correction declares its mode.

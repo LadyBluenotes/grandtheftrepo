@@ -1,4 +1,5 @@
 import {
+  type DeterministicProposal,
   type LearningCorrection,
   type LearningItem,
   type LearningPromotion,
@@ -115,6 +116,32 @@ const promotion = (id: number, overrides: Partial<LearningPromotion> = {}): Lear
   ...overrides,
 });
 
+export const proposal = (
+  id: number,
+  overrides: Partial<DeterministicProposal> = {},
+): DeterministicProposal => ({
+  id,
+  projectId,
+  candidateId: `candidate-${id}`,
+  form: "script",
+  title: `vp run check-${id}`,
+  steps: [`command:vp run check-${id}`],
+  threads: 3,
+  occurrences: 4,
+  deterministicRatio: 1,
+  estimatedTokens: 1000 * id,
+  example: { threadId: "thread:open", runId: null, itemIds: [`item:${id}`] },
+  windowFrom: BEFORE,
+  state: "pending",
+  draft: null,
+  waitingReason: null,
+  decidedBy: null,
+  decidedAt: null,
+  dismissReason: null,
+  createdAt: BEFORE,
+  ...overrides,
+});
+
 const measure = (name: string, value: number | null): TelemetryMeasure => ({
   measure: name,
   state: value === null ? "unavailable" : "ok",
@@ -129,8 +156,8 @@ const measure = (name: string, value: number | null): TelemetryMeasure => ({
 /**
  * A week in which every section has something: a thread delivered with a merged pull request, one
  * still open with changes requested, verdicts, corrections, a person's decision, a handover to
- * each owner kind, an attention flag and two measures. Each list also holds a row the range or the
- * project leaves out.
+ * each owner kind, an attention flag, two measures and a proposal accepted, one dismissed and one
+ * undecided. Each list also holds a row the range or the project leaves out.
  */
 export const fullInput = (): ReportInput => ({
   projectId,
@@ -222,5 +249,18 @@ export const fullInput = (): ReportInput => ({
       }),
     ],
     promoters: ["project_knowledge", "prompt"],
+    proposals: [
+      proposal(1, { state: "accepted", decidedBy: "user", decidedAt: INSIDE }),
+      proposal(2),
+      proposal(3, {
+        form: "skill",
+        state: "dismissed",
+        decidedBy: "user",
+        decidedAt: LATER,
+        dismissReason: "Noise.",
+      }),
+      // Dismissed the week before: neither decided in the range nor undecided.
+      proposal(4, { state: "dismissed", decidedBy: "user", decidedAt: BEFORE }),
+    ],
   },
 });

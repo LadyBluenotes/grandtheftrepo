@@ -22,6 +22,7 @@ import { WorkspacePageHeader } from "~/components/WorkspacePageHeader";
 import { isElectron } from "~/env";
 import { useProjects } from "~/state/entities";
 import { CorrectionsTable } from "./CorrectionsTable";
+import { DeterministicTable } from "./DeterministicTable";
 import { ItemsTable } from "./ItemsTable";
 import { usePrompt } from "./promptState";
 import { PromptsTable } from "./PromptsTable";
@@ -38,16 +39,17 @@ import { PluginNotice } from "../PluginsPage";
 import { usePluginScreenSearch } from "../pluginScreenSearch";
 import { usePluginEnvironmentId, usePluginStatuses } from "../pluginState";
 
-const TABS = ["items", "corrections", "prompts", "reviews"] as const;
+const TABS = ["items", "corrections", "prompts", "deterministic", "reviews"] as const;
 type Tab = (typeof TABS)[number];
 const isTab = (value: unknown): value is Tab => (TABS as ReadonlyArray<unknown>).includes(value);
 
 /**
  * `/plugins/learning`: one project's learning items, the corrections behind them, its prompt
- * library and, while the review plugin runs, one thread's verdicts and requests. The tab and the
- * open item or prompt, by `recordId`, are in the URL. The project is the URL's `projectId`, else
- * the environment's first, until a person picks another, or an item or prompt the URL opens
- * selects its own; picking one resets the tabs' filters and the open record.
+ * library, its proposals to do repeated work without a model and, while the review plugin runs,
+ * one thread's verdicts and requests. The tab and the open item or prompt, by `recordId`, are in
+ * the URL. The project is the URL's `projectId`, else the environment's first, until a person
+ * picks another, or an item or prompt the URL opens selects its own; picking one resets the tabs'
+ * filters and the open record.
  */
 export function LearningScreen() {
   const environmentId = usePluginEnvironmentId();
@@ -120,6 +122,7 @@ export function LearningScreen() {
               <Toggle value="items">Items</Toggle>
               <Toggle value="corrections">Corrections</Toggle>
               <Toggle value="prompts">Prompts</Toggle>
+              <Toggle value="deterministic">Deterministic</Toggle>
               {reviewsOn ? <Toggle value="reviews">Reviews</Toggle> : null}
             </ToggleGroup>
           </div>
@@ -149,6 +152,12 @@ export function LearningScreen() {
                   projectId={selected.id}
                   openId={promptId}
                   onOpen={openRecord}
+                />
+              ) : view === "deterministic" ? (
+                <DeterministicTable
+                  key={`${environmentId}:${selected.id}`}
+                  environmentId={environmentId}
+                  projectId={selected.id}
                 />
               ) : (
                 <ReviewsTable

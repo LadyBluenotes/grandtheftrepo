@@ -13,6 +13,8 @@ server's time zone, an agent posts a page there covering the last seven whole da
 - **Needs attention**: open attention flags on the project and its threads, such as budget
   breaches.
 - **Efficiency**: the project's efficiency measures for the week.
+- **Could be deterministic**: proposals to do repeated work without a model that you accepted or
+  dismissed that week, and those still waiting, each with the estimated tokens it saves a week.
 
 Each section lists up to 20 entries with the full count. A section whose plugin is turned off says
 so instead of showing data. An archived thread's pull requests appear only when the thread settled

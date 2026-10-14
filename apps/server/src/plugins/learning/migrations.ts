@@ -190,6 +190,39 @@ const prompts: PluginMigration[2] = Effect.gen(function* () {
   )`;
 });
 
+// The weekly review of repeated work. A proposal is one extraction candidate in one week; its
+// `candidate` is the candidate as telemetry answered it, steps and example included but never a
+// script's text, which telemetry does not keep. `draft` names what the proposal saved in its form's
+// target, or holds a project script, which has no draft of its own. A project's row in
+// `deterministic_runs` means its week starting at `window_from` was reviewed.
+const deterministicProposals: PluginMigration[2] = Effect.gen(function* () {
+  const sql = yield* SqlClient.SqlClient;
+  yield* sql`CREATE TABLE deterministic_proposals (
+    id INTEGER PRIMARY KEY,
+    project_id TEXT NOT NULL,
+    candidate_id TEXT NOT NULL,
+    form TEXT NOT NULL,
+    candidate TEXT NOT NULL,
+    estimated_tokens INTEGER NOT NULL,
+    window_from TEXT NOT NULL,
+    state TEXT NOT NULL,
+    draft TEXT,
+    waiting_reason TEXT,
+    decided_by TEXT,
+    decided_at TEXT,
+    dismiss_reason TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    UNIQUE (project_id, candidate_id, window_from)
+  )`;
+  yield* sql`CREATE TABLE deterministic_runs (
+    project_id TEXT NOT NULL,
+    window_from TEXT NOT NULL,
+    ran_at TEXT NOT NULL,
+    PRIMARY KEY (window_from, project_id)
+  )`;
+});
+
 export const migrations = [
   [1, "Corrections", corrections],
   [2, "LearningItems", learningItems],
@@ -200,4 +233,5 @@ export const migrations = [
   [7, "SecurityDeclaredMode", securityDeclaredMode],
   [8, "PromotionReview", promotionReview],
   [9, "Prompts", prompts],
+  [10, "DeterministicProposals", deterministicProposals],
 ] as const satisfies ReadonlyArray<PluginMigration>;
