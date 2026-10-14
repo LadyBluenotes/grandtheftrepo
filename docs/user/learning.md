@@ -119,8 +119,8 @@ saves is proposed until you accept it.
 
 Once a week the plugin looks at the work your agents kept repeating in each project, as the
 telemetry plugin finds it (see [Usage](./usage.md)), and drafts up to five proposals to do it
-without a model: work done the same way in at least four out of five runs, in at least three
-threads, the costliest first. Each proposal's draft goes where its kind of work belongs:
+without a model: work given the same inputs in at least four out of five of its occurrences, in at
+least three threads, the costliest first. Each proposal's draft goes where its kind of work belongs:
 
 - **Script**: a draft project action. Its command is the commands the agents ran, with `<str>` and
   `<n>` where strings and numbers differed. A script an agent wrote into the command line is never
