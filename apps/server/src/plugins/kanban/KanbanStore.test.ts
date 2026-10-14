@@ -16,6 +16,8 @@ import * as SqlClient from "effect/sql/SqlClient";
 import * as Stream from "effect/Stream";
 
 import * as ServerConfig from "../../config.ts";
+import { liveThreadShell } from "../../mcp/McpToolAccess.testkit.ts";
+import * as ThreadManagementService from "../../orchestration-v2/ThreadManagementService.ts";
 import * as ProjectService from "../../project/ProjectService.ts";
 import * as ClassifySweep from "../learning/ClassifySweep.ts";
 import * as CorrectionStore from "../learning/CorrectionStore.ts";
@@ -434,7 +436,23 @@ it.layer(layerTest)("KanbanStore", (it) => {
             const learning = yield* learningPlugin;
             const first = ThreadId.make("thr_reopen_first");
             const last = ThreadId.make("thr_reopen_last");
-            for (const id of [first, last]) yield* learning.remember(id);
+            const elsewhere = ThreadId.make("thr_reopen_elsewhere");
+            // `last` is not projected into the learning plugin yet: a reopen still records it,
+            // because the core places it in the ticket's project.
+            yield* learning.remember(first);
+            const owners = new Map([
+              [first, projectId],
+              [last, projectId],
+              [elsewhere, ProjectId.make("project-2")],
+            ]);
+            const core = Layer.mock(ThreadManagementService.ThreadManagementService)({
+              getThreadShell: (id) => {
+                const owner = owners.get(id);
+                return Effect.succeed(
+                  owner === undefined ? null : { ...liveThreadShell(id), projectId: owner },
+                );
+              },
+            });
             const reopen = (
               title: string,
               reopenReason: "defect" | "scope_change",
@@ -459,29 +477,64 @@ it.layer(layerTest)("KanbanStore", (it) => {
 
             // Without the learning plugin a reopen records nothing and still succeeds.
             yield* reopen("Reopened while learning is off", "defect", [last]);
-            const [defect, scopeChange] = yield* Effect.all([
-              reopen("Login loops", "defect", [first, last]),
-              reopen("Login needs SSO too", "scope_change", [last]),
-              // No linked thread, so no agent's work to learn from.
-              reopen("Typo on the board", "defect", []),
-            ]).pipe(Effect.provideService(CorrectionStore.CorrectionStore, learning.corrections));
+            const [defect, scopeChange] = yield* Effect.gen(function* () {
+              const ids = yield* Effect.all([
+                reopen("Login loops", "defect", [first, last]),
+                reopen("Login needs SSO too", "scope_change", [last]),
+                // No linked thread, so no agent's work to learn from.
+                reopen("Typo on the board", "defect", []),
+                // A ticket links any thread id; one the core places elsewhere, or does not know,
+                // is not claimed for this project.
+                reopen("Linked to another project's thread", "defect", [elsewhere]),
+                reopen("Linked to a thread that never existed", "defect", [
+                  ThreadId.make("thr_reopen_missing"),
+                ]),
+              ]);
+              // Settling and reopening again within the same clock tick is a second correction.
+              yield* store.write(projectId, "user", {
+                action: "issue.move",
+                id: ids[0],
+                status: "done",
+              });
+              yield* store.write(projectId, "user", {
+                action: "issue.move",
+                id: ids[0],
+                status: "todo",
+                reopenReason: "defect",
+              });
+              return ids;
+            }).pipe(
+              Effect.provideService(CorrectionStore.CorrectionStore, learning.corrections),
+              Effect.provide(core),
+            );
 
             const at = DateTime.formatIso(yield* DateTime.now);
             const recorded = yield* learning.corrections.list({ projectId, from: at, to: at });
             assert.deepEqual(
               recorded.map((c) => [c.threadId, c.failureKind, c.declaredMode, c.sourceKey]),
               [
-                [last, "reopened_after_settlement", "defect", `issue:${projectId}:${defect}:${at}`],
+                [
+                  last,
+                  "reopened_after_settlement",
+                  "defect",
+                  `issue:${projectId}:${defect}:1:${at}`,
+                ],
                 [
                   last,
                   "reopened_after_settlement",
                   "unclear_spec",
-                  `issue:${projectId}:${scopeChange}:${at}`,
+                  `issue:${projectId}:${scopeChange}:1:${at}`,
+                ],
+                [
+                  last,
+                  "reopened_after_settlement",
+                  "defect",
+                  `issue:${projectId}:${defect}:2:${at}`,
                 ],
               ],
             );
 
-            assert.deepInclude(yield* learning.classify, { examined: 2, acted: 2 });
+            assert.deepInclude(yield* learning.classify, { examined: 3, acted: 3 });
             const classified = yield* Effect.forEach(recorded, (c) =>
               learning.corrections.get(c.id),
             );
@@ -490,6 +543,7 @@ it.layer(layerTest)("KanbanStore", (it) => {
               [
                 ["defect", "declared mode"],
                 ["unclear_spec", "declared mode"],
+                ["defect", "declared mode"],
               ],
             );
           }),

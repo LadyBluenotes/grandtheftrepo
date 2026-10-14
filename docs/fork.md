@@ -80,6 +80,7 @@ resolved by keeping the line.
 | `apps/server/src/orchestration-v2/toolOutputImageBytes.ts`   | `export function carriesImage`, the one exported function: does a record hold image bytes or the size stripping left, so the estimate matches what ingestion stores |
 | `third-party-licenses.config.json`                           | the `Caveman reply rules` and `Ponytail ladder` entries at the end of `customNotices`, so the adapted policy text is credited in the app's license list             |
 | `scripts/build-desktop-artifact.ts`                          | in `createBuildConfig`, unsigned Mac builds get `identity: "-"`, `hardenedRuntime: false` and no GitHub update feed, plus their tests                               |
+| `packages/provider-core/.../orchestrationInstructions.ts`    | `export let` on `T3_CODE_ORCHESTRATION_INSTRUCTIONS` and `setPluginOrchestrationInstructions` at the end, which the host calls with the capture rule                |
 
 ## Plugin services and the type system
 
@@ -124,7 +125,11 @@ them half-evaluated. The host hands `toolkitRegistration` to `ServerPlugin.mcp` 
   active-plugin atoms, the attention atom and the strip's row model in
   `packages/client-runtime/src/plugins/kanban.ts`, and the contract's
   `KANBAN_ATTENTION_KIND_LABELS` names each kind, so a new kind needs a label there and nothing per
-  client. Server: `apps/server/src/plugins/kanban/`. Contracts:
+  client. While kanban runs, the host appends the capture rule (`plugins/CaptureRule.ts`), when to
+  record a decision, a correction or a knowledge page, to the orchestration instructions, which
+  every adapter sends only to a turn with the `t3-code` MCP server. Each line is dropped while its
+  plugin is off. Pi bakes that text into its extension at import, before the host starts, and Muse
+  gets none, so neither sees the rule. Server: `apps/server/src/plugins/kanban/`. Contracts:
   `packages/contracts/src/plugins/kanban.ts`. Web: `apps/web/src/plugins/kanban/`. Mobile:
   `apps/mobile/src/features/kanban/`. User guide: [Kanban board](./user/kanban.md).
 - **telemetry**: the eighteen efficiency measures of #1, #35 and #36 over a project's window, from the
@@ -162,11 +167,13 @@ them half-evaluated. The host hands `toolkitRegistration` to `ServerPlugin.mcp` 
   and the report five; nothing writes to the repo. A shape needs more than the earlier columns, so
   migration 5 adds each call's provider turn, which groups a subagent's calls with no run, its
   search pattern, a dynamic tool's input keys, and the input's size and sha256, never the input,
-  and replays the log; a call a compaction removed before then has no shape, and neither does a
-  command line as long as the 512 characters kept of it. Absolute paths that resolve under the
-  project's directory, which `MeasureService` reads from `ProjectService` when it is built, are
-  made relative to it. Neither measure reads a tier; the share is a rate the regression sweep
-  compares, the count a volume it does not.
+  and replays the log; a call a compaction removed before then has no shape. A command's shape
+  puts quoted strings as `<str>`, and only 512 characters of a command line are kept, so an
+  interpreter's inline script (`node -e`, `python3 -c`, a heredoc) and any command line that long
+  are shaped by that sha256 instead, `script:<program>:<digest prefix>`, and a candidate's example names the stored calls, never their text. Absolute paths that resolve under the project's
+  directory, which `MeasureService` reads from `ProjectService` when it is built, are made relative
+  to it. Neither measure reads a tier; the share is a rate the regression sweep compares, the count
+  a volume it does not.
   `telemetry.report` and the `telemetry_report` MCP tool fold a project's range
   into ten sections, from the thread records, the learning and review plugins and the host's
   attention flags, with the same report as one self-contained HTML page; at start the plugin gives
@@ -194,7 +201,8 @@ them half-evaluated. The host hands `toolkitRegistration` to `ServerPlugin.mcp` 
   while changes are requested, and threads reopened after settlement. `KanbanStore.write` also
   records a done ticket it reopens, on the thread linked to it last, through
   `producers/ticketReopens.ts` and `Effect.serviceOption`, so a reopen while learning is off
-  records nothing. Agents read and add them over MCP. A correction declares a failure mode only
+  records nothing. A ticket can link any thread id, so the reopen is recorded only when the core's
+  thread shell places that thread in the ticket's project. Agents read and add them over MCP. A correction declares a failure mode only
   when its source names the cause: a review verdict, a person, the security scan (`security`) or a
   reopened ticket (`defect` for a defect, `unclear_spec` for a scope change); a provider failure
   never does. Two sweeps turn corrections with a declared failure mode into learning items, one

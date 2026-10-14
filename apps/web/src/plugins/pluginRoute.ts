@@ -1,4 +1,4 @@
-import type { PluginStatus } from "@t3tools/contracts";
+import type { EnvironmentId, PluginStatus } from "@t3tools/contracts";
 
 import type { PluginEntry } from "./registry";
 
@@ -27,6 +27,15 @@ export function pluginScreenView(
     return { kind: "notice", message: `${title} has no screen.`, linkToPlugins: false };
   }
   return { kind: "screen", Screen: entry.Screen };
+}
+
+/** A link to a plugin's screen that keeps the environment the linking page shows. */
+export function pluginScreenLink(pluginId: string, environmentId: EnvironmentId | null) {
+  return {
+    to: "/plugins/$pluginId",
+    params: { pluginId },
+    search: environmentId === null ? {} : { machine: environmentId },
+  } as const;
 }
 
 export interface PluginBadge {

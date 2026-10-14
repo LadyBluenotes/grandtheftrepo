@@ -92,7 +92,8 @@ refused; checking a spec you wrote still works.
 Agents reach the board through five MCP tools. `kanban_list` lists issues or decisions, or one of
 them in full. `kanban_write` files an issue, moves it, adds a note, blocks it when it needs you,
 links the calling thread, or records a decision. Agent-filed issues land in Triage. `kanban_stop`
-sets or clears the emergency stop.
+sets or clears the emergency stop. Agents are told to record a decision whenever they choose one
+approach over another, without being asked.
 
 `kanban_ticket_specify` turns a rough card in Triage or Inbox into a spec. By default it starts a
 drafting thread in plan mode on the routing plugin's cheap model; with `useExisting` it checks a
