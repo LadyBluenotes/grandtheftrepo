@@ -121,7 +121,8 @@ export function parseIssue(id: string, text: string): ParsedIssue | null {
       criteria: front.criteria ?? [],
       findings: front.findings ?? [],
       closureCheck: front.closureCheck ?? false,
-      noDecision: front.noDecision ?? null,
+      // A blank reason, as a hand edit can leave, is no reason.
+      noDecision: front.noDecision?.reason.trim() ? front.noDecision : null,
       blocked: front.blocked ?? null,
       reopened: front.reopened ?? null,
       threads: front.threads ?? [],

@@ -712,6 +712,55 @@ it.layer(layerTest)("KanbanStore", (it) => {
       }),
     );
 
+    it.effect("reads a blank no-decision reason in a hand-edited file as none", () =>
+      Effect.gen(function* () {
+        const store = yield* KanbanStore.KanbanStore;
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const folder = yield* fs.makeTempDirectoryScoped({ prefix: "t3code-kanban-blank-" });
+        yield* fs.makeDirectory(path.join(folder, "issues"), { recursive: true });
+        const at = "2026-10-01T00:00:00.000Z";
+        yield* fs.writeFileString(
+          path.join(folder, "issues", `blank${ISSUE_EXTENSION}`),
+          serializeIssue(
+            {
+              id: "blank",
+              title: "Blank",
+              status: "in_review",
+              priority: "p3",
+              labels: [],
+              verification: "unverified",
+              tier: null,
+              criteria: [],
+              findings: [],
+              closureCheck: true,
+              noDecision: { reason: "  ", at, by: "user" },
+              blocked: null,
+              reopened: null,
+              threads: [],
+              createdAt: at,
+              createdBy: "user",
+              updatedAt: at,
+              doneAt: null,
+              archivedAt: null,
+              description: "",
+              log: [],
+            },
+            "grand-theft-repo",
+          ),
+        );
+        yield* store.setDirectory({ projectId, directory: folder });
+
+        assert.isNull((yield* store.getIssue({ projectId, id: "blank" })).noDecision);
+        const refused = yield* Effect.flip(
+          store.write(projectId, "user", { action: "issue.move", id: "blank", status: "done" }),
+        );
+        assert.strictEqual(refused.code, "invalid");
+        assert.include(refused.message, "linked decision");
+        yield* store.setDirectory({ projectId, directory: null });
+      }),
+    );
+
     it.effect(
       "a reopen is one correction on the thread linked last, classified by its reason, while learning runs",
       () =>
