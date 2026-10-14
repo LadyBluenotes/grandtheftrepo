@@ -222,6 +222,10 @@ const make = Effect.gen(function* () {
       } satisfies Recorded;
     });
 
+  /**
+   * Run through `PluginServices`: the reactor's fiber holds neither the launcher nor the routing
+   * plugin's tier service.
+   */
   const launch = (input: {
     readonly projectId: ProjectId;
     readonly childThreadId: ThreadId;
@@ -242,31 +246,29 @@ const make = Effect.gen(function* () {
         ),
       );
       // `mechanical` work with no earlier runs is routing's cheap tier.
-      yield* PluginServices.provide(
-        TierSelectionService.launch(
-          { projectId: input.projectId, taskClass: "mechanical", earlierThreadIds: [] },
-          (modelSelection) =>
-            Effect.gen(function* () {
-              if (modelSelection === undefined)
-                return yield* new KanbanError({ code: "invalid", message: NO_CHEAP_TIER });
-              return yield* launches.launch({
-                commandId: CommandId.make(input.childThreadId),
-                threadId: input.childThreadId,
-                projectId: input.projectId,
-                title: `Capture: ${input.title}`,
-                modelSelection,
-                // As strict as spec drafting: the turn only reads what it is given.
-                runtimeMode: "approval-required",
-                interactionMode: "plan",
-                workspaceStrategy: { type: "root" },
-                initialMessage: { text: input.prompt, attachments: [] },
-                createdBy: "system",
-                creationSource: "server",
-              });
-            }),
-        ),
+      yield* TierSelectionService.launch(
+        { projectId: input.projectId, taskClass: "mechanical", earlierThreadIds: [] },
+        (modelSelection) =>
+          Effect.gen(function* () {
+            if (modelSelection === undefined)
+              return yield* new KanbanError({ code: "invalid", message: NO_CHEAP_TIER });
+            return yield* launches.launch({
+              commandId: CommandId.make(input.childThreadId),
+              threadId: input.childThreadId,
+              projectId: input.projectId,
+              title: `Capture: ${input.title}`,
+              modelSelection,
+              // As strict as spec drafting: the turn only reads what it is given.
+              runtimeMode: "approval-required",
+              interactionMode: "plan",
+              workspaceStrategy: { type: "root" },
+              initialMessage: { text: input.prompt, attachments: [] },
+              createdBy: "system",
+              creationSource: "server",
+            });
+          }),
       );
-    });
+    }).pipe(PluginServices.provide);
 
   const settled: SettleCapture["Service"]["settled"] = Effect.fn("SettleCapture.settled")(
     function* (thread, eventId) {
