@@ -242,8 +242,17 @@ export const programName = (command: string, depth = 0): string | null => {
 
 /** The interpreters whose scripts agents write into the command line. */
 const INTERPRETERS = words("node python python3 bash sh ruby deno bun");
-/** An interpreter's options that run the next word as its script. */
-const INLINE_OPTIONS = words("-e -c --eval");
+/**
+ * Each interpreter's options that run the next word as its script. They differ: `node -c` and
+ * `ruby -c` check a file's syntax. A shell's `-c` is a wrapper, and `deno` takes `eval` instead.
+ */
+const INLINE_OPTIONS: ReadonlyMap<string, ReadonlySet<string>> = new Map([
+  ["node", words("-e --eval -p --print")],
+  ["bun", words("-e --eval -p --print")],
+  ["python", words("-c")],
+  ["python3", words("-c")],
+  ["ruby", words("-e")],
+]);
 
 /**
  * Whether the program `programName` names is an interpreter running a script written into the
@@ -262,9 +271,10 @@ export const runsInlineScript = (command: string, depth = 0): boolean => {
       const script = tokens[scriptIndex(tokens, at)];
       return script !== undefined && depth < MAX_DEPTH && runsInlineScript(script, depth + 1);
     }
+    const inline = INLINE_OPTIONS.get(found.program);
     for (let index = at + 1; index < tokens.length; index += 1) {
       const token = tokens[index]!;
-      if (INLINE_OPTIONS.has(token)) return true;
+      if (inline?.has(token)) return true;
       if (!token.startsWith("-") || token === "--") {
         return found.program === "deno" && token === "eval";
       }
