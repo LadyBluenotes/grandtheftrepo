@@ -509,6 +509,8 @@ const fakeKanban = Effect.gen(function* () {
             archivedAt: null,
             criteria: [],
             findings: [],
+            closureCheck: true,
+            noDecision: null,
             description: write.description ?? "",
             log: [],
           });
