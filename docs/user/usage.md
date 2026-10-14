@@ -159,14 +159,24 @@ page. Reads of the instruction files themselves do not count, since an agent loa
 tool call.
 
 Two more measures look for work your agents keep doing by hand across a project's threads: the same
-commands in the same order, the same files read at the start of a thread, the same kind of search
-with a different pattern each time. Anything seen in at least three threads is a candidate, ranked
-by the estimated tokens it cost, with where it could live instead: a script in the repository, a
-hook that runs after edits, an MCP tool, a scheduled task, a few lines in the project's instruction
-file, or a skill. Deterministic work share is the part of the tool calls' tokens those candidates
-cover. The weekly report lists the top five under Efficiency, and an agent can list up to twenty,
-each with an example thread, with the `telemetry_extraction_candidates` tool. Nothing is changed for
-you; a candidate is a suggestion. A window with fewer than three threads has no candidates.
+commands in the same order, the same files read at the start of a thread, a search and then a read
+with a different pattern and file each time. Anything seen in at least three threads is a candidate,
+ranked by the estimated tokens it cost, with where it could live instead: a script in the
+repository, a hook that runs after edits, an MCP tool, a scheduled task, a few lines in the
+project's instruction file, or a skill. A single read, search or command that only changes its file
+or pattern is not a candidate, even when it runs several times in a row or right before a repeated
+command: choosing what to read is the agent's job, and those reads would outweigh every real
+procedure.
+
+Deterministic work share is the part of the tool calls' estimated tokens, output and input, spent on
+calls a candidate covers, each call counted once: steps repeated with the same files and patterns,
+alone or in a sequence, and sequences of different steps whose files or patterns change together.
+Everyday reads and searches of different files count only inside such a sequence. Lower is better.
+
+The weekly report lists the top five candidates under Efficiency, and an agent can list up to
+twenty, each with an example thread, with the `telemetry_extraction_candidates` tool. Nothing is
+changed for you; a candidate is a suggestion. A window with fewer than three threads has no
+candidates.
 
 ## Subscription usage widget
 
