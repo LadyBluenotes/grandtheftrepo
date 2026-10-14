@@ -249,7 +249,7 @@ function PromptDetails({
 
           <Field label="Versions">
             <ol className="flex flex-col gap-3 text-sm">
-              {versions.toReversed().map((version) => (
+              {versions.map((version) => (
                 <li key={version.version} className="flex flex-col gap-1">
                   <div className="flex items-center gap-2">
                     <span className="font-medium">v{version.version}</span>
@@ -280,12 +280,15 @@ function PromptDetails({
                     )}
                   </div>
                   <p className="line-clamp-3 whitespace-pre-wrap text-xs text-muted-foreground">
-                    {version.body}
+                    {version.preview}
                   </p>
                 </li>
               ))}
             </ol>
             <p className="text-xs text-muted-foreground">
+              {prompt.version > versions.length
+                ? `The latest ${versions.length} of ${prompt.version} versions. `
+                : null}
               Restoring a version saves a copy of it as the latest; no version is ever removed.
             </p>
           </Field>

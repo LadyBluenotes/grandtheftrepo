@@ -62,18 +62,27 @@ export const PROMPT_PREVIEW_LENGTH = 200;
 export const PromptSummary = Schema.Struct({ ...promptFields, preview: Schema.String });
 export type PromptSummary = typeof PromptSummary.Type;
 
-/** One version of a prompt. Versions are append-only; reverting adds a copy of an earlier one. */
+/**
+ * One version of a prompt, with the start of its body as a summary carries it. Versions are
+ * append-only and numbered from 1; reverting adds a copy of an earlier one, by its number.
+ */
 export const PromptVersion = Schema.Struct({
   version: Schema.Int,
   title: Schema.String,
-  body: Schema.String,
+  preview: Schema.String,
   createdAt: IsoDateTime,
 });
 export type PromptVersion = typeof PromptVersion.Type;
 
+/** The most versions a prompt's detail lists. */
+export const PROMPT_VERSIONS_LIMIT = 20;
+
+/**
+ * A prompt with its latest body, and its latest `PROMPT_VERSIONS_LIMIT` versions, newest first.
+ * The prompt's `version` says how many there are in all.
+ */
 export const PromptDetail = Schema.Struct({
   prompt: Prompt,
-  /** Oldest first. */
   versions: Schema.Array(PromptVersion),
 });
 export type PromptDetail = typeof PromptDetail.Type;

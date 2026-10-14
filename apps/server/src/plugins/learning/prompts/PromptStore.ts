@@ -1,6 +1,7 @@
 import {
   LearningError,
   PROMPT_PREVIEW_LENGTH,
+  PROMPT_VERSIONS_LIMIT,
   PROMPTS_LIST_LIMIT,
   PromptBody,
   promptQueryWords,
@@ -104,7 +105,7 @@ export class PromptStore extends Context.Service<
     readonly list: (
       input: PromptsListInput,
     ) => Effect.Effect<ReadonlyArray<PromptSummary>, LearningError>;
-    /** One prompt with its versions, oldest first. */
+    /** One prompt with its latest body and its latest versions, newest first, as previews. */
     readonly get: (id: number) => Effect.Effect<PromptDetail, LearningError>;
     /**
      * The project's prompts in every state, as summaries, whose title or body holds each word of
@@ -300,16 +301,19 @@ const make = Effect.gen(function* () {
       const versions = yield* sql<{
         readonly version: number;
         readonly title: string;
-        readonly body: string;
+        readonly preview: string;
         readonly created_at: string;
-      }>`SELECT version, title, body, created_at FROM prompt_versions
-        WHERE prompt_id = ${id} ORDER BY version`;
+      }>`SELECT version, title, substr(body, 1, ${PROMPT_PREVIEW_LENGTH}) AS preview, created_at
+        FROM prompt_versions
+        WHERE prompt_id = ${id}
+        ORDER BY version DESC
+        LIMIT ${PROMPT_VERSIONS_LIMIT}`;
       return {
         prompt: toPrompt(prompt),
         versions: versions.map((v) => ({
           version: v.version,
           title: v.title,
-          body: v.body,
+          preview: v.preview,
           createdAt: v.created_at,
         })),
       };

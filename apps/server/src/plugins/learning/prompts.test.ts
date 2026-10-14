@@ -3,6 +3,7 @@ import { assert, it } from "@effect/vitest";
 import {
   PROMPT_BODY_MAX_LENGTH,
   PROMPT_PREVIEW_LENGTH,
+  PROMPT_VERSIONS_LIMIT,
   PROMPTS_LIST_LIMIT,
   ProjectId,
 } from "@t3tools/contracts";
@@ -138,11 +139,11 @@ it.effect("editing adds a version, and reverting restores an earlier one as the 
       const { prompt, versions } = yield* prompts.get(saved.id);
       assert.deepStrictEqual(prompt, reverted);
       assert.deepStrictEqual(
-        versions.map((v) => [v.version, v.body]),
+        versions.map((v) => [v.version, v.preview]),
         [
-          [1, text.body],
-          [2, "Read every changed file, then run the tests."],
           [3, text.body],
+          [2, "Read every changed file, then run the tests."],
+          [1, text.body],
         ],
       );
 
@@ -153,6 +154,30 @@ it.effect("editing adds a version, and reverting restores an earlier one as the 
       });
       const blank = yield* Effect.flip(prompts.edit({ id: saved.id, title: " ", body: "x" }));
       assert.strictEqual(blank.code, "invalid");
+    }),
+  ),
+);
+
+it.effect("a prompt's detail lists its latest versions as previews, and any one restores", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const prompts = yield* setup;
+      const bodyOf = (n: number) => `Version ${n}. ${"x".repeat(PROMPT_BODY_MAX_LENGTH - 12)}`;
+      const saved = yield* prompts.create({ projectId, ...text, body: bodyOf(1) });
+      for (let n = 2; n <= PROMPT_VERSIONS_LIMIT + 5; n += 1) {
+        yield* prompts.edit({ id: saved.id, title: text.title, body: bodyOf(n) });
+      }
+      const { prompt, versions } = yield* prompts.get(saved.id);
+      assert.strictEqual(prompt.version, PROMPT_VERSIONS_LIMIT + 5);
+      assert.strictEqual(prompt.body, bodyOf(PROMPT_VERSIONS_LIMIT + 5));
+      assert.deepStrictEqual(
+        versions.map((v) => v.version),
+        Array.from({ length: PROMPT_VERSIONS_LIMIT }, (_, i) => PROMPT_VERSIONS_LIMIT + 5 - i),
+      );
+      assert.isTrue(versions.every((v) => v.preview.length === PROMPT_PREVIEW_LENGTH));
+      // A version past the list still restores by its number.
+      const restored = yield* prompts.revert({ id: saved.id, version: 1 });
+      assert.deepInclude(restored, { version: PROMPT_VERSIONS_LIMIT + 6, body: bodyOf(1) });
     }),
   ),
 );
