@@ -16,6 +16,10 @@ const MODE_BY_REASON = {
   scope_change: "unclear_spec",
 } as const satisfies Record<KanbanReopenReason, LearningDeclaredMode>;
 
+/** How many times the issue was reopened, this reopen included. */
+const reopenCount = (issue: KanbanIssue) =>
+  issue.log.filter((entry) => entry.kind === "reopened").length;
+
 /**
  * A done kanban ticket reopened is one correction on the thread linked to it last, declaring the
  * mode its reason names, keyed by the project, the ticket and the time of the reopen. The kanban
@@ -66,7 +70,8 @@ export const recordTicketReopen = Effect.fn("learning.recordTicketReopen")(funct
       declaredMode: MODE_BY_REASON[reason],
       description: `Ticket ${issue.id} reopened from Done (${reason}): ${issue.title}`,
       sourceEventIds: [],
-      sourceKey: `issue:${projectId}:${issue.id}:${at}`,
+      // The reopen's place in the issue's log tells two reopens apart even within one clock tick.
+      sourceKey: `issue:${projectId}:${issue.id}:${reopenCount(issue)}:${at}`,
       occurredAt: DateTime.makeUnsafe(at),
     })
     .pipe(
