@@ -413,7 +413,6 @@ it("names Grep then Read with a different pattern and file in each of three thre
 });
 
 it("lists a two-step procedure and none of the reads of different files around it", () => {
-  const procedure = [1, 2, 3];
   const window = windowOf(
     [1, 2, 3, 4, 5, 6].flatMap((n) =>
       inThread(
@@ -425,12 +424,13 @@ it("lists a two-step procedure and none of the reads of different files around i
           output_tokens: 500,
         })),
         edited(`/work/acme/src/${n}/a.ts`),
-        ...(procedure.includes(n) ? [sh("pnpm lint"), sh("pnpm test")] : []),
+        // The first three threads then run the procedure.
+        ...(n <= 3 ? [sh("pnpm lint"), sh("pnpm test")] : []),
       ),
     ),
   );
-  // `Read <path>`, twice and three times in a row, and three reads then the procedure, used to
-  // be four varying candidates, each costing more than the procedure.
+  // `Read <path>` alone, twice or three times in a row, or three reads then the procedure, would
+  // each cost more than the procedure, but in none do two different steps change.
   assert.deepEqual(candidatesOf(window).map(summary), [
     {
       kind: "procedure",
@@ -440,7 +440,7 @@ it("lists a two-step procedure and none of the reads of different files around i
       form: "script",
     },
   ]);
-  // Its 660 of the 18 reads' 9,180 tokens and its own.
+  // The procedure's 660 tokens over every call's 9,840: the 18 reads' 9,180 and its own.
   assert.strictEqual(deterministicWorkShare(window).value, 660 / 9840);
 });
 

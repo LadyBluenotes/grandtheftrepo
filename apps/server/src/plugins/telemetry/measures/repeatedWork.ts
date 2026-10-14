@@ -287,8 +287,8 @@ const longest = (found: ReadonlyArray<Found>) => {
  * Whether a slot window is a varying candidate: the steps whose path or pattern differs between
  * its occurrences are at least two different steps, such as `Grep <pattern> <path>` then
  * `Read <path>`. One step with a different path or pattern each time, alone, repeated or next to
- * fixed steps, is the agent choosing one call's input, which no extraction takes over; `Read
- * <path>` alone would be a candidate in almost any project and outweigh every procedure.
+ * fixed steps, is the agent choosing one call's input, which no extraction takes over; and
+ * `Read <path>` alone would be a candidate in almost any project and outweigh every procedure.
  */
 const varies = (window: Found) => {
   const differing = new Set<string>();
