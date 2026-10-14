@@ -87,6 +87,30 @@ export function useLearningItem(environmentId: EnvironmentId | null, id: number 
   );
 }
 
+/**
+ * The Learning screen's project: the one a person picked, else the environment's first (null),
+ * until an item the URL opens names its own. `followed` is the open item's project once loaded.
+ */
+export interface LearningProjectChoice {
+  readonly projectId: string | null;
+  readonly followed: string | undefined;
+}
+
+export const NO_PROJECT_CHOICE: LearningProjectChoice = { projectId: null, followed: undefined };
+
+/**
+ * The choice once the open item's project is known, or once it closes (`undefined`). Every item
+ * the URL opens, from a link or the browser's history, selects its project when it loads; a
+ * person's pick while it stays open is kept.
+ */
+export function followOpenItem(
+  choice: LearningProjectChoice,
+  itemProjectId: string | undefined,
+): LearningProjectChoice {
+  if (itemProjectId === choice.followed) return choice;
+  return { projectId: itemProjectId ?? choice.projectId, followed: itemProjectId };
+}
+
 /** The item a `/plugins/learning` link names by `recordId`, or null for anything but an item id. */
 export function learningItemId(recordId: string | undefined): number | null {
   if (recordId === undefined || !/^\d+$/.test(recordId)) return null;

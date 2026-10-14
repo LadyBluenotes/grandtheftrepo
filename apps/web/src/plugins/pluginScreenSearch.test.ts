@@ -1,23 +1,36 @@
+import { defaultParseSearch, defaultStringifySearch } from "@tanstack/react-router";
 import { describe, expect, it } from "vite-plus/test";
 
 import { validatePluginScreenSearch } from "./pluginScreenSearch";
 
+/** What a screen reads after a link wrote `search` into the URL and the router read it back. */
+const throughUrl = (search: Record<string, unknown>) =>
+  validatePluginScreenSearch(defaultParseSearch(defaultStringifySearch(search)));
+
 describe("validatePluginScreenSearch", () => {
-  it("keeps the environment, tab and record, and drops blank or unknown keys", () => {
-    expect(
-      validatePluginScreenSearch({
+  it("brings back every tab and record a link writes, including ones that look like JSON", () => {
+    for (const value of ["12", "1.50", "true", "null", "[1]", '"quoted"', "fix-login", " a b "]) {
+      expect(throughUrl({ machine: "remote", tab: value, recordId: value })).toStrictEqual({
         machine: "remote",
-        tab: "items",
-        recordId: "fix-login",
-        project: "p1",
-      }),
-    ).toStrictEqual({ machine: "remote", tab: "items", recordId: "fix-login" });
-    expect(validatePluginScreenSearch({ machine: " ", tab: "", recordId: null })).toStrictEqual({});
+        tab: value,
+        recordId: value,
+      });
+    }
   });
 
-  it("reads a typed numeric record as the string a link gives", () => {
-    // The router JSON-parses `?recordId=12` to a number; a link's "12" round-trips as a string.
-    expect(validatePluginScreenSearch({ recordId: 12 })).toStrictEqual({ recordId: "12" });
-    expect(validatePluginScreenSearch({ recordId: "12" })).toStrictEqual({ recordId: "12" });
+  it("reads a hand-typed value the router parsed as the text that was typed", () => {
+    expect(validatePluginScreenSearch(defaultParseSearch("?tab=true&recordId=12"))).toStrictEqual({
+      tab: "true",
+      recordId: "12",
+    });
+    expect(validatePluginScreenSearch(defaultParseSearch("?recordId=null"))).toStrictEqual({
+      recordId: "null",
+    });
+  });
+
+  it("drops blank values and keys a screen does not read", () => {
+    expect(
+      validatePluginScreenSearch({ machine: " ", tab: "", recordId: "7", project: "p1" }),
+    ).toStrictEqual({ recordId: "7" });
   });
 });

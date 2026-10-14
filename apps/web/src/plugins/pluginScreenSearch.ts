@@ -11,20 +11,22 @@ interface PluginScreenSearch {
   readonly recordId?: string;
 }
 
-const nonBlank = (value: unknown) =>
-  typeof value === "string" && value.trim().length > 0 ? value : undefined;
-
 /**
- * Keeps the three keys a screen reads and drops the rest. The router JSON-parses search values,
- * so a typed `recordId=12` arrives as a number and is kept as the string a link would give.
+ * A search value as the text it stands for; blank means none. The router JSON-parses every value
+ * and quotes a string that would parse when it writes a link, so any string a link carries comes
+ * back as it was. A hand-typed `recordId=12` or `tab=true` arrives parsed, and is turned back
+ * into its text.
  */
+const searchText = (value: unknown) => {
+  const text = typeof value === "string" ? value : JSON.stringify(value);
+  return text !== undefined && text.trim().length > 0 ? text : undefined;
+};
+
+/** Keeps the three keys a screen reads, as strings, and drops the rest. */
 export function validatePluginScreenSearch(raw: Record<string, unknown>): PluginScreenSearch {
-  const machine = nonBlank(raw.machine);
-  const tab = nonBlank(raw.tab);
-  const recordId =
-    typeof raw.recordId === "number" && Number.isFinite(raw.recordId)
-      ? String(raw.recordId)
-      : nonBlank(raw.recordId);
+  const machine = searchText(raw.machine);
+  const tab = searchText(raw.tab);
+  const recordId = searchText(raw.recordId);
   return {
     ...(machine === undefined ? {} : { machine }),
     ...(tab === undefined ? {} : { tab }),

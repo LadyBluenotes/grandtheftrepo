@@ -24,7 +24,13 @@ import { useProjects } from "~/state/entities";
 import { CorrectionsTable } from "./CorrectionsTable";
 import { ItemsTable } from "./ItemsTable";
 import { ReviewsTable } from "./ReviewsTable";
-import { learningItemId, pluginActive, useLearningItem } from "./state";
+import {
+  followOpenItem,
+  learningItemId,
+  NO_PROJECT_CHOICE,
+  pluginActive,
+  useLearningItem,
+} from "./state";
 import { PluginNotice } from "../PluginsPage";
 import { usePluginScreenSearch } from "../pluginScreenSearch";
 import { usePluginEnvironmentId, usePluginStatuses } from "../pluginState";
@@ -37,8 +43,8 @@ const isTab = (value: unknown): value is Tab => (TABS as ReadonlyArray<unknown>)
  * `/plugins/learning`: one project's learning items, the corrections behind them and, while the
  * review plugin runs, one thread's verdicts and requests. The tab and the open item, by
  * `recordId`, are in the URL. The project is the environment's first until a person picks
- * another, or the open item's when the screen opens on one; picking one resets the tabs' filters
- * and the open item.
+ * another, or an item the URL opens selects its own; picking one resets the tabs' filters and the
+ * open item.
  */
 export function LearningScreen() {
   const environmentId = usePluginEnvironmentId();
@@ -46,17 +52,12 @@ export function LearningScreen() {
   const reviewsOn = pluginActive(statuses, "review");
   const search = usePluginScreenSearch();
   const openId = learningItemId(search.recordId);
-  const opened = useLearningItem(environmentId, openId);
+  const itemProjectId = useLearningItem(environmentId, openId).data?.item.projectId;
   const projects = useProjects().filter((project) => project.environmentId === environmentId);
-  const [projectId, setProjectId] = useState<string | null>(null);
-  // Opened on an item: hold the list until the item names its project, so the list behind the
-  // drawer is that project's and does not swap under it.
-  const [findingProject, setFindingProject] = useState(openId !== null);
-  if (findingProject && !opened.isPending) {
-    setFindingProject(false);
-    if (opened.data !== null) setProjectId(opened.data.item.projectId);
-  }
-  const selected = projects.find((project) => project.id === projectId) ?? projects[0];
+  const [choice, setChoice] = useState(NO_PROJECT_CHOICE);
+  const followed = followOpenItem(choice, itemProjectId);
+  if (followed !== choice) setChoice(followed);
+  const selected = projects.find((project) => project.id === followed.projectId) ?? projects[0];
   const tab: Tab = isTab(search.tab) ? search.tab : "items";
   const view: Tab = tab === "reviews" && !reviewsOn ? "items" : tab;
   useRelativeTimeTick(60_000);
@@ -79,7 +80,7 @@ export function LearningScreen() {
                 onValueChange={(value) => {
                   const next = projects.find((project) => project.id === value);
                   if (next === undefined) return;
-                  setProjectId(next.id);
+                  setChoice({ ...followed, projectId: next.id });
                   if (search.recordId !== undefined) search.setRecordId(null);
                 }}
               >
@@ -111,14 +112,13 @@ export function LearningScreen() {
             </ToggleGroup>
           </div>
         </WorkspacePageHeader>
-        {findingProject ? null : environmentId === null || selected === undefined ? (
+        {environmentId === null || selected === undefined ? (
           <PluginNotice>Add a project to this environment to see what it learns.</PluginNotice>
         ) : (
           <ScrollArea className="min-h-0 flex-1">
             <WorkspacePageContainer width="expanded">
               {view === "items" ? (
                 <ItemsTable
-                  key={`${environmentId}:${selected.id}`}
                   environmentId={environmentId}
                   projectId={selected.id}
                   openId={openId}
