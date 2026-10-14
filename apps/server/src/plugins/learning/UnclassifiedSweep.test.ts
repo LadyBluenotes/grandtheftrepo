@@ -57,9 +57,24 @@ const setup = Effect.gen(function* () {
   );
   const classify = yield* ClassifySweep.sweep.pipe(Effect.provide(context));
   const unclassified = yield* UnclassifiedSweep.sweep.pipe(Effect.provide(context));
+  const itemStore = Context.get(context, ItemStore.ItemStore);
   let sourceKey = 0;
   return {
     corrections: Context.get(context, CorrectionStore.CorrectionStore),
+    /**
+     * One classify run that runs `between` each time it stores evidence, after it read its batch
+     * and before it marks the rows that follow.
+     */
+    classifyBetween: (between: Effect.Effect<unknown, LearningError>) =>
+      ClassifySweep.sweep.pipe(
+        Effect.provide(
+          Context.add(context, ItemStore.ItemStore, {
+            ...itemStore,
+            strengthen: (...args) => itemStore.strengthen(...args).pipe(Effect.tap(() => between)),
+          }),
+        ),
+        Effect.flatMap((sweep) => sweep.run({ dryRun: false })),
+      ),
     /** One supervisor tick of both sweeps; answers the unclassified sweep's summary. */
     tick: Effect.gen(function* () {
       yield* classify.run({ dryRun: false });
@@ -166,6 +181,52 @@ it.effect(
         ]);
       }),
     ),
+);
+
+it.effect("a correction older than the Corrections tab's 90 days is no longer counted", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const learning = yield* setup;
+      yield* learning.correct(projectA, "manual");
+      yield* TestClock.adjust("89 days");
+      assert.deepEqual(yield* learning.tick, { examined: 1, acted: 1, flags: 1 });
+
+      yield* learning.correct(projectB, "changes_requested");
+      yield* TestClock.adjust("11 days");
+      // Project A's correction is 100 days old, out of the tab's reach, so its flag clears.
+      assert.deepEqual(yield* learning.tick, { examined: 1, acted: 2, flags: 1 });
+      assert.deepEqual(
+        (yield* learning.open).map((flag) => flag.thread_id),
+        ["corrections:project-b"],
+      );
+    }),
+  ),
+);
+
+it.effect("a mode declared while classify holds the correction is classified on the next run", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const learning = yield* setup;
+      yield* learning.correct(projectA, "review_verdict", "convention");
+      const bare = yield* learning.correct(projectA, "changes_requested");
+
+      // Classify reads both, stores the first one's evidence, and only then marks the second.
+      yield* learning.classifyBetween(
+        learning.corrections.declare({ id: bare.id, declaredMode: "defect" }),
+      );
+      assert.include(yield* learning.corrections.get(bare.id), {
+        declaredMode: "defect",
+        classifiedAt: null,
+      });
+
+      yield* learning.tick;
+      assert.include(yield* learning.corrections.get(bare.id), { causeClass: "defect" });
+      assert.deepEqual(yield* learning.items, [
+        { project_id: "project-a", failure_mode: "convention" },
+        { project_id: "project-a", failure_mode: "defect" },
+      ]);
+    }),
+  ),
 );
 
 it.effect("refuses a mode for a provider failure or a correction that has one", () =>

@@ -18,6 +18,12 @@ const RESUME_ACTION = {
 /** How many days a correction may stay without a mode before it is flagged. */
 const UNCLASSIFIED_AFTER_DAYS = 7;
 
+/**
+ * How old a correction may be and still be flagged: the Corrections tab's longest window, so every
+ * counted correction is one a person can open there and declare. An older one is no longer flagged.
+ */
+const UNCLASSIFIED_UNTIL_DAYS = 90;
+
 /** One flag per project, keyed so the strip and the weekly report find it (`attentionKeys.ts`). */
 const flagKey = (projectId: ProjectId) => `corrections:${projectId}`;
 
@@ -28,10 +34,10 @@ const flagText = (count: number) =>
 
 /**
  * Builds the unclassified sweep. Per project it counts the corrections the classify sweep left
- * `unclassified`, other than provider failures, that are `UNCLASSIFIED_AFTER_DAYS` old, and keeps
- * one `unowned_finding` flag with the count. Declaring a mode for one (`CorrectionStore.declare`)
- * hands it back to the classify sweep, which runs earlier in the same tick, so the count drops on
- * that tick and the flag clears once none is left. The text follows the count, and a tick that
+ * `unclassified`, other than provider failures, that are `UNCLASSIFIED_AFTER_DAYS` old but not yet
+ * `UNCLASSIFIED_UNTIL_DAYS`, and keeps one `unowned_finding` flag with the count. Declaring a mode
+ * for one (`CorrectionStore.declare`) hands it back to the classify sweep, which runs earlier in
+ * the same tick, so the count drops on that tick and the flag clears once none is left. The text follows the count, and a tick that
  * finds what the last one found writes nothing. A dry run counts and writes nothing.
  */
 export const sweep = Effect.gen(function* () {
@@ -41,10 +47,11 @@ export const sweep = Effect.gen(function* () {
   const run = ({ dryRun }: { readonly dryRun: boolean }) =>
     Effect.gen(function* () {
       const now = yield* DateTime.now;
-      const before = DateTime.formatIso(DateTime.subtract(now, { days: UNCLASSIFIED_AFTER_DAYS }));
-      const counts = yield* CorrectionStore.countUnclassified(before).pipe(
-        Effect.provideService(SqlClient.SqlClient, sql),
-      );
+      const daysAgo = (days: number) => DateTime.formatIso(DateTime.subtract(now, { days }));
+      const counts = yield* CorrectionStore.countUnclassified({
+        after: daysAgo(UNCLASSIFIED_UNTIL_DAYS),
+        before: daysAgo(UNCLASSIFIED_AFTER_DAYS),
+      }).pipe(Effect.provideService(SqlClient.SqlClient, sql));
       const { changes, standing } = yield* Attention.reconcile(attention, {
         pluginId: PLUGIN_ID,
         kind: FLAG_KIND,

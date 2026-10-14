@@ -114,17 +114,18 @@ export const countDeclared = (input: {
 
 /**
  * Per project, how many corrections the classify sweep left `unclassified` that are no provider
- * failure, created at or before `before`, an ISO instant. One the sweep has not read yet is left
- * out, since it may still get a mode. The unclassified sweep flags them; it has no gateway method.
+ * failure, created after `after` and at or before `before`, ISO instants. One the sweep has not
+ * read yet is left out, since it may still get a mode. The unclassified sweep flags them; it has
+ * no gateway method.
  */
-export const countUnclassified = (before: string) =>
+export const countUnclassified = (input: { readonly after: string; readonly before: string }) =>
   Effect.flatMap(
     SqlClient.SqlClient,
     (sql) => sql<{ readonly project_id: ProjectId; readonly n: number }>`
       SELECT project_id, COUNT(*) AS n FROM corrections
       WHERE classified_at IS NOT NULL AND cause_class = 'unclassified'
         AND failure_kind NOT IN ${sql.in([...LEARNING_PROVIDER_FAILURE_KINDS])}
-        AND created_at <= ${before}
+        AND created_at > ${input.after} AND created_at <= ${input.before}
       GROUP BY project_id ORDER BY project_id`,
   );
 

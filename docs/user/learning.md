@@ -89,7 +89,7 @@ For a correction without a failure mode, other than a failed or interrupted turn
 under **Declare mode** in its row; the next sweep adds it to that mode's item. A mode cannot be
 changed once declared. Corrections left without a mode for seven days are flagged on the project's
 board under [Waiting on you](./kanban.md#waiting-on-you), one row with the count, until each has a
-mode.
+mode or is older than 90 days, the longest the tab shows.
 
 ## Prompts
 
