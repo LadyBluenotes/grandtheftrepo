@@ -177,7 +177,8 @@ The weekly report lists the top five candidates under Efficiency, and an agent c
 twenty, each with an example thread, with the `telemetry_extraction_candidates` tool. A window with
 fewer than three threads has no candidates. With the learning plugin on, a weekly review turns up to
 five of them into drafts you accept or dismiss on its **Deterministic** tab (see
-[Learning](./learning.md#deterministic)); nothing is applied until you accept it.
+[Learning](./learning.md#deterministic)); nothing runs or turns on until you accept it, though a
+draft for new code is filed at once as a Triage card, which writes its file to the board's folder.
 
 ## Subscription usage widget
 

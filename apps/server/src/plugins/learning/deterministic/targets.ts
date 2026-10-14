@@ -82,7 +82,16 @@ const freeScriptId = (id: string, taken: ReadonlySet<string>) => {
   }
 };
 
-/** The id a proposal's paused task is saved under, so a retry finds it instead of adding one. */
+/**
+ * Whether `task` is the draft's own task: the same id and the creation time the draft recorded,
+ * which a person's edits keep. One deleted and saved again under that id, by anyone, is not.
+ */
+const ownsTask = (
+  task: { readonly id: string; readonly createdAt: string },
+  draft: { readonly taskId: string; readonly createdAt: string },
+) => task.id === draft.taskId && task.createdAt === draft.createdAt;
+
+/** The id a proposal's paused task is saved under first, so a retry finds it instead of adding one. */
 const taskIdOf = (proposalId: number) =>
   ScheduledTaskId.make(`learning-repeated-work:${proposalId}`);
 
@@ -142,31 +151,54 @@ export const make = Effect.gen(function* () {
         case "scheduled_task": {
           const service = yield* tasks;
           if (Option.isNone(service)) return waiting("Scheduled tasks are not available.");
-          const id = taskIdOf(proposal.id);
           const text = taskDraft(candidate, windowFrom);
-          const existing = (yield* service.value.list()).tasks.some((task) => task.id === id);
-          if (!existing) {
-            const shell = yield* projects.getShell(projectId);
-            const modelSelection = Option.isSome(shell) ? shell.value.defaultModelSelection : null;
-            if (modelSelection === null) {
-              return waiting("The project has no default model for a task to run on.");
+          const saved = (yield* service.value.list()).tasks;
+          // The first of `<base>`, `<base>-2`, ... that no task holds, or that holds the paused
+          // task an earlier try saved: the system's, with this text. A task someone else saved
+          // under one of these ids is passed over, never taken as this draft.
+          let id = taskIdOf(proposal.id);
+          for (let n = 2; ; n += 1) {
+            const task = saved.find((entry) => entry.id === id);
+            if (task === undefined) break;
+            if (
+              task.createdBy === "system" &&
+              task.title === text.title &&
+              task.prompt === text.prompt
+            ) {
+              return drafted({
+                kind: "scheduled_task",
+                taskId: id,
+                createdAt: task.createdAt,
+                ...text,
+              });
             }
-            yield* service.value.upsert({
-              id,
-              ...text,
-              enabled: false,
-              schedule: { type: "fixed_time", timeOfDay: "09:00" },
-              projectId,
-              threadId: null,
-              workspaceStrategy: { type: "root" },
-              modelSelection,
-              runtimeMode: "approval-required",
-              interactionMode: "default",
-              createdBy: "system",
-              creationSource: "server",
-            });
+            id = ScheduledTaskId.make(`${taskIdOf(proposal.id)}-${n}`);
           }
-          return drafted({ kind: "scheduled_task", taskId: id, ...text });
+          const shell = yield* projects.getShell(projectId);
+          const modelSelection = Option.isSome(shell) ? shell.value.defaultModelSelection : null;
+          if (modelSelection === null) {
+            return waiting("The project has no default model for a task to run on.");
+          }
+          const { task } = yield* service.value.upsert({
+            id,
+            ...text,
+            enabled: false,
+            schedule: { type: "fixed_time", timeOfDay: "09:00" },
+            projectId,
+            threadId: null,
+            workspaceStrategy: { type: "root" },
+            modelSelection,
+            runtimeMode: "approval-required",
+            interactionMode: "default",
+            createdBy: "system",
+            creationSource: "server",
+          });
+          return drafted({
+            kind: "scheduled_task",
+            taskId: id,
+            createdAt: task.createdAt,
+            ...text,
+          });
         }
         case "mcp_tool":
         case "hook": {
@@ -269,9 +301,7 @@ export const make = Effect.gen(function* () {
         case "scheduled_task": {
           const service = yield* tasks;
           if (Option.isNone(service)) return yield* inactive("Scheduled tasks are not available.");
-          const task = (yield* service.value.list()).tasks.find(
-            (entry) => entry.id === draft.taskId,
-          );
+          const task = (yield* service.value.list()).tasks.find((entry) => ownsTask(entry, draft));
           if (task === undefined) {
             return yield* invalid("The scheduled task was deleted; dismiss this proposal.");
           }
@@ -341,9 +371,7 @@ export const make = Effect.gen(function* () {
               "Scheduled tasks are not available, so the task cannot be deleted.",
             );
           }
-          const task = (yield* service.value.list()).tasks.find(
-            (entry) => entry.id === draft.taskId,
-          );
+          const task = (yield* service.value.list()).tasks.find((entry) => ownsTask(entry, draft));
           if (task !== undefined && !task.enabled) yield* service.value.delete({ id: task.id });
           return;
         }

@@ -10,6 +10,7 @@ import {
   KnowledgeKey,
   KnowledgeTitle,
   type OrchestrationProjectShell,
+  type ScheduledTask,
   type TelemetryExtractionCandidate,
   type TelemetryMeasuresInput,
   ThreadId,
@@ -24,13 +25,14 @@ import * as SqlClient from "effect/sql/SqlClient";
 import * as TestClock from "effect/testing/TestClock";
 
 import * as ProjectService from "../../../project/ProjectService.ts";
+import * as ScheduledTaskService from "../../../scheduledTasks/ScheduledTaskService.ts";
 import * as ServerSettings from "../../../serverSettings.ts";
 import * as Attention from "../../Attention.ts";
 import * as HostDatabase from "../../HostDatabase.ts";
 import * as KanbanStore from "../../kanban/KanbanStore.ts";
 import * as KnowledgeStore from "../../knowledge/KnowledgeStore.ts";
 import * as PluginDatabase from "../../PluginDatabase.ts";
-import { fakeCore, MODEL, project } from "../../telemetry/report/testkit.ts";
+import { existingTask, fakeCore, MODEL, project } from "../../telemetry/report/testkit.ts";
 import * as Telemetry from "../../telemetry/Telemetry.ts";
 import { migrations } from "../migrations.ts";
 import * as PromptStore from "../prompts/PromptStore.ts";
@@ -586,6 +588,7 @@ it.effect("a scheduled task is a paused draft on the project's default model", (
       assert.deepEqual(proposal?.draft, {
         kind: "scheduled_task",
         taskId: task!.id,
+        createdAt: task!.createdAt,
         title: task!.title,
         prompt: task!.prompt,
       });
@@ -595,6 +598,124 @@ it.effect("a scheduled task is a paused draft on the project's default model", (
         state: "waiting",
         waitingReason: "The project has no default model for a task to run on.",
       });
+    }),
+  ),
+);
+
+/**
+ * Scheduled tasks kept in memory, each saved with a creation time of its own, as the real service
+ * keeps one per task and an edit keeps it. `tasks` starts with `seeded`.
+ */
+const fakeTasks = (seeded: ReadonlyArray<ScheduledTask>) =>
+  Effect.gen(function* () {
+    const tasks = yield* Ref.make(seeded);
+    let saves = 0;
+    const layer = Layer.mock(ScheduledTaskService.ScheduledTaskService)({
+      list: () => Effect.map(Ref.get(tasks), (all) => ({ tasks: all })),
+      upsert: ({ schedule, ...saved }) =>
+        Effect.gen(function* () {
+          if (schedule.type === "webhook") return yield* Effect.die("No webhook tasks here.");
+          saves += 1;
+          const task: ScheduledTask = {
+            ...existingTask(saved.id ?? `task:${saves}`, saved.projectId),
+            title: saved.title,
+            prompt: saved.prompt,
+            enabled: saved.enabled,
+            schedule,
+            createdBy: saved.createdBy ?? "user",
+            createdAt: `2026-10-${String(10 + saves).padStart(2, "0")}T00:00:00.000Z`,
+          };
+          yield* Ref.update(tasks, (all) => [...all.filter((t) => t.id !== task.id), task]);
+          return { task };
+        }),
+      setEnabled: ({ id, enabled }) =>
+        Effect.gen(function* () {
+          yield* Ref.update(tasks, (all) =>
+            all.map((task) => (task.id === id ? { ...task, enabled } : task)),
+          );
+          return { task: (yield* Ref.get(tasks)).find((task) => task.id === id)! };
+        }),
+      delete: ({ id }) =>
+        Effect.as(
+          Ref.update(tasks, (all) => all.filter((task) => task.id !== id)),
+          { id },
+        ),
+    });
+    return { context: yield* Layer.build(layer), tasks: Ref.get(tasks) };
+  });
+
+it.effect("a task someone else saved under a draft's id is never enabled or deleted for it", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const world = yield* setup();
+      // A person's own tasks, under the ids the first two proposals' drafts would take.
+      const theirs = [
+        existingTask("learning-repeated-work:1", projectA.id),
+        existingTask("learning-repeated-work:2", projectA.id),
+      ];
+      const service = yield* fakeTasks(theirs);
+      const daily = (id: string, command: string) =>
+        candidate(id, { steps: [`command:${command}`], form: "scheduled_task" });
+      world.weeks.set(WEEK_1, [
+        daily("7a5c000000000002", "vp run audit"),
+        daily("7a5c000000000003", "vp run report"),
+      ]);
+      yield* world.tick(service.context);
+
+      // Each draft takes the next free id, beside the person's task.
+      const proposals = (yield* world.store.list({ projectId: projectA.id })).toReversed();
+      assert.deepEqual(
+        proposals.map((p) => (p.draft?.kind === "scheduled_task" ? String(p.draft.taskId) : null)),
+        ["learning-repeated-work:1-2", "learning-repeated-work:2-2"],
+      );
+      yield* world.store.accept(proposals[0]!.id, "operate").pipe(Effect.provide(service.context));
+      yield* world.store
+        .dismiss({ id: proposals[1]!.id, reason: "Not daily." }, "user", "operate")
+        .pipe(Effect.provide(service.context));
+      const after = yield* service.tasks;
+      assert.deepEqual(
+        after.map((task) => [task.id, task.enabled]),
+        [
+          ["learning-repeated-work:1", false],
+          ["learning-repeated-work:2", false],
+          ["learning-repeated-work:1-2", true],
+        ],
+      );
+
+      // A draft's task deleted and saved again by someone else is not its task any more.
+      yield* TestClock.adjust("7 days");
+      world.weeks.set(WEEK_2, [daily("7a5c000000000004", "vp run sync")]);
+      yield* world.tick(service.context);
+      const [third] = yield* world.store.list({ projectId: projectA.id, state: "pending" });
+      const draft = third?.draft;
+      if (third === undefined || draft?.kind !== "scheduled_task") {
+        return assert.fail("Expected a task draft.");
+      }
+      yield* Effect.provide(
+        ScheduledTaskService.ScheduledTaskService.pipe(
+          Effect.flatMap((tasks) =>
+            tasks.delete({ id: draft.taskId }).pipe(
+              Effect.andThen(
+                tasks.upsert({
+                  ...existingTask(draft.taskId, projectA.id),
+                  createdBy: "user",
+                  schedule: { type: "fixed_time", timeOfDay: "17:00" },
+                }),
+              ),
+            ),
+          ),
+        ),
+        service.context,
+      );
+      const refused = yield* Effect.flip(
+        world.store.accept(third.id, "operate").pipe(Effect.provide(service.context)),
+      );
+      assert.strictEqual(refused.message, "The scheduled task was deleted; dismiss this proposal.");
+      yield* world.store
+        .dismiss({ id: third.id, reason: "Gone." }, "user", "operate")
+        .pipe(Effect.provide(service.context));
+      const replaced = (yield* service.tasks).find((task) => task.id === draft.taskId);
+      assert.deepInclude(replaced, { enabled: false, title: "My own report" });
     }),
   ),
 );

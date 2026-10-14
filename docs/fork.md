@@ -221,7 +221,8 @@ them half-evaluated. The host hands `toolkitRegistration` to `ServerPlugin.mcp` 
   ranked by estimated tokens with the form it suits (a script, hook, MCP tool, scheduled task,
   context file or skill). The `telemetry_extraction_candidates` MCP tool lists the twenty costliest
   and the report five; the learning plugin's weekly review drafts proposals from them, and nothing
-  writes to the repo before a person accepts one. A shape needs more than the earlier columns, so
+  runs or turns on before a person accepts one, though a hook's or MCP tool's draft is a Triage
+  issue file written to the board's folder at once. A shape needs more than the earlier columns, so
   migration 5 adds each call's provider turn, which groups a subagent's calls with no run, its
   search pattern, a dynamic tool's input keys, and the input's size and sha256, never the input,
   and replays the log; a call a compaction removed before then has no shape. A command's shape
@@ -311,7 +312,9 @@ them half-evaluated. The host hands `toolkitRegistration` to `ServerPlugin.mcp` 
   and accepting appends it to the project's `defaultProjectScripts` override through
   `ServerSettingsService`; a skill is a proposed prompt (`proposeFrom`, source
   `deterministic:<id>`); a context file a knowledge draft keyed `repeated-<candidate id>`; a
-  scheduled task a paused task `learning-repeated-work:<id>` on the project's default model; a hook
+  scheduled task a paused task `learning-repeated-work:<id>` on the project's default model, or the
+  next free `-2`, `-3` id beside someone else's task there, which the draft owns by its creation
+  time, so a task saved again under that id is never enabled or deleted for it; a hook
   or MCP tool a Triage card labeled `deterministic`. A target that is off or absent leaves the
   proposal `waiting` until a tick finds it. One `deterministic_proposals` flag per project,
   `deterministic:<projectId>`, opens the Learning screen's Deterministic tab on that project, which

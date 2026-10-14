@@ -49,6 +49,11 @@ export const DeterministicDraft = Schema.Union([
   Schema.Struct({
     kind: Schema.Literal("scheduled_task"),
     taskId: ScheduledTaskId,
+    /**
+     * When the task was created, which a person's edits keep: a task under the same id with
+     * another time is someone else's, and is never enabled or deleted for this proposal.
+     */
+    createdAt: IsoDateTime,
     title: Schema.String,
     prompt: Schema.String,
   }),
