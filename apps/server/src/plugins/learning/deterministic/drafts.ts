@@ -137,6 +137,16 @@ const withoutMarker = (text: string) => {
 };
 
 /** A knowledge draft keyed by the candidate, so a second proposal of it finds the first. */
+/**
+ * The `n`th key a knowledge draft may take: `key` first, then `key-2`, `key-3`, ..., cut so it stays
+ * a valid key, for when another page holds the one before.
+ */
+export const knowledgeKeyVariant = (key: string, n: number) => {
+  if (n === 1) return key;
+  const suffix = `-${n}`;
+  return `${key.slice(0, KNOWLEDGE_KEY_MAX - suffix.length)}${suffix}`;
+};
+
 export const knowledgeDraft = (candidate: TelemetryExtractionCandidate, week: string) => ({
   key: `${KEY_PREFIX}${idPart(candidate, KNOWLEDGE_KEY_MAX - KEY_PREFIX.length)}`,
   title: clip(

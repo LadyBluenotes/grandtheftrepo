@@ -24,6 +24,7 @@ import {
   CARD_LABEL,
   cardDraft,
   knowledgeDraft,
+  knowledgeKeyVariant,
   promptDraft,
   scriptDraft,
   taskDraft,
@@ -139,15 +140,33 @@ export const make = Effect.gen(function* () {
           const store = yield* knowledge;
           if (Option.isNone(store)) return waiting("The knowledge plugin is off.");
           const text = knowledgeDraft(candidate, windowFrom);
-          const pages = yield* store.value.list({ projectId });
-          const saved = pages.find((page) => page.key === text.key && page.state !== "retired");
-          const page =
-            saved ??
-            (yield* store.value.propose(
-              { projectId, ...text },
-              { kind: "agent", threadId: ThreadId.make(candidate.example.threadId) },
-            ));
-          return drafted({ kind: "knowledge", pageId: page.id, key: page.key, title: page.title });
+          const source = {
+            kind: "agent",
+            threadId: ThreadId.make(candidate.example.threadId),
+          } as const;
+          const live = (yield* store.value.list({ projectId })).filter(
+            (page) => page.state !== "retired",
+          );
+          // The first of `<key>`, `<key>-2`, ... that no live page holds, or that holds the draft an
+          // earlier try saved: from this run's thread, with this text. A page someone else saved
+          // under one of these keys is passed over, never taken as this draft.
+          for (let n = 1; ; n += 1) {
+            const key = knowledgeKeyVariant(text.key, n);
+            const held = live.find((page) => page.key === key);
+            if (held === undefined) {
+              const page = yield* store.value.propose({ projectId, ...text, key }, source);
+              return drafted({ kind: "knowledge", pageId: page.id, key, title: page.title });
+            }
+            if (
+              held.state === "draft" &&
+              held.source.kind === source.kind &&
+              held.source.threadId === source.threadId &&
+              held.title === text.title &&
+              held.body === text.body
+            ) {
+              return drafted({ kind: "knowledge", pageId: held.id, key, title: held.title });
+            }
+          }
         }
         case "scheduled_task": {
           const service = yield* tasks;

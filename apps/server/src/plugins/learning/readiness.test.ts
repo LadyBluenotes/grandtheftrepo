@@ -6,11 +6,19 @@ const sweeps = (...names: ReadonlyArray<string>) =>
   names.map((name) => ({ plugin: "learning", name }));
 
 describe("sweepsCheck", () => {
-  it("is ready when the six sweeps run for real", () => {
+  it("is ready when the seven sweeps run for real", () => {
     const check = sweepsCheck({
       dryRun: false,
       sweeps: [
-        ...sweeps("classify", "promote", "reviews", "regressions", "outcomes", "unclassified"),
+        ...sweeps(
+          "classify",
+          "promote",
+          "reviews",
+          "regressions",
+          "deterministic",
+          "outcomes",
+          "unclassified",
+        ),
         { plugin: "kanban", name: "writers" },
       ],
     });
@@ -20,16 +28,39 @@ describe("sweepsCheck", () => {
   it("names a missing sweep, and a dry run that keeps them from acting", () => {
     const missing = sweepsCheck({
       dryRun: false,
-      sweeps: sweeps("classify", "promote", "reviews", "regressions", "unclassified"),
+      sweeps: sweeps(
+        "classify",
+        "promote",
+        "reviews",
+        "regressions",
+        "deterministic",
+        "unclassified",
+      ),
     });
     assert.strictEqual(missing.status, "attention");
     assert.strictEqual(
       missing.sentence,
       "The outcomes sweep is not registered; restart the server.",
     );
+    const noProposals = sweepsCheck({
+      dryRun: false,
+      sweeps: sweeps("classify", "promote", "reviews", "regressions", "outcomes", "unclassified"),
+    });
+    assert.strictEqual(
+      noProposals.sentence,
+      "The deterministic sweep is not registered; restart the server.",
+    );
     const dry = sweepsCheck({
       dryRun: true,
-      sweeps: sweeps("classify", "promote", "reviews", "regressions", "outcomes", "unclassified"),
+      sweeps: sweeps(
+        "classify",
+        "promote",
+        "reviews",
+        "regressions",
+        "deterministic",
+        "outcomes",
+        "unclassified",
+      ),
     });
     assert.strictEqual(dry.status, "attention");
   });

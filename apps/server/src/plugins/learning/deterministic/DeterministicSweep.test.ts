@@ -377,11 +377,19 @@ const fakeKnowledge = Effect.gen(function* () {
   const layer = Layer.mock(KnowledgeStore.KnowledgeStore)({
     list: ({ projectId }) =>
       Effect.map(Ref.get(pages), (all) => all.filter((page) => page.projectId === projectId)),
-    // Refuses what the real store refuses: text outside the contract, or anything while `refusing`.
+    // Refuses what the real store refuses: text outside the contract, a key a live page of the
+    // project holds, or anything while `refusing`.
     propose: (input, source) =>
       Effect.gen(function* () {
+        const taken = (yield* Ref.get(pages)).some(
+          (page) =>
+            page.projectId === input.projectId &&
+            page.key === input.key &&
+            page.state !== "retired",
+        );
         if (
           (yield* Ref.get(refusing)) ||
+          taken ||
           !isKnowledgeKey(input.key) ||
           !isKnowledgeTitle(input.title) ||
           !isKnowledgeBody(input.body)
@@ -409,6 +417,11 @@ const fakeKnowledge = Effect.gen(function* () {
         yield* setState(id, "retired");
         return (yield* Ref.get(pages)).find((page) => page.id === id)!;
       }),
+    accept: ({ id }) =>
+      Effect.gen(function* () {
+        yield* setState(id, "accepted");
+        return (yield* Ref.get(pages)).find((page) => page.id === id)!;
+      }),
     install: () =>
       Effect.as(
         Ref.update(installs, (count) => count + 1),
@@ -422,8 +435,64 @@ const fakeKnowledge = Effect.gen(function* () {
     failDiscard: (fail: boolean) => Ref.set(failing, fail),
     refuseProposals: (refuse: boolean) => Ref.set(refusing, refuse),
     setState,
+    /** A page a person saved, under `key`, in `state`. */
+    seed: (key: string, state: KnowledgeEntry["state"]) =>
+      Ref.update(pages, (all) => [
+        ...all,
+        {
+          id: all.length + 1,
+          projectId: projectA.id,
+          key,
+          title: "Our architecture",
+          body: "Written by hand.",
+          state,
+          source: { kind: "person" as const },
+          createdAt: WEEK_1,
+          acceptedAt: null,
+          retiredAt: null,
+        },
+      ]),
   };
 });
+
+it.effect("a page a person saved under a draft's key is never accepted or discarded for it", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const world = yield* setup();
+      const knowledge = yield* fakeKnowledge;
+      // A person's own pages, a draft and an accepted one, under the keys the drafts would take.
+      yield* knowledge.seed("repeated-c0de000000000011", "draft");
+      yield* knowledge.seed("repeated-c0de000000000012", "accepted");
+      const reads = (id: string, path: string) =>
+        candidate(id, { steps: [`Read ${path}`], form: "context_file" });
+      world.weeks.set(WEEK_1, [
+        reads("c0de000000000011", "docs/arch.md"),
+        reads("c0de000000000012", "docs/setup.md"),
+      ]);
+      yield* world.tick(knowledge.context);
+
+      // Each draft is a page of its own, under the next free key.
+      const [first, second] = (yield* world.store.list({ projectId: projectA.id })).toReversed();
+      assert.deepEqual(
+        [first, second].map((p) => (p?.draft?.kind === "knowledge" ? p.draft.key : null)),
+        ["repeated-c0de000000000011-2", "repeated-c0de000000000012-2"],
+      );
+      yield* world.store.accept(first!.id, "settingsWrite").pipe(Effect.provide(knowledge.context));
+      yield* world.store
+        .dismiss({ id: second!.id, reason: "Covered." }, "user", "settingsWrite")
+        .pipe(Effect.provide(knowledge.context));
+      assert.deepEqual(
+        (yield* knowledge.pages).map((page) => [page.key, page.state, page.source.kind]),
+        [
+          ["repeated-c0de000000000011", "draft", "person"],
+          ["repeated-c0de000000000012", "accepted", "person"],
+          ["repeated-c0de000000000011-2", "accepted", "agent"],
+          ["repeated-c0de000000000012-2", "retired", "agent"],
+        ],
+      );
+    }),
+  ),
+);
 
 it.effect(
   "steps with a path longer than a page are cut so the page and the prompt fit their contracts",

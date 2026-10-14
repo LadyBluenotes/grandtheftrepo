@@ -311,11 +311,11 @@ them half-evaluated. The host hands `toolkitRegistration` to `ServerPlugin.mcp` 
   where the call runs: a project script has no draft state in the core, so it is held in the row
   and accepting appends it to the project's `defaultProjectScripts` override through
   `ServerSettingsService`; a skill is a proposed prompt (`proposeFrom`, source
-  `deterministic:<id>`); a context file a knowledge draft keyed `repeated-<candidate id>`; a
-  scheduled task a paused task `learning-repeated-work:<id>` on the project's default model, or the
-  next free `-2`, `-3` id beside someone else's task there, which the draft owns by its creation
-  time, so a task saved again under that id is never enabled or deleted for it; a hook
-  or MCP tool a Triage card labeled `deterministic`. A target that is off or absent leaves the
+  `deterministic:<id>`); a context file a knowledge draft keyed `repeated-<candidate id>`, or the
+  next free `-2`, `-3` beside someone else's live page there; a scheduled task a paused task
+  `learning-repeated-work:<id>` on the project's default model, or the next free `-2`, `-3` id
+  beside someone else's task there, which the draft owns by its creation time, so a task saved
+  again under that id is never enabled or deleted for it; a hook or MCP tool a Triage card labeled `deterministic`. A target that is off or absent leaves the
   proposal `waiting` until a tick finds it. One `deterministic_proposals` flag per project,
   `deterministic:<projectId>`, opens the Learning screen's Deterministic tab on that project, which
   the board strip's `projectId` selects. People accept and dismiss, with a reason, through the
