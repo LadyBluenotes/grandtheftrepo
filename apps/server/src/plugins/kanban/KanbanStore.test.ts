@@ -9,6 +9,7 @@ import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
+import * as PlatformError from "effect/PlatformError";
 import * as Queue from "effect/Queue";
 import * as Ref from "effect/Ref";
 import * as Stream from "effect/Stream";
@@ -584,24 +585,43 @@ describe("watcher refresh", () => {
 
 describe("boardProjects", () => {
   const otherId = ProjectId.make("project-2");
-  const layerTwoProjects = Layer.empty.pipe(
-    Layer.provideMerge(KanbanStore.layer),
-    Layer.provideMerge(
-      Layer.mock(ProjectService.ProjectService)({
-        getById: (id) =>
-          Effect.succeed(
-            id === projectId
-              ? Option.some(project)
-              : id === otherId
-                ? Option.some({ ...project, id: otherId, title: "Other Repo" })
-                : Option.none(),
-          ),
-      }),
-    ),
-    Layer.provideMerge(
-      Layer.fresh(ServerConfig.layerTest(process.cwd(), { prefix: "t3code-kanban-test-" })),
-    ),
-    Layer.provideMerge(NodeServices.layer),
+  const layerTwoProjects = (store: typeof KanbanStore.layer) =>
+    Layer.empty.pipe(
+      Layer.provideMerge(store),
+      Layer.provideMerge(
+        Layer.mock(ProjectService.ProjectService)({
+          getById: (id) =>
+            Effect.succeed(
+              id === projectId
+                ? Option.some(project)
+                : id === otherId
+                  ? Option.some({ ...project, id: otherId, title: "Other Repo" })
+                  : Option.none(),
+            ),
+        }),
+      ),
+      Layer.provideMerge(
+        Layer.fresh(ServerConfig.layerTest(process.cwd(), { prefix: "t3code-kanban-test-" })),
+      ),
+      Layer.provideMerge(NodeServices.layer),
+    );
+  /** The real file system, except that the other project's folder cannot be inspected. */
+  const deniedFileSystem = Layer.effect(
+    FileSystem.FileSystem,
+    Effect.map(FileSystem.FileSystem, (real): FileSystem.FileSystem => ({
+      ...real,
+      exists: (path) =>
+        path.endsWith("other-repo")
+          ? Effect.fail(
+              PlatformError.systemError({
+                _tag: "PermissionDenied",
+                module: "FileSystem",
+                method: "access",
+                pathOrDescriptor: path,
+              }),
+            )
+          : real.exists(path),
+    })),
   );
 
   it.effect("lists the projects with a board and creates nothing for the rest", () =>
@@ -621,6 +641,17 @@ describe("boardProjects", () => {
       // Filing the first card starts the project's board.
       yield* store.write(projectId, "user", { action: "issue.create", title: "First" });
       assert.deepEqual(yield* store.boardProjects([otherId, projectId]), [otherId, projectId]);
-    }).pipe(Effect.provide(layerTwoProjects)),
+    }).pipe(Effect.provide(layerTwoProjects(KanbanStore.layer))),
+  );
+
+  it.effect("fails, rather than leaving the project out, when its folder cannot be inspected", () =>
+    Effect.gen(function* () {
+      const store = yield* KanbanStore.KanbanStore;
+      assert.strictEqual(yield* failureCode(store.boardProjects([otherId])), "io");
+      // Automation only skips such a project.
+      yield* store.advance(otherId, ThreadId.make("thr_any"), "in_progress");
+    }).pipe(
+      Effect.provide(layerTwoProjects(KanbanStore.layer.pipe(Layer.provide(deniedFileSystem)))),
+    ),
   );
 });

@@ -81,3 +81,21 @@ export function pickBoardProject(
   }
   return options[0] ?? null;
 }
+
+/**
+ * The decisions view's category filter. A category is a project's, so it holds only for the
+ * project it was picked in, which the URL carries with it; once the view shows another project,
+ * however the scope changed, it shows every category.
+ */
+export function decisionsCategory(
+  search: {
+    readonly environmentId?: EnvironmentId;
+    readonly projectId?: ProjectId;
+    readonly category?: string;
+  },
+  project: ScopedProjectRef,
+): string | undefined {
+  return search.environmentId === project.environmentId && search.projectId === project.projectId
+    ? search.category
+    : undefined;
+}

@@ -74,6 +74,7 @@ import { AttentionStrip } from "./AttentionStrip";
 import {
   boardFanOut,
   boardProjectKey,
+  decisionsCategory,
   pickBoardProject,
   scopedBoardProjects,
   type BoardProject,
@@ -103,6 +104,7 @@ export interface BoardSearch {
   /** The open issue's slug, unique only within the project above. */
   readonly issue?: string;
   readonly view?: "decisions";
+  /** The decisions view's category, in the project above. */
   readonly category?: string;
   readonly needsYou?: true;
   readonly archived?: true;
@@ -784,9 +786,15 @@ export function BoardPage({ search }: { readonly search: BoardSearch }) {
               key={boardProjectKey(viewProject)}
               environmentId={viewProject.environmentId}
               projectId={viewProject.projectId}
-              category={search.category}
+              category={decisionsCategory(search, viewProject)}
               categories={categoriesOf(viewProject)}
-              onCategoryChange={(category) => void setSearch({ category })}
+              onCategoryChange={(category) =>
+                void setSearch({
+                  environmentId: viewProject.environmentId,
+                  projectId: viewProject.projectId,
+                  category,
+                })
+              }
               canWrite={canWriteView}
               projectSelect={
                 shown.length > 1 ? (

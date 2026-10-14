@@ -269,7 +269,10 @@ const make = Effect.gen(function* () {
     return directoryOf(projectId, project.title, yield* readOverrides);
   });
 
-  /** Whether the project is loaded or its folder exists. Nothing is created or loaded. */
+  /**
+   * Whether the project is loaded or its folder exists. Nothing is created or loaded. Only a
+   * missing folder (or project) is `false`; a folder that cannot be inspected fails.
+   */
   const hasBoard = (projectId: ProjectId, overrides: typeof Overrides.Type) =>
     loaded.has(projectId)
       ? Effect.succeed(true)
@@ -277,10 +280,12 @@ const make = Effect.gen(function* () {
           Effect.flatMap(
             Option.match({
               onNone: () => Effect.succeed(false),
-              onSome: (project) =>
-                fs
-                  .exists(directoryOf(projectId, project.title, overrides).directory)
-                  .pipe(Effect.orElseSucceed(() => false)),
+              onSome: (project) => {
+                const { directory } = directoryOf(projectId, project.title, overrides);
+                return fs
+                  .exists(directory)
+                  .pipe(Effect.catch(io(`Could not inspect ${directory}.`)));
+              },
             }),
           ),
         );
@@ -702,7 +707,12 @@ const make = Effect.gen(function* () {
   const advance: KanbanStore["Service"]["advance"] = Effect.fn("KanbanStore.advance")(
     function* (projectId, threadId, status) {
       // Thread events arrive for every project; only one with a board folder is worth loading.
-      if (!loaded.has(projectId) && !(yield* hasBoard(projectId, yield* readOverrides))) return;
+      // Best effort: one whose folder cannot be inspected is skipped like one without a board.
+      if (
+        !loaded.has(projectId) &&
+        !(yield* hasBoard(projectId, yield* readOverrides).pipe(Effect.orElseSucceed(() => false)))
+      )
+        return;
       const state = yield* load(projectId);
       const linked = Array.from(state.issues.values()).filter(
         (issue) =>

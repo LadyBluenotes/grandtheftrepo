@@ -3,7 +3,12 @@ import { describe, expect, it } from "vite-plus/test";
 
 import { buildSidebarProjectSnapshots } from "~/sidebarProjectGrouping";
 import type { Project } from "~/types";
-import { boardFanOut, pickBoardProject, scopedBoardProjects } from "./boardScope";
+import {
+  boardFanOut,
+  decisionsCategory,
+  pickBoardProject,
+  scopedBoardProjects,
+} from "./boardScope";
 
 const local = EnvironmentId.make("env-local");
 const remote = EnvironmentId.make("env-remote");
@@ -106,5 +111,22 @@ describe("pickBoardProject", () => {
       pickBoardProject(options, { environmentId: remote, projectId: notes.id })?.projectId,
     ).toBe(options[0]?.projectId);
     expect(pickBoardProject([], ref(notes))).toBeNull();
+  });
+});
+
+describe("decisionsCategory", () => {
+  const here = { environmentId: local, projectId: notes.id };
+  const search = { ...here, category: "auth" };
+
+  it("filters by the category only in the project it was picked in", () => {
+    expect(decisionsCategory(search, here)).toBe("auth");
+    // The sidebar's scope moved the view to another project; the URL still names the old one.
+    expect(decisionsCategory(search, { environmentId: local, projectId: appHere.id })).toBe(
+      undefined,
+    );
+    expect(decisionsCategory(search, { environmentId: remote, projectId: notes.id })).toBe(
+      undefined,
+    );
+    expect(decisionsCategory({ category: "auth" }, here)).toBe(undefined);
   });
 });
