@@ -265,6 +265,7 @@ function PromptDetails({
                       <Button
                         size="xs"
                         variant="outline"
+                        aria-label={`Restore version ${version.version}`}
                         disabled={locked}
                         onClick={() =>
                           void run(

@@ -88,6 +88,28 @@ export type PromptSearchResult = typeof PromptSearchResult.Type;
 /** The most prompts a list answers with. */
 export const PROMPTS_LIST_LIMIT = 100;
 
+/** How many of a query's words a list or search matches on, and how much of each. */
+export const PROMPT_QUERY_MAX_WORDS = 8;
+export const PROMPT_QUERY_WORD_MAX_LENGTH = 64;
+
+export const PROMPT_QUERY_MAX_LENGTH = 500;
+/** Words to find in a prompt's title or body. */
+export const PromptQuery = Schema.String.check(Schema.isMaxLength(PROMPT_QUERY_MAX_LENGTH));
+
+/**
+ * The words a query matches on: its first `PROMPT_QUERY_MAX_WORDS` distinct ones, each cut to
+ * `PROMPT_QUERY_WORD_MAX_LENGTH` characters, so a long query stays a small condition.
+ */
+export const promptQueryWords = (query: string): ReadonlyArray<string> =>
+  [
+    ...new Set(
+      query
+        .split(/\s+/)
+        .filter((word) => word !== "")
+        .map((word) => Array.from(word).slice(0, PROMPT_QUERY_WORD_MAX_LENGTH).join("")),
+    ),
+  ].slice(0, PROMPT_QUERY_MAX_WORDS);
+
 /**
  * A project's prompts, the most recently updated first, at most `PROMPTS_LIST_LIMIT`. `state`
  * narrows to one state; `query` to those whose title or body holds each of its words, in any case
@@ -96,7 +118,7 @@ export const PROMPTS_LIST_LIMIT = 100;
 export const PromptsListInput = Schema.Struct({
   projectId: ProjectId,
   state: Schema.optional(PromptState),
-  query: Schema.optional(Schema.String),
+  query: Schema.optional(PromptQuery),
 });
 export type PromptsListInput = typeof PromptsListInput.Type;
 

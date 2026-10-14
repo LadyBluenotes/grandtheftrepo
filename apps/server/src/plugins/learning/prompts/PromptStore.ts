@@ -3,6 +3,7 @@ import {
   PROMPT_PREVIEW_LENGTH,
   PROMPTS_LIST_LIMIT,
   PromptBody,
+  promptQueryWords,
   PromptTitle,
   type ProjectId,
   type Prompt,
@@ -189,14 +190,13 @@ const make = Effect.gen(function* () {
     substr(body, 1, ${PROMPT_PREVIEW_LENGTH}) AS preview, version, use_count, last_used_at,
     created_at, updated_at`;
   /**
-   * One condition per word of `query`: the title or body holds it. SQLite's `lower` folds ASCII
-   * letters only, and it folds both sides, so other letters match as typed.
+   * One condition per word `promptQueryWords` keeps: the title or body holds it. SQLite's `lower`
+   * folds ASCII letters only, and it folds both sides, so other letters match as typed.
    */
   const matching = (query: string) =>
-    query
-      .split(/\s+/)
-      .filter((word) => word !== "")
-      .map((word) => sql`instr(lower(title || char(10) || body), lower(${word})) > 0`);
+    promptQueryWords(query).map(
+      (word) => sql`instr(lower(title || char(10) || body), lower(${word})) > 0`,
+    );
 
   /** Inserts a prompt and its first version; with a source key, the prompt it saved before instead. */
   const insert = (

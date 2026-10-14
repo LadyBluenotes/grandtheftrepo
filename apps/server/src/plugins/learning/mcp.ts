@@ -13,6 +13,7 @@ import {
   Prompt,
   PromptBody,
   PromptKind,
+  PromptQuery,
   PromptSearchResult,
   PromptTitle,
   ThreadId,
@@ -104,10 +105,10 @@ const ItemTool = Tool.make("learning_item", {
 
 const PromptSearchTool = Tool.make("prompt_search", {
   ...shared,
-  description: `Search the project's prompt library: saved prompts and workflows people reuse. Every word of query must appear in a prompt's title or body, in any case; an empty query lists them all. Answers with up to ten matches, each with the first 200 characters of its body (prompt_get reads all of it), active first, then proposed (waiting for a person), then archived (a person put it away: do not propose it again), the most used first within each, and a searchId. Search before prompt_save, which needs a searchId from the last ${PromptStore.SEARCH_WINDOW_MINUTES} minutes, and save only what no match already covers. Omit projectId for the calling thread's project.`,
+  description: `Search the project's prompt library: saved prompts and workflows people reuse. Every word of query must appear in a prompt's title or body, in any case; only its first 8 distinct words count, and an empty query lists them all. Answers with up to ten matches, each with the first 200 characters of its body (prompt_get reads all of it), active first, then proposed (waiting for a person), then archived (a person put it away: do not propose it again), the most used first within each, and a searchId. Search before prompt_save, which needs a searchId from the last ${PromptStore.SEARCH_WINDOW_MINUTES} minutes, and save only what no match already covers. Omit projectId for the calling thread's project.`,
   parameters: Schema.Struct({
     projectId: Schema.optional(ProjectId),
-    query: Schema.String,
+    query: PromptQuery,
   }),
   success: PromptSearchResult,
 })

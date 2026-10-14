@@ -1,4 +1,4 @@
-import { PROMPTS_LIST_LIMIT, type PromptState } from "@t3tools/contracts";
+import { PROMPT_QUERY_MAX_LENGTH, PROMPTS_LIST_LIMIT, type PromptState } from "@t3tools/contracts";
 import { PlusIcon } from "lucide-react";
 import { useState } from "react";
 
@@ -60,6 +60,7 @@ export function PromptsTable({ environmentId, projectId }: LearningScope) {
             type="search"
             aria-label="Search prompts"
             placeholder="Search titles and bodies"
+            maxLength={PROMPT_QUERY_MAX_LENGTH}
             value={query}
             onChange={(event) => setQuery(event.target.value)}
           />

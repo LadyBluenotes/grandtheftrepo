@@ -217,6 +217,21 @@ it.effect("a search matches every word in the title or body, active first, most 
         [review.id, archived.id],
       );
       assert.deepStrictEqual((yield* prompts.search({ projectId, query: "deploy" })).prompts, []);
+
+      // A query of thousands of words matches on its first eight distinct ones, so it stays a small
+      // condition: here two words nothing holds are among them, and repeats count once.
+      const long = ["changed", "file", ...Array.from({ length: 5_000 }, (_, i) => `w${i}`)];
+      assert.deepStrictEqual(
+        (yield* prompts.search({ projectId, query: long.join(" ") })).prompts,
+        [],
+      );
+      assert.deepStrictEqual(
+        (yield* prompts.list({
+          projectId,
+          query: Array(5_000).fill("FILE changed").join(" "),
+        })).map((p) => p.id),
+        [tests.id, archived.id, review.id].toSorted((a, b) => b - a),
+      );
     }),
   ),
 );
