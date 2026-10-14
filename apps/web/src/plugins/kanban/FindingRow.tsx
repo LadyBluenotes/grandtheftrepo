@@ -185,7 +185,10 @@ function useSubmitOnce(send: () => Promise<void>) {
   return { pending, submit };
 }
 
-/** Sets the disposition with a reason; picking open reopens the finding. */
+/**
+ * Sets the disposition with a reason; picking open reopens a reviewed finding. An open finding
+ * starts with nothing picked and no open choice, since the server refuses open on it.
+ */
 function ReviewForm({
   environmentId,
   projectId,
@@ -198,9 +201,15 @@ function ReviewForm({
   readonly onDone: () => void;
 }) {
   const review = useAtomCommand(kanbanFindingReview, { reportFailure: false });
-  const [disposition, setDisposition] = useState(finding.disposition);
+  const choices = KANBAN_FINDING_DISPOSITIONS.filter(
+    (value) => finding.disposition !== "open" || value !== "open",
+  );
+  const [disposition, setDisposition] = useState<KanbanFindingDisposition | "">(
+    finding.disposition === "open" ? "" : finding.disposition,
+  );
   const [reason, setReason] = useState("");
   const { pending, submit } = useSubmitOnce(async () => {
+    if (disposition === "") return;
     const result = await review({
       environmentId,
       input: { projectId, id: finding.id, disposition, reason: reason.trim() },
@@ -218,10 +227,12 @@ function ReviewForm({
         }
       >
         <SelectTrigger size="sm" className="w-36 min-w-0" aria-label="Disposition">
-          <SelectValue>{DISPOSITION_LABEL[disposition]}</SelectValue>
+          <SelectValue>
+            {disposition === "" ? "Decide" : DISPOSITION_LABEL[disposition]}
+          </SelectValue>
         </SelectTrigger>
         <SelectPopup>
-          {KANBAN_FINDING_DISPOSITIONS.map((value) => (
+          {choices.map((value) => (
             <SelectItem key={value} value={value}>
               {DISPOSITION_LABEL[value]}
             </SelectItem>
@@ -241,7 +252,7 @@ function ReviewForm({
         type="submit"
         size="sm"
         variant="outline"
-        disabled={pending || reason.trim().length === 0}
+        disabled={pending || disposition === "" || reason.trim().length === 0}
       >
         Save
       </Button>

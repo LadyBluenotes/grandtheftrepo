@@ -513,6 +513,7 @@ export const KanbanAttentionKind = Schema.Literals([
   "promotion_ineffective",
   "promotion_settled",
   "decision_conflict",
+  "promotion_review",
   "closure_held",
 ]);
 export type KanbanAttentionKind = typeof KanbanAttentionKind.Type;
@@ -534,6 +535,7 @@ export const KANBAN_ATTENTION_KIND_LABELS: Record<KanbanAttentionKind, string> =
   promotion_ineffective: "Handover ineffective",
   promotion_settled: "Handover settled",
   decision_conflict: "Decision conflict",
+  promotion_review: "Handover review",
   closure_held: "Held from Done",
 };
 

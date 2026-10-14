@@ -8,8 +8,17 @@ import {
   LearningItemDetail,
   LearningItemInput,
   LearningItemsInput,
+  LearningPromotion,
+  LearningPromotionReviewInput,
+  LearningPromotionRollBackInput,
   OrchestratorMcpFailure,
   ProjectId,
+  Prompt,
+  PromptBody,
+  PromptKind,
+  PromptQuery,
+  PromptSearchResult,
+  PromptTitle,
   ThreadId,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
@@ -23,6 +32,7 @@ import { readCaller, resolveProjectId } from "../../mcp/threadAccess.ts";
 import * as ThreadManagementService from "../../orchestration-v2/ThreadManagementService.ts";
 import * as CorrectionStore from "./CorrectionStore.ts";
 import * as ItemStore from "./items/ItemStore.ts";
+import * as PromptStore from "./prompts/PromptStore.ts";
 
 const shared = {
   failure: OrchestratorMcpFailure,
@@ -58,7 +68,7 @@ const CorrectionTool = Tool.make("learning_correction", {
 const CorrectionAddTool = Tool.make("learning_correction_add", {
   ...shared,
   description:
-    "Record a correction by hand: an instance of work being wrong that no server event caught. Omit threadId for the calling thread; the correction takes the thread's project, and a projectId that differs from it is refused. declaredMode names the review failure mode when a reviewer or person named one. Secrets in the description are redacted and it is cut at 500 characters.",
+    "Record a correction by hand: an instance of work being wrong that no server event caught. Omit threadId for the calling thread; the correction takes the thread's project, and a projectId that differs from it is refused. declaredMode names the failure mode when a reviewer or person named one. Secrets in the description are redacted and it is cut at 500 characters.",
   parameters: Schema.Struct({
     projectId: Schema.optional(ProjectId),
     threadId: Schema.optional(ThreadId),
@@ -89,12 +99,77 @@ const ItemsTool = Tool.make("learning_items", {
 const ItemTool = Tool.make("learning_item", {
   ...shared,
   description:
-    "One learning item by id, with its evidence (one entry per occurrence) and its promotion records.",
+    "One learning item by id, with its evidence (one entry per occurrence), its promotion records (handovers to an owner kind: proposed, in_review, adopted, rejected, rolled_back or failed, and who proposed each), the review verdicts on them and the outcome of each adopted one four weeks on.",
   parameters: LearningItemInput,
   success: LearningItemDetail,
 })
   .annotate(Tool.Readonly, true)
   .annotate(Tool.Destructive, false);
+
+const PromptSearchTool = Tool.make("prompt_search", {
+  ...shared,
+  description: `Search the project's prompt library: saved prompts and workflows people reuse. Every word of query must appear in a prompt's title or body, in any case; only its first 8 distinct words count, and an empty query lists them all. Answers with up to ten matches, each with the first 200 characters of its body (prompt_get reads all of it), active first, then proposed (waiting for a person), then archived (a person put it away: do not propose it again), the most used first within each, and a searchId. Search before prompt_save, which needs a searchId from the last ${PromptStore.SEARCH_WINDOW_MINUTES} minutes, and save only what no match already covers. Omit projectId for the calling thread's project.`,
+  parameters: Schema.Struct({
+    projectId: Schema.optional(ProjectId),
+    query: PromptQuery,
+  }),
+  success: PromptSearchResult,
+})
+  .annotate(Tool.Readonly, true)
+  .annotate(Tool.Destructive, false);
+
+const PromptSaveTool = Tool.make("prompt_save", {
+  ...shared,
+  description: `Save a prompt or workflow worth reusing to the project's prompt library, in the project prompt_search looked in. Pass the searchId prompt_search answered with in the last ${PromptStore.SEARCH_WINDOW_MINUTES} minutes; a save without one is refused, so duplicates are checked first. kind is prompt (one message to send) or workflow (steps to follow in order); title is one line; body is markdown of at most 10,000 characters. The prompt is proposed until a person accepts it. Answers with the saved prompt, including its id.`,
+  parameters: Schema.Struct({
+    searchId: Schema.String,
+    kind: PromptKind,
+    title: PromptTitle,
+    body: PromptBody,
+  }),
+  success: Prompt,
+})
+  .annotate(Tool.Title, "Save a prompt")
+  .annotate(Tool.Readonly, false)
+  .annotate(Tool.Destructive, false)
+  .annotate(Tool.Idempotent, false)
+  .annotate(Tool.OpenWorld, false);
+
+const PromotionReviewTool = Tool.make("learning_promotion_review", {
+  ...shared,
+  description:
+    "Review a learning promotion that is in_review, as learning_item lists it: the draft its owner kind's plugin holds (a knowledge page, a policy version or a prompt) is the proposal. verdict adopt adopts it, promotes the item and starts the four-week outcome window; reject turns it down and reopens the item; revise asks for changes and leaves it in review for another verdict. note says why, at most 500 characters, secrets redacted. Refused unless the promotion is in review, when your own thread proposed it (a promotion is reviewed by someone other than its proposer), and adopt while the item is no longer a candidate for that owner kind. From a T3 thread only. Answers with the promotion.",
+  parameters: LearningPromotionReviewInput,
+  success: LearningPromotion,
+})
+  .annotate(Tool.Title, "Review a learning promotion")
+  .annotate(Tool.Readonly, false)
+  .annotate(Tool.Destructive, false)
+  .annotate(Tool.Idempotent, false)
+  .annotate(Tool.OpenWorld, false);
+
+const PromptGetTool = Tool.make("prompt_get", {
+  ...shared,
+  description:
+    "One prompt from the library by id, as prompt_search lists it, with its latest version's title and body.",
+  parameters: Schema.Struct({ id: Schema.Int }),
+  success: Prompt,
+})
+  .annotate(Tool.Readonly, true)
+  .annotate(Tool.Destructive, false);
+
+const PromotionRollBackTool = Tool.make("learning_promotion_rollback", {
+  ...shared,
+  description:
+    "Roll back an adopted learning promotion: it becomes rolled_back, its outcome is no longer judged, and its item is open again for a person to route elsewhere or close. The draft in its owner kind's plugin is left as it is. Refused unless the promotion is adopted. From a T3 thread only. Answers with the promotion.",
+  parameters: LearningPromotionRollBackInput,
+  success: LearningPromotion,
+})
+  .annotate(Tool.Title, "Roll back a learning promotion")
+  .annotate(Tool.Readonly, false)
+  .annotate(Tool.Destructive, false)
+  .annotate(Tool.Idempotent, false)
+  .annotate(Tool.OpenWorld, false);
 
 export const LearningToolkit = Toolkit.make(
   CorrectionsTool,
@@ -102,11 +177,17 @@ export const LearningToolkit = Toolkit.make(
   CorrectionAddTool,
   ItemsTool,
   ItemTool,
+  PromptSearchTool,
+  PromptSaveTool,
+  PromptGetTool,
+  PromotionReviewTool,
+  PromotionRollBackTool,
 );
 
 const failure = (error: LearningError) =>
   new OrchestratorMcpFailure({
-    code: error.code === "not_found" ? "invalid_request" : "orchestration_error",
+    code:
+      error.code === "io" || error.code === "inactive" ? "orchestration_error" : "invalid_request",
     message: error.message,
   });
 
@@ -122,6 +203,19 @@ const running = <A>(service: Option.Option<A>) =>
     onSome: Effect.succeed,
   });
 
+/** The calling thread as an actor, `thread:<id>`; `what` is refused for a client outside T3. */
+const threadActor = (what: string) =>
+  Effect.gen(function* () {
+    const { caller } = yield* readCaller();
+    if (caller === undefined) {
+      return yield* new OrchestratorMcpFailure({
+        code: "thread_credential_required",
+        message: `${what} is given by a T3 thread; this MCP client is not running in one.`,
+      });
+    }
+    return `thread:${caller.id}`;
+  });
+
 /**
  * The stores are read when the handlers are built, not declared as tool dependencies: plugin
  * services are typed as absent from the server chain, and these tools only register while
@@ -132,6 +226,7 @@ export const handlers = McpToolAccess.toLayer(
   Effect.gen(function* () {
     const store = running(yield* Effect.serviceOption(CorrectionStore.CorrectionStore));
     const itemStore = running(yield* Effect.serviceOption(ItemStore.ItemStore));
+    const promptStore = running(yield* Effect.serviceOption(PromptStore.PromptStore));
     return {
       learning_corrections: McpToolAccess.reads(({ projectId: given, ...input }) =>
         Effect.gen(function* () {
@@ -184,6 +279,42 @@ export const handlers = McpToolAccess.toLayer(
           yield* readCaller();
           const items = yield* itemStore;
           return yield* items.get(id);
+        }).pipe(Effect.catchTags({ LearningError: (error) => Effect.fail(failure(error)) })),
+      ),
+      prompt_search: McpToolAccess.reads(({ projectId: given, query }) =>
+        Effect.gen(function* () {
+          const context = yield* readCaller();
+          const projectId = yield* resolveProjectId(context, given);
+          const prompts = yield* promptStore;
+          return yield* prompts.search({ projectId, query });
+        }).pipe(Effect.catchTags({ LearningError: (error) => Effect.fail(failure(error)) })),
+      ),
+      prompt_save: McpToolAccess.writes((input) =>
+        Effect.gen(function* () {
+          const prompts = yield* promptStore;
+          return yield* prompts.propose(input);
+        }).pipe(Effect.catchTags({ LearningError: (error) => Effect.fail(failure(error)) })),
+      ),
+      prompt_get: McpToolAccess.reads(({ id }) =>
+        Effect.gen(function* () {
+          yield* readCaller();
+          const prompts = yield* promptStore;
+          return (yield* prompts.get(id)).prompt;
+        }).pipe(Effect.catchTags({ LearningError: (error) => Effect.fail(failure(error)) })),
+      ),
+      // An agent acts as its thread, so the proposer check can tell two agents apart.
+      learning_promotion_review: McpToolAccess.actsAsCaller((input) =>
+        Effect.gen(function* () {
+          const reviewer = yield* threadActor("A review");
+          const items = yield* itemStore;
+          return yield* items.reviewPromotion(input, reviewer);
+        }).pipe(Effect.catchTags({ LearningError: (error) => Effect.fail(failure(error)) })),
+      ),
+      learning_promotion_rollback: McpToolAccess.actsAsCaller((input) =>
+        Effect.gen(function* () {
+          const actor = yield* threadActor("A rollback");
+          const items = yield* itemStore;
+          return yield* items.rollBackPromotion(input, actor);
         }).pipe(Effect.catchTags({ LearningError: (error) => Effect.fail(failure(error)) })),
       ),
     };

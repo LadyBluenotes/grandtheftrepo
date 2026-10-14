@@ -12,10 +12,14 @@ import {
   type LearningDeclaredMode,
   type LearningFailureKind,
   type LearningItem,
+  type LearningItemDetail,
   type LearningItemState,
   type LearningItemsSetDispositionInput,
   type LearningOwnerKind,
   type LearningPromotion,
+  type LearningPromotionOutcome,
+  type LearningPromotionReviewInput,
+  type LearningPromotionState,
   type PluginStatus,
   type ProjectId,
   type ReviewOutcome,
@@ -73,6 +77,16 @@ const reviewRequests = createPluginRpcQueryAtomFamily(connectionAtomRuntime, {
 const learningSetDisposition = createPluginRpcCommand(connectionAtomRuntime, {
   label: "learning:set-disposition",
   method: LEARNING_METHODS.itemsSetDisposition,
+});
+
+const learningPromotionReview = createPluginRpcCommand(connectionAtomRuntime, {
+  label: "learning:promotion-review",
+  method: LEARNING_METHODS.promotionReview,
+});
+
+const learningPromotionRollBack = createPluginRpcCommand(connectionAtomRuntime, {
+  label: "learning:promotion-roll-back",
+  method: LEARNING_METHODS.promotionRollBack,
 });
 
 /** A project's items in every state; `itemRows` applies the state filter on the client. */
@@ -150,6 +164,21 @@ export function useLearningSetDisposition(environmentId: EnvironmentId) {
   };
 }
 
+/**
+ * A person's verdict on a promotion in review, and their rollback of an adopted one, on
+ * `environmentId`; both are operate methods, so one grant covers them.
+ */
+export function useLearningPromotionActions(environmentId: EnvironmentId) {
+  const runReview = useAtomCommand(learningPromotionReview, { reportFailure: false });
+  const runRollBack = useAtomCommand(learningPromotionRollBack, { reportFailure: false });
+  const canWrite = useAtomValue(learningPromotionReview.permissionAtom(environmentId));
+  return {
+    canWrite,
+    review: (input: LearningPromotionReviewInput) => runReview({ environmentId, input }),
+    rollBack: (promotionId: number) => runRollBack({ environmentId, input: { promotionId } }),
+  };
+}
+
 const oneOf =
   <T extends string>(values: ReadonlyArray<T>) =>
   (value: unknown): value is T =>
@@ -219,6 +248,7 @@ export const DECLARED_MODES = [
   "missing_verification",
   "convention",
   "unclear_spec",
+  "security",
 ] as const satisfies ReadonlyArray<LearningDeclaredMode>;
 export const isDeclaredMode = oneOf(DECLARED_MODES);
 export const DECLARED_MODE_LABEL: Record<LearningDeclaredMode, string> = {
@@ -228,21 +258,160 @@ export const DECLARED_MODE_LABEL: Record<LearningDeclaredMode, string> = {
   missing_verification: "Missing verification",
   convention: "Convention",
   unclear_spec: "Unclear spec",
+  security: "Security",
 };
 
-export const PROMOTION_STATE_LABEL: Record<LearningPromotion["state"], string> = {
-  pending: "Pending",
-  delivered: "Delivered",
+export const PROMOTION_STATE_LABEL: Record<LearningPromotionState, string> = {
+  proposed: "Proposed",
+  in_review: "In review",
+  adopted: "Adopted",
+  rejected: "Rejected",
+  rolled_back: "Rolled back",
   failed: "Failed",
 };
 export const PROMOTION_STATE_VARIANT: Record<
-  LearningPromotion["state"],
-  "warning" | "success" | "error"
+  LearningPromotionState,
+  "info" | "warning" | "success" | "secondary" | "error"
 > = {
-  pending: "warning",
-  delivered: "success",
+  proposed: "info",
+  in_review: "warning",
+  adopted: "success",
+  rejected: "secondary",
+  rolled_back: "secondary",
   failed: "error",
 };
+
+const OUTCOME_LABEL: Record<LearningPromotionOutcome["verdict"], string> = {
+  ineffective: "Did not take: the mode kept recurring.",
+  settled: "Settled: the mode did not recur.",
+  improved: "Improved: the mode recurred at most half as often.",
+  inconclusive: "Inconclusive: too few recurrences to judge.",
+};
+
+/** Who acted on a promotion, in words: a person, the rules, or an agent's thread. */
+export function actorLabel(actor: string): string {
+  if (actor === "user") return "a person";
+  if (actor === "supervisor") return "the rules";
+  return actor.startsWith("thread:") ? "an agent" : actor;
+}
+
+export interface ChainStep {
+  readonly id: "evidence" | "proposed" | "in_review" | "decision" | "outcome";
+  readonly label: string;
+  readonly state: "done" | "current" | "upcoming";
+  /** When it happened, an ISO instant; null for a step not reached or with no time of its own. */
+  readonly at: string | null;
+  /** Who acted, as a promotion records them; null when nobody did. */
+  readonly by: string | null;
+  /** One line more, such as a reviewer's note or the outcome. */
+  readonly detail: string | null;
+}
+
+/** Which step each promotion state stands on: the corrections are 0, the outcome 4. */
+const CURRENT_STEP: Record<LearningPromotionState, number> = {
+  proposed: 1,
+  failed: 1,
+  in_review: 2,
+  rejected: 3,
+  adopted: 4,
+  rolled_back: 4,
+};
+
+/**
+ * The item's chain from its corrections through one handover to its outcome, with the step it is
+ * on marked `current`. The handover is the promotion for the item's owner kind, else its latest;
+ * with none, the corrections are current. A rejection ends the chain, and a rollback takes the
+ * outcome's place.
+ */
+export function promotionChain(detail: LearningItemDetail): {
+  readonly promotion: LearningPromotion | null;
+  readonly steps: ReadonlyArray<ChainStep>;
+} {
+  const { item, promotions } = detail;
+  const promotion =
+    promotions.find((candidate) => candidate.ownerKind === item.ownerKind) ??
+    promotions.at(-1) ??
+    null;
+  const current = promotion === null ? 0 : CURRENT_STEP[promotion.state];
+  const reviews = detail.reviews.filter((review) => review.promotionId === promotion?.id);
+  const revision = reviews.findLast((review) => review.verdict === "revise");
+  const decision = reviews.findLast((review) => review.verdict !== "revise");
+  const outcome = detail.outcomes.find((entry) => entry.promotionId === promotion?.id);
+  const state = promotion?.state;
+
+  const steps: Array<Omit<ChainStep, "state">> = [
+    {
+      id: "evidence",
+      label: "Corrections",
+      at: null,
+      by: null,
+      detail: item.occurrences === 1 ? "1 occurrence" : `${item.occurrences} occurrences`,
+    },
+    {
+      id: "proposed",
+      label: state === "failed" ? "Handover failed" : "Proposed",
+      at:
+        promotion === null ? null : state === "failed" ? promotion.updatedAt : promotion.createdAt,
+      by: promotion?.proposedBy ?? null,
+      detail: state === "failed" ? promotion!.lastError : null,
+    },
+    {
+      id: "in_review",
+      label: "In review",
+      at: promotion?.deliveredAt ?? null,
+      by: null,
+      detail:
+        state === "in_review" && revision !== undefined
+          ? `Revision asked by ${actorLabel(revision.reviewer)}${revision.note === null ? "." : `: ${revision.note}`}`
+          : null,
+    },
+    state === "rejected"
+      ? {
+          id: "decision",
+          label: "Rejected",
+          at: decision?.createdAt ?? promotion!.updatedAt,
+          by: decision?.reviewer ?? null,
+          detail: decision?.note ?? null,
+        }
+      : {
+          id: "decision",
+          label: "Adopted",
+          at: promotion?.adoptedAt ?? null,
+          // A promotion adopted before reviews existed has no verdict.
+          by: decision?.reviewer ?? null,
+          detail: decision?.note ?? null,
+        },
+  ];
+  if (state === "rolled_back") {
+    steps.push({
+      id: "outcome",
+      label: "Rolled back",
+      at: promotion!.rolledBackAt,
+      by: promotion!.rolledBackBy,
+      detail: null,
+    });
+  } else if (state !== "rejected") {
+    steps.push({
+      id: "outcome",
+      label: "Outcome",
+      at: outcome?.judgedAt ?? null,
+      by: null,
+      detail:
+        outcome !== undefined
+          ? OUTCOME_LABEL[outcome.verdict]
+          : state === "adopted"
+            ? "Judged four weeks after adoption."
+            : null,
+    });
+  }
+  return {
+    promotion,
+    steps: steps.map((step, index) => ({
+      ...step,
+      state: index < current ? "done" : index === current ? "current" : "upcoming",
+    })),
+  };
+}
 
 export const REVIEW_OUTCOME_LABEL: Record<ReviewOutcome, string> = {
   approve: "Approved",

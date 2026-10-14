@@ -262,9 +262,9 @@ export const markScanStart = Effect.gen(function* () {
  * is, as the thread stands now, still a root run's turn that was not rolled back; the failure row
  * goes, so it is settled once.
  *
- * It records a `security` correction in the learning plugin for each finding without one, which
- * the reactor cannot: a reactor sees only its own plugin's services, and a sweep runs with every
- * active plugin's. The description names the pattern, file and line, never the matched text, and
+ * It records a `security` correction, declaring the `security` mode, in the learning plugin for
+ * each finding without one, which the reactor cannot: a reactor sees only its own plugin's
+ * services, and a sweep runs with every active plugin's. The description names the pattern, file and line, never the matched text, and
  * the source key is built from the finding's thread, checkpoint, pattern, file and line
  * (`sourceKeyOf`), so a retry finds the same correction and a rebuilt review database never lands
  * on an old one; a `scan_failed` row records none. It then reconciles each held thread's
@@ -388,6 +388,7 @@ export const sweep = <E>(retryFailed: Effect.Effect<void, E, SqlClient.SqlClient
           .record({
             threadId: row.thread_id,
             failureKind: "security",
+            declaredMode: "security",
             description: `${row.pattern_id} at ${row.file}:${row.line}`,
             sourceEventIds: [],
             sourceKey: sourceKeyOf(row),

@@ -28,9 +28,9 @@ const projectId = ProjectId.make("project:outcomes");
 const otherProjectId = ProjectId.make("project:elsewhere");
 
 const DAY = 86_400_000;
-/** When the seeded promotion is delivered; its after window is complete 28 days later. */
-const DELIVERED = Date.UTC(2026, 9, 1, 12, 0);
-const COMPLETE = DELIVERED + 28 * DAY;
+/** When the seeded promotion is adopted; its after window is complete 28 days later. */
+const ADOPTED = Date.UTC(2026, 9, 1, 12, 0);
+const COMPLETE = ADOPTED + 28 * DAY;
 const iso = (ms: number) => DateTime.formatIso(DateTime.makeUnsafe(ms));
 
 // A real event sink on an in-memory core database, as producers.test does, for the reactor.
@@ -49,13 +49,13 @@ const scoped = <A, E>(body: Effect.Effect<A, E, Scope.Scope | EventSink.EventSin
 
 /**
  * Real stores and the sweep over a fresh learning database and an in-memory host database, as the
- * plugin's layer builds them, with the clock at `DELIVERED`.
+ * plugin's layer builds them, with the clock at `ADOPTED`.
  */
 const setup = (
   options: { readonly caughtUp?: Effect.Effect<void, EventSink.EventSinkV2Error> } = {},
 ) =>
   Effect.gen(function* () {
-    yield* TestClock.setTime(DELIVERED);
+    yield* TestClock.setTime(ADOPTED);
     const { sql } = yield* PluginDatabase.open({
       id: "learning",
       filename: ":memory:",
@@ -93,24 +93,31 @@ const setup = (
       sql,
       items,
       attention,
-      /** Hands the project's item for `mode` over to its rule's owner kind, delivered at `at`. */
-      deliver: (mode: string, at = DELIVERED) =>
+      /**
+       * Hands the project's item for `mode` over to its rule's owner kind, with its draft in
+       * review from now; the clock moves on.
+       */
+      deliver: (mode: string) =>
         Effect.gen(function* () {
           const item = yield* items.strengthen(projectId, mode, `seed:${mode}`, "Seeded.");
-          const when = DateTime.makeUnsafe(at);
+          const now = yield* DateTime.now;
           yield* PromotionStore.open(
             {
               id: item.id,
               project_id: item.projectId,
               failure_mode: item.failureMode,
               owner_kind: item.ownerKind!,
+              disposition_by: item.dispositionBy,
             },
-            when,
+            now,
           );
           const [promotion] = yield* PromotionStore.forItem(item.id);
-          yield* PromotionStore.deliver(promotion!, when);
+          yield* PromotionStore.deliver(promotion!, now);
           return { item, promotion: promotion! };
         }).pipe(Effect.provideService(SqlClient.SqlClient, sql)),
+      /** A person's verdict on `promotionId`, now. */
+      review: (promotionId: number, verdict: "adopt" | "reject") =>
+        items.reviewPromotion({ promotionId, verdict }, "user"),
       /** One correction declaring `mode`, made at each of `times`. */
       correct: (
         mode: "convention" | "scope_drift" | "defect",
@@ -150,6 +157,14 @@ const setup = (
     };
   });
 
+/** Delivers the item for `mode` and has a person adopt it at once, at the clock's time. */
+const adopt = (world: Effect.Success<ReturnType<typeof setup>>, mode: string) =>
+  Effect.gen(function* () {
+    const delivered = yield* world.deliver(mode);
+    const promotion = yield* world.review(delivered.promotion.id, "adopt");
+    return { item: delivered.item, promotion };
+  });
+
 /** `count` days before `at`, one correction a day, the nearest first. */
 const daysBefore = (at: number, count: number) =>
   Array.from({ length: count }, (_, index) => at - (index + 1) * DAY);
@@ -162,11 +177,8 @@ it.effect("5 before and 4 after raises one ineffective flag on the item's projec
   scoped(
     Effect.gen(function* () {
       const world = yield* setup();
-      const { promotion } = yield* world.deliver("scope_drift");
-      yield* world.correct("scope_drift", [
-        ...daysBefore(DELIVERED, 5),
-        ...daysAfter(DELIVERED, 4),
-      ]);
+      const { promotion } = yield* adopt(world, "scope_drift");
+      yield* world.correct("scope_drift", [...daysBefore(ADOPTED, 5), ...daysAfter(ADOPTED, 4)]);
 
       yield* TestClock.setTime(COMPLETE);
       assert.deepStrictEqual(yield* world.tick(), { examined: 1, acted: 1, flags: 1 });
@@ -202,8 +214,8 @@ it.effect("5 before and 0 after raises a settled flag", () =>
   scoped(
     Effect.gen(function* () {
       const world = yield* setup();
-      const { promotion } = yield* world.deliver("convention");
-      yield* world.correct("convention", daysBefore(DELIVERED, 5));
+      const { promotion } = yield* adopt(world, "convention");
+      yield* world.correct("convention", daysBefore(ADOPTED, 5));
 
       yield* TestClock.setTime(COMPLETE);
       assert.deepStrictEqual(yield* world.tick(), { examined: 1, acted: 1, flags: 1 });
@@ -229,11 +241,8 @@ it.effect("5 before and 1 after is recorded as improved and raises nothing", () 
   scoped(
     Effect.gen(function* () {
       const world = yield* setup();
-      yield* world.deliver("scope_drift");
-      yield* world.correct("scope_drift", [
-        ...daysBefore(DELIVERED, 5),
-        ...daysAfter(DELIVERED, 1),
-      ]);
+      yield* adopt(world, "scope_drift");
+      yield* world.correct("scope_drift", [...daysBefore(ADOPTED, 5), ...daysAfter(ADOPTED, 1)]);
 
       yield* TestClock.setTime(COMPLETE);
       assert.deepStrictEqual(yield* world.tick(), { examined: 1, acted: 1, flags: 0 });
@@ -250,11 +259,8 @@ it.effect("2 before is inconclusive and raises nothing, even with many after", (
   scoped(
     Effect.gen(function* () {
       const world = yield* setup();
-      yield* world.deliver("scope_drift");
-      yield* world.correct("scope_drift", [
-        ...daysBefore(DELIVERED, 2),
-        ...daysAfter(DELIVERED, 6),
-      ]);
+      yield* adopt(world, "scope_drift");
+      yield* world.correct("scope_drift", [...daysBefore(ADOPTED, 2), ...daysAfter(ADOPTED, 6)]);
 
       yield* TestClock.setTime(COMPLETE);
       assert.deepStrictEqual(yield* world.tick(), { examined: 1, acted: 1, flags: 0 });
@@ -273,23 +279,23 @@ it.effect(
     scoped(
       Effect.gen(function* () {
         const world = yield* setup();
-        yield* world.deliver("scope_drift");
+        yield* adopt(world, "scope_drift");
         yield* world.correct("scope_drift", [
           // Before: the first instant of the window counts, the one ahead of it does not.
-          DELIVERED - 28 * DAY,
-          DELIVERED - 28 * DAY - 1,
-          DELIVERED - 10 * DAY,
-          DELIVERED - 5 * DAY,
-          DELIVERED - 1,
-          // After: the delivery instant counts, the last instant of the window is the first outside.
-          DELIVERED,
-          DELIVERED + 10 * DAY,
-          DELIVERED + 28 * DAY - 1,
-          DELIVERED + 28 * DAY,
+          ADOPTED - 28 * DAY,
+          ADOPTED - 28 * DAY - 1,
+          ADOPTED - 10 * DAY,
+          ADOPTED - 5 * DAY,
+          ADOPTED - 1,
+          // After: the adoption instant counts, the last instant of the window is the first outside.
+          ADOPTED,
+          ADOPTED + 10 * DAY,
+          ADOPTED + 28 * DAY - 1,
+          ADOPTED + 28 * DAY,
         ]);
         // Another mode in this project, and this mode in another project, are not recurrences.
-        yield* world.correct("defect", [...daysBefore(DELIVERED, 5), ...daysAfter(DELIVERED, 5)]);
-        yield* world.correct("scope_drift", daysAfter(DELIVERED, 8), otherProjectId);
+        yield* world.correct("defect", [...daysBefore(ADOPTED, 5), ...daysAfter(ADOPTED, 5)]);
+        yield* world.correct("scope_drift", daysAfter(ADOPTED, 8), otherProjectId);
 
         yield* TestClock.setTime(COMPLETE);
         yield* world.tick();
@@ -311,8 +317,8 @@ it.effect("skips a promotion whose after window is not complete, and judges it l
   scoped(
     Effect.gen(function* () {
       const world = yield* setup();
-      yield* world.deliver("scope_drift");
-      yield* world.correct("scope_drift", daysBefore(DELIVERED, 5));
+      yield* adopt(world, "scope_drift");
+      yield* world.correct("scope_drift", daysBefore(ADOPTED, 5));
 
       yield* TestClock.setTime(COMPLETE - 1);
       assert.deepStrictEqual(yield* world.tick(), { examined: 0, acted: 0, flags: 0 });
@@ -333,10 +339,13 @@ it.effect("never judges a promotion to local_only: there is no handover", () =>
   scoped(
     Effect.gen(function* () {
       const world = yield* setup();
-      // The rules send a defect to local_only, so this record is delivered by hand.
+      // The rules send a defect to local_only, which nothing hands over or adopts, so this record
+      // is written by hand.
       const { promotion } = yield* world.deliver("defect");
       assert.strictEqual(promotion.ownerKind, "local_only");
-      yield* world.correct("defect", daysBefore(DELIVERED, 5));
+      yield* world.sql`UPDATE learning_promotions SET state = 'adopted', adopted_at = ${iso(ADOPTED)}
+        WHERE id = ${promotion.id}`;
+      yield* world.correct("defect", daysBefore(ADOPTED, 5));
 
       yield* TestClock.setTime(COMPLETE);
       assert.deepStrictEqual(yield* world.tick(), { examined: 0, acted: 0, flags: 0 });
@@ -345,15 +354,80 @@ it.effect("never judges a promotion to local_only: there is no handover", () =>
   ),
 );
 
-it.effect("a second tick with nothing new writes nothing", () =>
+it.effect("measures from the adoption, not from when the draft went into review", () =>
+  scoped(
+    Effect.gen(function* () {
+      const world = yield* setup();
+      // In review for twenty days before a person adopts it.
+      yield* TestClock.setTime(ADOPTED - 20 * DAY);
+      const { promotion } = yield* world.deliver("scope_drift");
+      yield* TestClock.setTime(ADOPTED);
+      assert.strictEqual((yield* world.review(promotion.id, "adopt")).adoptedAt, iso(ADOPTED));
+      // Five while it was in review, none since it was adopted. From the delivery these would all
+      // be after it, with none before: inconclusive.
+      yield* world.correct("scope_drift", daysBefore(ADOPTED, 5));
+
+      // Four weeks after the delivery, but not after the adoption: nothing is due.
+      yield* TestClock.setTime(ADOPTED + 8 * DAY);
+      assert.deepStrictEqual(yield* world.tick(), { examined: 0, acted: 0, flags: 0 });
+
+      yield* TestClock.setTime(COMPLETE);
+      assert.deepStrictEqual(yield* world.tick(), { examined: 1, acted: 1, flags: 1 });
+      assert.deepStrictEqual(yield* world.outcomes, [
+        { promotion_id: promotion.id, judged_at: iso(COMPLETE), verdict: "settled" },
+      ]);
+    }),
+  ),
+);
+
+it.effect("never judges a promotion that was not adopted", () =>
   scoped(
     Effect.gen(function* () {
       const world = yield* setup();
       yield* world.deliver("scope_drift");
-      yield* world.correct("scope_drift", [
-        ...daysBefore(DELIVERED, 5),
-        ...daysAfter(DELIVERED, 4),
-      ]);
+      const rejected = yield* world.deliver("convention");
+      yield* world.review(rejected.promotion.id, "reject");
+      yield* world.correct("scope_drift", daysBefore(ADOPTED, 5));
+      yield* world.correct("convention", daysBefore(ADOPTED, 5));
+
+      yield* TestClock.setTime(COMPLETE + 30 * DAY);
+      assert.deepStrictEqual(yield* world.tick(), { examined: 0, acted: 0, flags: 0 });
+      assert.deepStrictEqual(yield* world.outcomes, []);
+    }),
+  ),
+);
+
+it.effect("a rollback clears the promotion's flag, and one rolled back early is never judged", () =>
+  scoped(
+    Effect.gen(function* () {
+      const world = yield* setup();
+      const judged = yield* adopt(world, "scope_drift");
+      const early = yield* adopt(world, "convention");
+      yield* world.correct("scope_drift", [...daysBefore(ADOPTED, 5), ...daysAfter(ADOPTED, 4)]);
+      yield* world.correct("convention", daysBefore(ADOPTED, 5));
+      yield* TestClock.setTime(ADOPTED + 3 * DAY);
+      yield* world.items.rollBackPromotion({ promotionId: early.promotion.id }, "user");
+
+      yield* TestClock.setTime(COMPLETE);
+      assert.deepStrictEqual(yield* world.tick(), { examined: 1, acted: 1, flags: 1 });
+      assert.deepStrictEqual(
+        (yield* world.outcomes).map((row) => row.promotion_id),
+        [judged.promotion.id],
+      );
+
+      yield* world.items.rollBackPromotion({ promotionId: judged.promotion.id }, "user");
+      assert.deepStrictEqual(yield* world.tick(), { examined: 1, acted: 1, flags: 0 });
+      assert.deepStrictEqual(yield* world.attention.listAllOpen, []);
+    }),
+  ),
+);
+
+it.effect("a second tick with nothing new writes nothing", () =>
+  scoped(
+    Effect.gen(function* () {
+      const world = yield* setup();
+      yield* adopt(world, "scope_drift");
+      yield* world.correct("scope_drift", [...daysBefore(ADOPTED, 5), ...daysAfter(ADOPTED, 4)]);
       yield* TestClock.setTime(COMPLETE);
       yield* world.tick();
       const outcomes = yield* world.outcomes;
@@ -372,11 +446,8 @@ it.effect("a dry run counts what it would do and writes nothing", () =>
   scoped(
     Effect.gen(function* () {
       const world = yield* setup();
-      yield* world.deliver("scope_drift");
-      yield* world.correct("scope_drift", [
-        ...daysBefore(DELIVERED, 5),
-        ...daysAfter(DELIVERED, 4),
-      ]);
+      yield* adopt(world, "scope_drift");
+      yield* world.correct("scope_drift", [...daysBefore(ADOPTED, 5), ...daysAfter(ADOPTED, 4)]);
       yield* TestClock.setTime(COMPLETE);
 
       assert.deepStrictEqual(yield* world.tick(true), { examined: 1, acted: 1, flags: 1 });
@@ -398,11 +469,8 @@ it.effect.each(["close", "reroute"] as const)(
     scoped(
       Effect.gen(function* () {
         const world = yield* setup();
-        const { item } = yield* world.deliver("scope_drift");
-        yield* world.correct("scope_drift", [
-          ...daysBefore(DELIVERED, 5),
-          ...daysAfter(DELIVERED, 4),
-        ]);
+        const { item } = yield* adopt(world, "scope_drift");
+        yield* world.correct("scope_drift", [...daysBefore(ADOPTED, 5), ...daysAfter(ADOPTED, 4)]);
         yield* TestClock.setTime(COMPLETE);
         yield* world.tick();
         assert.lengthOf(yield* world.attention.listAllOpen, 1);
@@ -432,12 +500,9 @@ it.effect("a person who closed the item before the judgment gets a verdict and n
   scoped(
     Effect.gen(function* () {
       const world = yield* setup();
-      const { item } = yield* world.deliver("scope_drift");
-      yield* world.correct("scope_drift", [
-        ...daysBefore(DELIVERED, 5),
-        ...daysAfter(DELIVERED, 4),
-      ]);
-      yield* TestClock.setTime(DELIVERED + 10 * DAY);
+      const { item } = yield* adopt(world, "scope_drift");
+      yield* world.correct("scope_drift", [...daysBefore(ADOPTED, 5), ...daysAfter(ADOPTED, 4)]);
+      yield* TestClock.setTime(ADOPTED + 10 * DAY);
       yield* world.items.setDisposition({ id: item.id, state: "closed" });
 
       yield* TestClock.setTime(COMPLETE);
@@ -485,8 +550,8 @@ it.effect(
         // The reactor's drain completes when it holds every committed event; this one is let go by hand.
         const caught = yield* Deferred.make<void>();
         const world = yield* setup({ caughtUp: Deferred.await(caught) });
-        yield* world.deliver("scope_drift");
-        yield* world.correct("scope_drift", daysBefore(DELIVERED, 5));
+        yield* adopt(world, "scope_drift");
+        yield* world.correct("scope_drift", daysBefore(ADOPTED, 5));
 
         yield* TestClock.setTime(COMPLETE);
         // The corrections may be missing some, so the due promotion is counted, not judged, and no
@@ -513,8 +578,8 @@ it.effect(
     scoped(
       Effect.gen(function* () {
         const world = yield* setup();
-        yield* world.deliver("scope_drift");
-        yield* world.correct("scope_drift", daysBefore(DELIVERED, 5));
+        yield* adopt(world, "scope_drift");
+        yield* world.correct("scope_drift", daysBefore(ADOPTED, 5));
         // The reactor's own shape for an event it moved past; it retries only rows under five
         // attempts, so nothing clears this one mid-test.
         yield* world.sql`INSERT INTO host_reactor_failure (sequence, type, attempts, last_error, failed_at)

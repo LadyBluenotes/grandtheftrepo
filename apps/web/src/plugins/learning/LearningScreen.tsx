@@ -23,6 +23,7 @@ import { isElectron } from "~/env";
 import { useProjects } from "~/state/entities";
 import { CorrectionsTable } from "./CorrectionsTable";
 import { ItemsTable } from "./ItemsTable";
+import { PromptsTable } from "./PromptsTable";
 import { ReviewsTable } from "./ReviewsTable";
 import {
   followOpenItem,
@@ -35,15 +36,15 @@ import { PluginNotice } from "../PluginsPage";
 import { usePluginScreenSearch } from "../pluginScreenSearch";
 import { usePluginEnvironmentId, usePluginStatuses } from "../pluginState";
 
-const TABS = ["items", "corrections", "reviews"] as const;
+const TABS = ["items", "corrections", "prompts", "reviews"] as const;
 type Tab = (typeof TABS)[number];
 const isTab = (value: unknown): value is Tab => (TABS as ReadonlyArray<unknown>).includes(value);
 
 /**
- * `/plugins/learning`: one project's learning items, the corrections behind them and, while the
- * review plugin runs, one thread's verdicts and requests. The tab and the open item, by
- * `recordId`, are in the URL. The project is the environment's first until a person picks
- * another, or an item the URL opens selects its own; picking one resets the tabs' filters and the
+ * `/plugins/learning`: one project's learning items, the corrections behind them, its prompt
+ * library and, while the review plugin runs, one thread's verdicts and requests. The tab and the
+ * open item, by `recordId`, are in the URL. The project is the environment's first until a person
+ * picks another, or an item the URL opens selects its own; picking one resets the tabs' filters and the
  * open item.
  */
 export function LearningScreen() {
@@ -108,6 +109,7 @@ export function LearningScreen() {
             >
               <Toggle value="items">Items</Toggle>
               <Toggle value="corrections">Corrections</Toggle>
+              <Toggle value="prompts">Prompts</Toggle>
               {reviewsOn ? <Toggle value="reviews">Reviews</Toggle> : null}
             </ToggleGroup>
           </div>
@@ -126,6 +128,12 @@ export function LearningScreen() {
                 />
               ) : view === "corrections" ? (
                 <CorrectionsTable
+                  key={`${environmentId}:${selected.id}`}
+                  environmentId={environmentId}
+                  projectId={selected.id}
+                />
+              ) : view === "prompts" ? (
+                <PromptsTable
                   key={`${environmentId}:${selected.id}`}
                   environmentId={environmentId}
                   projectId={selected.id}

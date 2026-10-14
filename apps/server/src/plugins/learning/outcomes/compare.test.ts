@@ -38,27 +38,27 @@ describe("judge", () => {
 });
 
 describe("windows", () => {
-  it("is 28 days either side of the delivery, with the delivery instant in the after window", () => {
+  it("is 28 days either side of the adoption, with the adoption instant in the after window", () => {
     assert.deepStrictEqual(windows("2026-10-01T12:00:00.000Z"), {
       before: { from: "2026-09-03T12:00:00.000Z", to: "2026-10-01T12:00:00.000Z" },
       after: { from: "2026-10-01T12:00:00.000Z", to: "2026-10-29T12:00:00.000Z" },
     });
   });
 
-  it("completes the after window exactly 28 days after the delivery", () => {
+  it("completes the after window exactly 28 days after the adoption", () => {
     const now = DateTime.makeUnsafe("2026-10-29T12:00:00.000Z");
     assert.strictEqual(latestComplete(now), "2026-10-01T12:00:00.000Z");
   });
 });
 
 describe("respondedTo", () => {
-  const delivered = "2026-10-01T12:00:00.000Z";
+  const adopted = "2026-10-01T12:00:00.000Z";
 
-  it("is true only for a disposition set after the delivery", () => {
-    assert.isTrue(respondedTo(delivered, "2026-10-01T12:00:00.001Z"));
-    assert.isFalse(respondedTo(delivered, delivered));
-    assert.isFalse(respondedTo(delivered, "2026-09-30T08:00:00.000Z"));
-    assert.isFalse(respondedTo(delivered, null));
+  it("is true only for a disposition set after the adoption", () => {
+    assert.isTrue(respondedTo(adopted, "2026-10-01T12:00:00.001Z"));
+    assert.isFalse(respondedTo(adopted, adopted));
+    assert.isFalse(respondedTo(adopted, "2026-09-30T08:00:00.000Z"));
+    assert.isFalse(respondedTo(adopted, null));
   });
 });
 
