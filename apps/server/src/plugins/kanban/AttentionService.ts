@@ -27,7 +27,10 @@ export class AttentionService extends Context.Service<
     readonly list: (
       projectId: ProjectId,
     ) => Effect.Effect<ReadonlyArray<KanbanAttentionRow>, KanbanError>;
-    /** `list` for several projects, reading the open flags once; a `policy:*` flag is there once. */
+    /**
+     * `list` for several projects, each once, reading the open flags once; a `policy:*` flag is
+     * there once.
+     */
     readonly listProjects: (
       projectIds: ReadonlyArray<ProjectId>,
     ) => Effect.Effect<ReadonlyArray<KanbanProjectAttentionRow>, KanbanError>;
@@ -91,8 +94,10 @@ const make = Effect.gen(function* () {
   const listProjects = Effect.fn("AttentionService.listProjects")(function* (
     projectIds: ReadonlyArray<ProjectId>,
   ) {
+    // Each project once, however often it was asked for.
+    const ids = [...new Set(projectIds)];
     const [projects, flags] = yield* Effect.all(
-      [Effect.forEach(projectIds, projectSources, { concurrency: 8 }), openFlags],
+      [Effect.forEach(ids, projectSources, { concurrency: 8 }), openFlags],
       { concurrency: "unbounded" },
     );
     return projectsAttentionRows({ projects, flags });

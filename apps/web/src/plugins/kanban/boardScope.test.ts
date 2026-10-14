@@ -1,4 +1,4 @@
-import { EnvironmentId, ProjectId } from "@t3tools/contracts";
+import { EnvironmentId, KANBAN_PROJECTS_MAX, ProjectId } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
 import { buildSidebarProjectSnapshots } from "~/sidebarProjectGrouping";
@@ -11,6 +11,7 @@ import {
   linkedOutsideScope,
   pickBoardProject,
   projectIdsByEnvironment,
+  scopeGroupLabels,
   scopedBoardProjects,
   subscribedBoards,
   type BoardEnvironment,
@@ -146,9 +147,62 @@ describe("projectIdsByEnvironment", () => {
       { environmentId: remote, active: true, folders: [], error: null },
     ]);
     expect(projectIdsByEnvironment(writable).toSorted(([a], [b]) => a.localeCompare(b))).toEqual([
-      [local, [appHere.id, notes.id]],
-      [remote, [appThere.id]],
+      [local, [[appHere.id, notes.id]]],
+      [remote, [[appThere.id]]],
     ]);
+  });
+
+  it("asks for each project once and splits an environment into reads the server takes", () => {
+    const many = Array.from({ length: KANBAN_PROJECTS_MAX + 1 }, (_, index) => ({
+      environmentId: local,
+      projectId: ProjectId.make(`p${String(index).padStart(4, "0")}`),
+    }));
+    const [[environmentId, reads] = [local, []]] = projectIdsByEnvironment([...many, many[0]!]);
+    expect(environmentId).toBe(local);
+    expect(reads.map((read) => read.length)).toEqual([KANBAN_PROJECTS_MAX, 1]);
+    expect(reads.flat()).toEqual(many.map((ref) => ref.projectId));
+  });
+});
+
+describe("scopeGroupLabels", () => {
+  const group = (p: Project, label: string | null) =>
+    buildSidebarProjectSnapshots({
+      projects: [p],
+      settings: { sidebarProjectGroupingMode: "repository", sidebarProjectGroupingOverrides: {} },
+      groupScratchProjects: true,
+      primaryEnvironmentId: local,
+      resolveEnvironmentLabel: () => label,
+    })[0]!;
+
+  it("tells groups of one name apart by environment, else path, else a short id", () => {
+    const here = group(
+      { ...project(local, "api-here", "api"), workspaceRoot: "/work/api" },
+      "Laptop",
+    );
+    const there = group(
+      { ...project(remote, "api-there", "api"), workspaceRoot: "/work/api" },
+      "Server",
+    );
+    const elsewhere = group(
+      { ...project(local, "api-other", "api"), workspaceRoot: "/srv/api" },
+      "Laptop",
+    );
+    // Environments with no label, at one path: only the id is left.
+    const unnamedHere = group(
+      { ...project(local, "api-here", "api"), workspaceRoot: "/work/api" },
+      null,
+    );
+    const unnamedThere = group(
+      { ...project(remote, "api-there", "api"), workspaceRoot: "/work/api" },
+      null,
+    );
+    const labels = (groups: ReadonlyArray<typeof here>) =>
+      groups.map((g) => scopeGroupLabels(groups).get(g.projectKey));
+
+    expect(labels([here, group(notes, "Laptop")])).toEqual(["api", "notes"]);
+    expect(labels([here, there])).toEqual(["api · Laptop", "api · Server"]);
+    expect(labels([here, elsewhere])).toEqual(["api · /work/api", "api · /srv/api"]);
+    expect(labels([unnamedHere, unnamedThere])).toEqual(["api · api-here", "api · api-ther"]);
   });
 });
 

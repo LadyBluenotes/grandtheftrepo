@@ -1836,6 +1836,17 @@ describe("boardFolders", () => {
       // Filing the first card starts the project's board.
       yield* store.write(projectId, "user", { action: "issue.create", title: "First" });
       assert.deepEqual(yield* withBoard(store, [otherId, projectId]), [otherId, projectId]);
+      // A project asked for twice is named once, and keeps its board.
+      assert.deepEqual(
+        (yield* store.boardFolders([projectId, otherId, projectId])).map((folder) => [
+          folder.projectId,
+          folder.board,
+        ]),
+        [
+          [projectId, true],
+          [otherId, true],
+        ],
+      );
     }).pipe(Effect.provide(layerTwoProjects(KanbanStore.layer))),
   );
 

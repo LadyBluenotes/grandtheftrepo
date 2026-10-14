@@ -257,6 +257,18 @@ it.effect("several projects read together list a policy of the whole environment
           ["budget_breach", projectB],
         ],
       );
+      // A project asked for twice is read and listed once.
+      assert.deepEqual(
+        (yield* listProjects([projectB, projectA, projectB])).map((row) => [
+          row.kind,
+          row.projectId,
+        ]),
+        [
+          ["question", projectA],
+          ["delivery_drift", null],
+          ["budget_breach", projectB],
+        ],
+      );
     }),
   ),
 );

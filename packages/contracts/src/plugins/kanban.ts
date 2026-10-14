@@ -399,8 +399,12 @@ export class KanbanError extends Schema.TaggedError<KanbanError>()("KanbanError"
 }) {}
 
 const KanbanProjectInput = Schema.Struct({ projectId: ProjectId });
+/** How many projects one read of several takes; a client splits a longer list into reads of this. */
+export const KANBAN_PROJECTS_MAX = 500;
 /** Several projects of one environment, read together. */
-const KanbanProjectsInput = Schema.Struct({ projectIds: Schema.Array(ProjectId) });
+const KanbanProjectsInput = Schema.Struct({
+  projectIds: Schema.Array(ProjectId).check(Schema.isMaxLength(KANBAN_PROJECTS_MAX)),
+});
 export const KanbanGetIssueInput = Schema.Struct({ projectId: ProjectId, id: KanbanSlug });
 export type KanbanGetIssueInput = typeof KanbanGetIssueInput.Type;
 export const KanbanListDecisionsInput = Schema.Struct({

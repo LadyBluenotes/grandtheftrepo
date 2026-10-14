@@ -253,15 +253,19 @@ const failureMessage = (result: AsyncResult.AsyncResult<unknown, unknown>) =>
 const kanbanBoardEnvironmentsFamily = Atom.family((key: string) => {
   const environments = projectIdsByEnvironment(parseProjectRefCollectionKey(key));
   return Atom.make((get): ReadonlyArray<BoardEnvironment> =>
-    environments.map(([environmentId, projectIds]) => {
+    environments.map(([environmentId, reads]) => {
       const active = get(kanbanActiveAtom(environmentId));
       if (active !== true) return { environmentId, active, folders: null, error: null };
-      const result = get(kanbanBoardFolders({ environmentId, input: { projectIds } }));
+      const results = reads.map((projectIds) =>
+        get(kanbanBoardFolders({ environmentId, input: { projectIds } })),
+      );
+      const parts = results.map((result) => Option.getOrNull(AsyncResult.value(result)));
       return {
         environmentId,
         active,
-        folders: Option.getOrNull(AsyncResult.value(result)),
-        error: failureMessage(result),
+        // Known once every read of the environment answers.
+        folders: parts.some((part) => part === null) ? null : parts.flatMap((part) => part ?? []),
+        error: results.map(failureMessage).find((message) => message !== null) ?? null,
       };
     }),
   ).pipe(Atom.withLabel(`kanban:board-environments:${key}`));
@@ -389,20 +393,20 @@ export type BoardAttentionRow = KanbanProjectAttentionRow & {
 
 const kanbanBoardAttentionFamily = Atom.family((key: string) => {
   const environments = projectIdsByEnvironment(parseProjectRefCollectionKey(key));
-  return Atom.make((get): ReadonlyArray<BoardAttentionRow> =>
-    environments
-      .flatMap(([environmentId, projectIds]) =>
-        (
-          Option.getOrNull(
-            AsyncResult.value(
-              get(kanbanProjectsAttention({ environmentId, input: { projectIds } })),
-            ),
-          ) ?? []
-        ).map((row) => ({ ...row, environmentId })),
-      )
-      // Each environment's rows are oldest first already; merging keeps that across them.
-      .toSorted((left, right) => order(left.since, right.since) || order(left.id, right.id)),
-  ).pipe(Atom.withLabel(`kanban:board-attention:${key}`));
+  return Atom.make((get): ReadonlyArray<BoardAttentionRow> => {
+    // Keyed by environment and row: each read of an environment lists its policies again.
+    const rows = new Map<string, BoardAttentionRow>();
+    for (const [environmentId, reads] of environments)
+      for (const projectIds of reads)
+        for (const row of Option.getOrNull(
+          AsyncResult.value(get(kanbanProjectsAttention({ environmentId, input: { projectIds } }))),
+        ) ?? [])
+          rows.set(`${environmentId}\u0000${row.id}`, { ...row, environmentId });
+    // Each read's rows are oldest first already; merging keeps that across them.
+    return [...rows.values()].toSorted(
+      (left, right) => order(left.since, right.since) || order(left.id, right.id),
+    );
+  }).pipe(Atom.withLabel(`kanban:board-attention:${key}`));
 });
 
 /**

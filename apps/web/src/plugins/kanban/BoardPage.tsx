@@ -90,6 +90,7 @@ import {
   linkedBoard,
   linkedOutsideScope,
   pickBoardProject,
+  scopeGroupLabels,
   scopedBoardProjects,
   subscribedBoards,
   type BoardEnvironment,
@@ -543,6 +544,7 @@ export function BoardPage({ search }: { readonly search: BoardSearch }) {
     [groups, persistedScope, settings],
   );
   const scopedGroup = groups.find((group) => group.projectKey === scopeKey) ?? null;
+  const groupLabels = useMemo(() => scopeGroupLabels(groups), [groups]);
   const scoped = useMemo(
     () => scopedBoardProjects(groups, scopeKey, projects),
     [groups, projects, scopeKey],
@@ -801,13 +803,17 @@ export function BoardPage({ search }: { readonly search: BoardSearch }) {
                 }}
               >
                 <SelectTrigger size="xs" variant="ghost" aria-label="Project">
-                  <SelectValue>{scopedGroup?.displayName ?? "All projects"}</SelectValue>
+                  <SelectValue>
+                    {scopedGroup === null
+                      ? "All projects"
+                      : (groupLabels.get(scopedGroup.projectKey) ?? scopedGroup.displayName)}
+                  </SelectValue>
                 </SelectTrigger>
                 <SelectPopup>
                   <SelectItem value={ALL_PROJECTS}>All projects</SelectItem>
                   {groups.map((group) => (
                     <SelectItem key={group.projectKey} value={group.projectKey}>
-                      {group.displayName}
+                      {groupLabels.get(group.projectKey) ?? group.displayName}
                     </SelectItem>
                   ))}
                 </SelectPopup>

@@ -222,10 +222,10 @@ export class KanbanStore extends Context.Service<
     /** The project's base folder as the board resolves it; unlike `board`, nothing is loaded or created. */
     readonly directory: (projectId: ProjectId) => Effect.Effect<string, KanbanError>;
     /**
-     * The board folder of each of `projectIds` that exists, in the given order, and whether the
-     * board is there: loaded, or its folder on disk. A folder several of them resolve to is the
-     * board of the first by id only. Nothing is created or loaded, so a project without one gets
-     * no folder or watcher.
+     * The board folder of each of `projectIds` that exists, in the given order and once each, and
+     * whether the board is there: loaded, or its folder on disk. A folder several of them resolve
+     * to is the board of the first by id only. Nothing is created or loaded, so a project without
+     * one gets no folder or watcher.
      */
     readonly boardFolders: (
       projectIds: ReadonlyArray<ProjectId>,
@@ -1305,23 +1305,28 @@ const make = Effect.gen(function* () {
       else directories[projectId] = directory;
       return { ...overrides, directories };
     };
-    const overrides = yield* readOverrides;
-    // A board keeps being one in its new folder; a project without one gets none from a move.
-    const hadBoard = yield* hasBoard(projectId, overrides);
-    // Staged before anything changes: a destination that cannot be created or read fails the move
-    // and leaves the board, its watchers and `kanban.json` as they were. It takes no lock.
-    if (hadBoard)
-      yield* openFolders((yield* resolveDirectory(projectId, withDirectory(overrides))).directory);
-    // Re-read under `overridesLock`, so a capture toggle made meanwhile is kept. Under `loadLock`
-    // first, as `setCapture` takes them, so a first load in flight can't cache the old folder.
-    yield* loadLock.withPermits(1)(
+    // Under `loadLock`, so no first load or first card lands between the check for a board and the
+    // move; none of the reads and checks inside takes it. `overridesLock` comes second, as in
+    // `setCapture`, and `updateOverrides` re-reads under it so a capture toggle made meanwhile is
+    // kept.
+    const hadBoard = yield* loadLock.withPermits(1)(
       Effect.gen(function* () {
+        const overrides = yield* readOverrides;
+        // A board keeps being one in its new folder; a project without one gets none from a move.
+        const hadBoard = yield* hasBoard(projectId, overrides);
+        // Staged before anything changes: a destination that cannot be created or read fails the
+        // move and leaves the board, its watchers and `kanban.json` as they were.
+        if (hadBoard)
+          yield* openFolders(
+            (yield* resolveDirectory(projectId, withDirectory(overrides))).directory,
+          );
         yield* updateOverrides(withDirectory);
         const previous = loaded.get(projectId);
         if (previous !== undefined) {
           loaded.delete(projectId);
           yield* Scope.close(previous.scope, Exit.void);
         }
+        return hadBoard;
       }),
     );
     // Loaded before this returns, so a client that asks `boardFolders` next still finds the
@@ -1399,7 +1404,9 @@ const make = Effect.gen(function* () {
     directory: (projectId) => Effect.map(resolveDirectory(projectId), ({ directory }) => directory),
     boardFolders: Effect.fn("KanbanStore.boardFolders")(function* (projectIds) {
       const overrides = yield* readOverrides;
-      const folders = (yield* Effect.forEach(projectIds, (id) => folderOf(id, overrides), {
+      // Each project once, however often it was asked for.
+      const ids = [...new Set(projectIds)];
+      const folders = (yield* Effect.forEach(ids, (id) => folderOf(id, overrides), {
         concurrency: 8,
       })).filter((folder) => folder !== null);
       // Two projects can resolve to one folder: the default is keyed by title, and two overrides

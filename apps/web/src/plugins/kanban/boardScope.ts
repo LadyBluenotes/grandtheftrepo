@@ -1,8 +1,9 @@
-import type {
-  EnvironmentId,
-  KanbanBoardFolder,
-  ProjectId,
-  ScopedProjectRef,
+import {
+  KANBAN_PROJECTS_MAX,
+  type EnvironmentId,
+  type KanbanBoardFolder,
+  type ProjectId,
+  type ScopedProjectRef,
 } from "@t3tools/contracts";
 
 import type { SidebarProjectSnapshot } from "~/sidebarProjectGrouping";
@@ -33,14 +34,70 @@ export interface BoardEnvironment {
 export const boardProjectKey = (ref: ScopedProjectRef) =>
   `${ref.environmentId}\u0000${ref.projectId}`;
 
-/** Project ids per environment, sorted, so the same projects make the same read in any order. */
+/**
+ * Project ids per environment, once each and sorted, so the same projects make the same reads in
+ * any order, split into reads of at most `KANBAN_PROJECTS_MAX`, the most one read takes.
+ */
 export function projectIdsByEnvironment(
   refs: ReadonlyArray<ScopedProjectRef>,
-): ReadonlyArray<readonly [EnvironmentId, ReadonlyArray<ProjectId>]> {
-  const grouped = new Map<EnvironmentId, Array<ProjectId>>();
+): ReadonlyArray<readonly [EnvironmentId, ReadonlyArray<ReadonlyArray<ProjectId>>]> {
+  const grouped = new Map<EnvironmentId, Set<ProjectId>>();
   for (const ref of refs)
-    grouped.set(ref.environmentId, [...(grouped.get(ref.environmentId) ?? []), ref.projectId]);
-  return [...grouped].map(([environmentId, projectIds]) => [environmentId, projectIds.toSorted()]);
+    grouped.set(
+      ref.environmentId,
+      (grouped.get(ref.environmentId) ?? new Set()).add(ref.projectId),
+    );
+  return [...grouped].map(([environmentId, ids]) => {
+    const sorted = [...ids].toSorted();
+    return [
+      environmentId,
+      Array.from({ length: Math.ceil(sorted.length / KANBAN_PROJECTS_MAX) }, (_, index) =>
+        sorted.slice(index * KANBAN_PROJECTS_MAX, (index + 1) * KANBAN_PROJECTS_MAX),
+      ),
+    ];
+  });
+}
+
+/**
+ * `items` with each label that more than one of them shares told apart, by the first of the item's
+ * `marks` that none of the others sharing it has, else by its last, a short id.
+ */
+function tellApart<T extends { readonly label: string }>(
+  items: ReadonlyArray<T>,
+  marks: (item: T) => ReadonlyArray<string | undefined>,
+): ReadonlyArray<T> {
+  const alike = new Map<string, Array<T>>();
+  for (const item of items) alike.set(item.label, [...(alike.get(item.label) ?? []), item]);
+  return items.map((item) => {
+    const others = (alike.get(item.label) ?? []).filter((other) => other !== item);
+    if (others.length === 0) return item;
+    const own = marks(item);
+    const mark =
+      own.find(
+        (candidate, index) =>
+          candidate !== undefined && others.every((other) => marks(other)[index] !== candidate),
+      ) ?? own.at(-1);
+    return { ...item, label: `${item.label} · ${mark}` };
+  });
+}
+
+/**
+ * The scope picker's name for each group, by its `projectKey`: the group's name, told apart from
+ * another group of that name by its environment, else its path, else a short id.
+ */
+export function scopeGroupLabels(
+  groups: ReadonlyArray<SidebarProjectSnapshot>,
+): ReadonlyMap<string, string> {
+  const named = tellApart(
+    groups.map((group) => ({ group, label: group.displayName })),
+    ({ group }) => [
+      group.memberProjects.find((member) => member.environmentId === group.environmentId)
+        ?.environmentLabel ?? undefined,
+      group.workspaceRoot,
+      group.id.slice(0, 8),
+    ],
+  );
+  return new Map(named.map(({ group, label }) => [group.projectKey, label]));
 }
 
 /**
@@ -81,20 +138,8 @@ export function scopedBoardProjects(
   }));
   // Projects that would read alike (two checkouts of a group on one environment, a path registered
   // twice, two groups of one name) are told apart by their paths, else by a short id.
-  const alike = new Map<string, Array<BoardProject>>();
-  for (const project of named)
-    alike.set(project.label, [...(alike.get(project.label) ?? []), project]);
   const pathOf = (ref: ScopedProjectRef) => workspaceRoots.get(boardProjectKey(ref));
-  return named.map((project) => {
-    const others = (alike.get(project.label) ?? []).filter((other) => other !== project);
-    if (others.length === 0) return project;
-    const path = pathOf(project);
-    const own = path !== undefined && others.every((other) => pathOf(other) !== path);
-    return {
-      ...project,
-      label: `${project.label} · ${own ? path : project.projectId.slice(0, 8)}`,
-    };
-  });
+  return tellApart(named, (project) => [pathOf(project), project.projectId.slice(0, 8)]);
 }
 
 /**
