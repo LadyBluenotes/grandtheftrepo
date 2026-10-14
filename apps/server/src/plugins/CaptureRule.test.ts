@@ -37,6 +37,7 @@ it.effect("tells every turn with the MCP server when to record, while kanban run
         yield* CaptureRule.install(allActive);
         for (const instructions of turnInstructions(true)) {
           assert.include(instructions, "`kanban_write` action `decision.create`");
+          assert.include(instructions, "`finding_search`, then record it with `finding_capture`");
           assert.include(instructions, "`learning_correction_add` with a `declaredMode`");
           assert.include(instructions, "`knowledge_propose`");
         }
@@ -81,6 +82,8 @@ it("names only tools the plugins register on the MCP server", () => {
   assert.includeMembers(named, [
     "kanban_list",
     "kanban_write",
+    "finding_search",
+    "finding_capture",
     "learning_correction_add",
     "knowledge_propose",
   ]);

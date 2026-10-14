@@ -440,7 +440,7 @@ const fakeKanban = Effect.gen(function* () {
     board: () =>
       Effect.map(Ref.get(issues), (all) => ({
         directory: "/wiki/project-a",
-        issues: all.map(({ criteria: _c, description: _d, log: _l, ...issue }) => ({
+        issues: all.map(({ criteria: _c, findings: _f, description: _d, log: _l, ...issue }) => ({
           ...issue,
           criteriaOpen: 0,
           criteriaTotal: 0,
@@ -469,6 +469,7 @@ const fakeKanban = Effect.gen(function* () {
             doneAt: null,
             archivedAt: null,
             criteria: [],
+            findings: [],
             description: write.description ?? "",
             log: [],
           });
