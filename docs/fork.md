@@ -163,11 +163,13 @@ them half-evaluated. The host hands `toolkitRegistration` to `ServerPlugin.mcp` 
   and the report five; nothing writes to the repo. A shape needs more than the earlier columns, so
   migration 5 adds each call's provider turn, which groups a subagent's calls with no run, its
   search pattern, a dynamic tool's input keys, and the input's size and sha256, never the input,
-  and replays the log; a call a compaction removed before then has no shape, and neither does a
-  command line as long as the 512 characters kept of it. Absolute paths that resolve under the
-  project's directory, which `MeasureService` reads from `ProjectService` when it is built, are
-  made relative to it. Neither measure reads a tier; the share is a rate the regression sweep
-  compares, the count a volume it does not.
+  and replays the log; a call a compaction removed before then has no shape. A command's shape
+  puts quoted strings as `<str>`, and only 512 characters of a command line are kept, so an
+  interpreter's inline script (`node -e`, `python3 -c`, a heredoc) and any command line that long
+  are shaped by that sha256 instead, `script:<program>:<digest prefix>`, and a candidate's example names the stored calls, never their text. Absolute paths that resolve under the project's
+  directory, which `MeasureService` reads from `ProjectService` when it is built, are made relative
+  to it. Neither measure reads a tier; the share is a rate the regression sweep compares, the count
+  a volume it does not.
   `telemetry.report` and the `telemetry_report` MCP tool fold a project's range
   into ten sections, from the thread records, the learning and review plugins and the host's
   attention flags, with the same report as one self-contained HTML page; at start the plugin gives
