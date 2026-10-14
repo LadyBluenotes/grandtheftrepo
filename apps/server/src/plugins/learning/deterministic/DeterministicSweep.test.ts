@@ -612,55 +612,33 @@ it.effect(
     ),
 );
 
-it.effect(
-  "accepting a draft script adds it to the project's scripts, once, keeping an edit made meanwhile",
-  () =>
-    Effect.scoped(
-      Effect.gen(function* () {
-        const world = yield* setup();
-        world.weeks.set(WEEK_1, [candidate("acce970000000001")]);
-        yield* world.tick();
-        const [proposal] = yield* world.store.list({ projectId: projectA.id });
-        const real = Context.get(
-          yield* Layer.build(ServerSettings.layerTest()),
-          ServerSettings.ServerSettingsService,
-        );
-        // A person saves the project's actions and its thread mode just before the accept's write
-        // takes the settings lock, after anything the accept could have read.
-        const lint = {
-          id: "lint",
-          name: "Lint",
-          command: "vp lint",
-          icon: "lint",
-          runOnWorktreeCreate: false,
-        } as const;
-        const edit = real.updateSettings({
-          projectSettingsOverrides: {
-            [projectA.id]: { defaultThreadEnvMode: "worktree", defaultProjectScripts: [lint] },
-          },
-        });
-        const settings = Context.make(ServerSettings.ServerSettingsService, {
-          ...real,
-          getSettings: real.getSettings.pipe(Effect.tap(() => edit)),
-          modifySettings: (patch) => edit.pipe(Effect.andThen(real.modifySettings!(patch))),
-        });
+it.effect("accepting a draft script adds it to the project's scripts, once", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const world = yield* setup();
+      world.weeks.set(WEEK_1, [candidate("acce970000000001")]);
+      yield* world.tick();
+      const [proposal] = yield* world.store.list({ projectId: projectA.id });
+      const settings = yield* Layer.build(ServerSettings.layerTest());
 
-        const accepted = yield* world.store.accept(proposal!.id).pipe(Effect.provide(settings));
-        assert.deepInclude(accepted, { state: "accepted", decidedBy: "user" });
-        const saved = (yield* real.getSettings).projectSettingsOverrides[projectA.id];
-        assert.strictEqual(saved?.defaultThreadEnvMode, "worktree");
-        assert.deepEqual(
-          saved?.defaultProjectScripts?.map((s) => s.id),
-          ["lint", "repeated-acce97000000"],
-        );
-        // Accepted once: a second accept is refused, and the flag clears on the next tick.
-        const again = yield* Effect.flip(
-          world.store.accept(proposal!.id).pipe(Effect.provide(settings)),
-        );
-        assert.strictEqual(again.code, "invalid");
-        assert.deepEqual(yield* world.tick(), { examined: 0, acted: 1, flags: 0 });
-      }),
-    ),
+      const accepted = yield* world.store.accept(proposal!.id).pipe(Effect.provide(settings));
+      assert.deepInclude(accepted, { state: "accepted", decidedBy: "user" });
+      const saved = yield* Effect.provide(
+        ServerSettings.ServerSettingsService.pipe(Effect.flatMap((s) => s.getSettings)),
+        settings,
+      );
+      assert.deepEqual(
+        saved.projectSettingsOverrides[projectA.id]?.defaultProjectScripts?.map((s) => s.id),
+        ["repeated-acce97000000"],
+      );
+      // Accepted once: a second accept is refused, and the flag clears on the next tick.
+      const again = yield* Effect.flip(
+        world.store.accept(proposal!.id).pipe(Effect.provide(settings)),
+      );
+      assert.strictEqual(again.code, "invalid");
+      assert.deepEqual(yield* world.tick(), { examined: 0, acted: 1, flags: 0 });
+    }),
+  ),
 );
 
 it.effect("every undecided proposal is listed first, however many were decided after it", () =>

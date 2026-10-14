@@ -42,17 +42,10 @@ import { When } from "./When";
  * the search waits for typing to pause. A row's title opens the drawer, as does New prompt;
  * whatever the drawer changes refetches the list.
  */
-export function PromptsTable({
-  environmentId,
-  projectId,
-  initialOpen = null,
-}: LearningScope & {
-  /** A prompt a link opened, by `recordId`, shown in the drawer as the tab mounts. */
-  readonly initialOpen?: number | null;
-}) {
+export function PromptsTable({ environmentId, projectId }: LearningScope) {
   const [state, setState] = useState<PromptState | null>(null);
   const [query, setQuery] = useState("");
-  const [open, setOpen] = useState<number | "new" | null>(initialOpen);
+  const [open, setOpen] = useState<number | "new" | null>(null);
   const search = useDebouncedValue(query, 250);
   const prompts = usePrompts({ environmentId, projectId }, { state, query: search });
   const { canWrite } = usePromptCommands(environmentId);

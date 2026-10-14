@@ -188,26 +188,21 @@ export const make = Effect.gen(function* () {
       switch (draft.kind) {
         case "script": {
           const service = yield* settings;
-          const modify = Option.isSome(service) ? service.value.modifySettings : undefined;
-          if (modify === undefined) {
+          if (Option.isNone(service)) {
             return yield* inactive("Project settings are not available on this server.");
           }
           const shell = yield* projects.getShell(projectId);
           if (Option.isNone(shell)) return yield* invalid(`Project ${projectId} no longer exists.`);
-          // Read, checked and appended under the settings write lock, so an edit to the project's
-          // actions or overrides made meanwhile is kept.
-          yield* modify((current) => {
-            const scripts = resolveProjectScripts(current, shell.value);
-            return scripts.some((script) => script.id === draft.script.id)
-              ? {}
-              : {
-                  projectSettingsOverrides: {
-                    [projectId]: {
-                      ...current.projectSettingsOverrides[projectId],
-                      defaultProjectScripts: [...scripts, draft.script],
-                    },
-                  },
-                };
+          const current = yield* service.value.getSettings;
+          const scripts = resolveProjectScripts(current, shell.value);
+          if (scripts.some((script) => script.id === draft.script.id)) return;
+          yield* service.value.updateSettings({
+            projectSettingsOverrides: {
+              [projectId]: {
+                ...current.projectSettingsOverrides[projectId],
+                defaultProjectScripts: [...scripts, draft.script],
+              },
+            },
           });
           return;
         }
