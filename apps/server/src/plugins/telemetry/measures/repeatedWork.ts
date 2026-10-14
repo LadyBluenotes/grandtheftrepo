@@ -207,7 +207,7 @@ interface Occurrence {
   readonly start: number;
 }
 
-/** Shapes in a row that runs in at least three threads hold, from one list of shapes. */
+/** Shapes in a row that occur in runs of at least three threads, from one list of shapes. */
 interface Found {
   readonly steps: ReadonlyArray<string>;
   readonly key: string;
@@ -219,8 +219,8 @@ const stepsAt = ({ run, start }: Occurrence, length: number) =>
   run.steps.slice(start, start + length);
 
 /**
- * Every window of one to six shapes in a row, from each run's `list` shapes, that runs in at
- * least three threads hold. A window is counted only when both windows one shape shorter were
+ * Every window of one to six shapes in a row, from each run's `list` shapes, that occurs in runs
+ * of at least three threads. A window is counted only when both windows one shape shorter were
  * found, since it cannot be in more threads than either.
  */
 const mine = (runs: ReadonlyArray<Run>, list: List) => {
