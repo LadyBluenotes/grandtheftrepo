@@ -121,50 +121,59 @@ const run = (
   contextHandoffId: null,
 });
 
+/** The agent's reply in the thread's one run, still streaming or complete. */
+const replyItem = (threadId: ThreadId, text: string, streaming = false) => {
+  const runId = RunId.make(`run:${threadId}`);
+  return {
+    ...eventBase(),
+    type: "turn-item.updated",
+    threadId,
+    runId,
+    payload: {
+      id: TurnItemId.make(`item:${threadId}`),
+      threadId,
+      runId,
+      nodeId: null,
+      providerThreadId: null,
+      providerTurnId: null,
+      nativeItemRef: null,
+      parentItemId: null,
+      ordinal: 1,
+      status: streaming ? "running" : "completed",
+      title: null,
+      startedAt: at,
+      completedAt: streaming ? null : at,
+      updatedAt: at,
+      type: "assistant_message",
+      messageId: MessageId.make(`message:${threadId}:1`),
+      text,
+      streaming,
+    },
+  } satisfies OrchestrationV2DomainEvent;
+};
+
+/** The thread's one run, at `status`. */
+const runUpdated = (threadId: ThreadId, status: OrchestrationV2Run["status"]) => {
+  const runId = RunId.make(`run:${threadId}`);
+  return {
+    ...eventBase(),
+    type: "run.updated",
+    threadId,
+    runId,
+    payload: run(threadId, runId, status),
+  } satisfies OrchestrationV2DomainEvent;
+};
+
 /** A thread that ran one turn ending with `reply`, as the orchestrator records it. */
 const turn = (
   threadId: ThreadId,
   title: string,
   reply: string,
-): ReadonlyArray<OrchestrationV2DomainEvent> => {
-  const runId = RunId.make(`run:${threadId}`);
-  return [
-    { ...eventBase(), type: "thread.created", threadId, payload: appThread(threadId, title) },
-    {
-      ...eventBase(),
-      type: "turn-item.updated",
-      threadId,
-      runId,
-      payload: {
-        id: TurnItemId.make(`item:${threadId}`),
-        threadId,
-        runId,
-        nodeId: null,
-        providerThreadId: null,
-        providerTurnId: null,
-        nativeItemRef: null,
-        parentItemId: null,
-        ordinal: 1,
-        status: "completed",
-        title: null,
-        startedAt: at,
-        completedAt: at,
-        updatedAt: at,
-        type: "assistant_message",
-        messageId: MessageId.make(`message:${threadId}:1`),
-        text: reply,
-        streaming: false,
-      },
-    },
-    {
-      ...eventBase(),
-      type: "run.updated",
-      threadId,
-      runId,
-      payload: run(threadId, runId, "completed"),
-    },
-  ];
-};
+): ReadonlyArray<OrchestrationV2DomainEvent> => [
+  { ...eventBase(), type: "thread.created", threadId, payload: appThread(threadId, title) },
+  replyItem(threadId, reply),
+  runUpdated(threadId, "completed"),
+];
 
 /** `thread.settled` for a thread settled at `settledAt`, which a repeated settle keeps. */
 const settled = (
@@ -433,6 +442,38 @@ describe("SettleCapture", () => {
           yield* react([settled(worked, "Cache token lookups", later)]);
           assert.strictEqual(launched.length, 2);
           assert.notStrictEqual(launched[1]!.threadId, launched[0]!.threadId);
+        }),
+      ).pipe(Effect.provide(layerTest)),
+  );
+
+  it.effect(
+    "a thread settled while its latest run still goes is read once that run ends, and only once",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const { store, launched, react } = yield* start;
+          yield* store.setCapture({ projectId, enabled: true });
+          yield* react([
+            {
+              ...eventBase(),
+              type: "thread.created",
+              threadId: worked,
+              payload: appThread(worked, "Cache token lookups"),
+            },
+            replyItem(worked, reply.slice(0, 40), true),
+            runUpdated(worked, "running"),
+            settled(worked, "Cache token lookups"),
+          ]);
+          // Half a reply is not the settlement's reply: nothing starts until the run ends.
+          assert.deepEqual(launched, []);
+
+          yield* react([replyItem(worked, reply), runUpdated(worked, "completed")]);
+          assert.strictEqual(launched.length, 1);
+          assert.include(launched[0]!.initialMessage!.text, reply);
+
+          // The settle redelivered, and the run's end again, start no second turn.
+          yield* react([settled(worked, "Cache token lookups"), runUpdated(worked, "completed")]);
+          assert.strictEqual(launched.length, 1);
         }),
       ).pipe(Effect.provide(layerTest)),
   );

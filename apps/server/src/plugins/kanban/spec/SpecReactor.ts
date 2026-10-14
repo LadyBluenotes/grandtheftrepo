@@ -20,7 +20,7 @@ export const handlers = (
   ({
     "run.updated": ({ event }) =>
       Effect.andThen(spec.finish(event.payload), capture.finish(event.payload)),
-    "thread.settled": ({ event }) => capture.settled(event.payload),
+    "thread.settled": ({ event }) => capture.settled(event.threadId),
   }) satisfies PluginReactor.Handlers<KanbanError>;
 
 /**

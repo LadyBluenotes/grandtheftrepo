@@ -9,7 +9,6 @@ import {
   KanbanSlug,
   ThreadId,
   TrimmedNonEmptyString,
-  type OrchestrationV2AppThread,
   type OrchestrationV2Run,
   type ProjectId,
 } from "@t3tools/contracts";
@@ -133,21 +132,26 @@ interface CaptureRow {
  * is named for the settlement, so a redelivered event resumes the same launch, and it is recorded
  * before the launch, so its run's end finds it. Kanban's own threads, these and spec drafting, are
  * never read: a capture thread settling starts nothing.
+ *
+ * Only the thread's current settlement is read, from the reply its latest run ended with. A settled
+ * thread's run can still be going, as when a failed workspace preparation is retried after the
+ * settle, so the settlement is also read when a run of the thread ends.
  */
 export class SettleCapture extends Context.Service<
   SettleCapture,
   {
     /**
-     * Starts the extraction turn for a thread that settled, on the cheap tier of the routing
-     * plugin, whose service the reactor's fiber reaches only through `PluginServices`. Without a
-     * cheap tier, or while the emergency stop is set, nothing starts, and that capture is not tried
-     * again.
+     * Starts the extraction turn for the thread's current settlement, once its latest run has
+     * ended, on the cheap tier of the routing plugin, whose service the reactor's fiber reaches
+     * only through `PluginServices`. Without a cheap tier, or while the emergency stop is set,
+     * nothing starts, and that capture is not tried again.
      */
-    readonly settled: (thread: OrchestrationV2AppThread) => Effect.Effect<void, KanbanError>;
+    readonly settled: (threadId: ThreadId) => Effect.Effect<void, KanbanError>;
     /**
      * Files the drafts of the capture whose thread `run` belongs to, once that run has completed,
      * then settles that thread. Drafts already recorded in the thread by then are left out, so a
-     * retry after a failed write files only what is still missing.
+     * retry after a failed write files only what is still missing. Any other thread's run that
+     * ends is a `settled` for that thread.
      */
     readonly finish: (run: OrchestrationV2Run) => Effect.Effect<void, KanbanError>;
   }
@@ -190,12 +194,14 @@ const make = Effect.gen(function* () {
       Effect.catchTags({ SqlError: io }),
     );
 
-  /** The last thing the agent said in the thread's latest run, if anything. */
+  /** The last thing the agent said in the thread's latest run, once that run has ended. */
   const lastReply = (threadId: ThreadId) =>
     Effect.gen(function* () {
-      const { runs } = yield* threads.getThreadRecords(threadId, ["runs"]);
-      const latest = runs.toSorted((a, b) => a.ordinal - b.ordinal).at(-1);
-      if (latest === undefined) return undefined;
+      const latest = ThreadManagementService.latestRun(
+        yield* threads.getThreadRecords(threadId, ["runs"]),
+      );
+      if (latest === undefined || !ThreadManagementService.isTerminalRunStatus(latest.status))
+        return undefined;
       const { turnItems } = yield* threads.getThreadRecords(threadId, ["turnItems"], {
         turnItemRunId: latest.id,
         turnItemTypes: ["assistant_message", "proposed_plan"],
@@ -270,7 +276,10 @@ const make = Effect.gen(function* () {
     }).pipe(PluginServices.provide);
 
   const settled: SettleCapture["Service"]["settled"] = Effect.fn("SettleCapture.settled")(
-    function* (thread) {
+    function* (threadId) {
+      const { thread } = yield* threads
+        .getThreadRecords(threadId, [])
+        .pipe(Effect.catch(unreadable(threadId)));
       if (thread.settledAt === null) return;
       const settledAt = DateTime.formatIso(thread.settledAt);
       if (!(yield* store.captures(thread.projectId))) return;
@@ -322,7 +331,8 @@ const make = Effect.gen(function* () {
         Effect.catchTags({ SqlError: io }),
       );
       const capture = rows[0];
-      if (capture === undefined || run.status !== "completed") return;
+      if (capture === undefined) return yield* settled(run.threadId);
+      if (run.status !== "completed") return;
       const { turnItems } = yield* threads
         .getThreadRecords(run.threadId, ["turnItems"], {
           turnItemRunId: run.id,
