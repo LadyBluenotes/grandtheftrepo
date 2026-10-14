@@ -81,6 +81,10 @@ resolved by keeping the line.
 | `third-party-licenses.config.json`                           | the `Caveman reply rules` and `Ponytail ladder` entries at the end of `customNotices`, so the adapted policy text is credited in the app's license list             |
 | `scripts/build-desktop-artifact.ts`                          | in `createBuildConfig`, unsigned Mac builds get `identity: "-"`, `hardenedRuntime: false` and no GitHub update feed, plus their tests                               |
 | `packages/provider-core/.../orchestrationInstructions.ts`    | `export let` on `T3_CODE_ORCHESTRATION_INSTRUCTIONS` and `setPluginOrchestrationInstructions` at the end, which the host calls with the capture rule                |
+| `apps/web/src/components/chat/ComposerCommandMenu.tsx`       | `\| SavedPromptComposerItem` at the end of `ComposerCommandItem`, plus its import                                                                                   |
+| `apps/web/src/components/chat/ChatComposer.tsx`              | `composerMenuItems = useSavedPromptMenuItems(...)` after the menu items' `useMemo`, renamed `builtInComposerMenuItems`, plus its import                             |
+| `apps/web/src/components/chat/ChatComposer.tsx`              | the `saved-prompt` branch in `onSelectComposerItem`: `pickSavedPrompt(...)`, whose callback inserts the body as the skill branch does                               |
+| `apps/web/src/components/chat/ChatComposer.tsx`              | in `submitComposer`, `const sentPrompt = promptRef.current;` and, once `didDispatch`, `countSavedPromptUses(...)`                                                   |
 
 ## Plugin services and the type system
 
@@ -243,7 +247,12 @@ them half-evaluated. The host hands `toolkitRegistration` to `ServerPlugin.mcp` 
   reach the library with `prompt_search`, `prompt_save` and `prompt_get`; a save is proposed and
   needs a search id from the last 15 minutes, kept in memory, so it checked for a duplicate first.
   People save, edit, revert, accept, archive and unarchive through the `learning.prompt*` gateway
-  methods on the Learning screen's Prompts tab; `learning.promptsUse` counts a use. The `regressions` sweep compares each
+  methods on the Learning screen's Prompts tab. The web composer's `/` menu reads the thread's
+  project's active summaries when it opens and lists those whose title matches, most used first;
+  the tab re-reads that list after each change. Picking one loads the prompt and inserts its
+  latest body, or nothing once it is no longer active, and a send whose message still holds a body
+  picked into that draft calls `learning.promptsUse` to count a use
+  (`apps/web/src/plugins/learning/composerPrompts.ts`). The `regressions` sweep compares each
   project's telemetry measures over the last seven whole UTC days with the seven before, once a
   day, and opens or strengthens an `efficiency_regression:<measure>` item, with no owner kind, for
   each measure worse by its threshold in `regressions/thresholds.ts`, except a volume measure
@@ -278,7 +287,7 @@ them half-evaluated. The host hands `toolkitRegistration` to `ServerPlugin.mcp` 
   open, as it does once the record is rolled back; the sweep never closes or reroutes an item, and
   never judges `local_only`. Server:
   `apps/server/src/plugins/learning/`. Contracts:
-  `packages/contracts/src/plugins/learning.ts`, `prompts.ts` and `deterministic.ts`. Web: `apps/web/src/plugins/learning/`, the Learning screen at `/plugins/learning` with the items, corrections, prompts, deterministic proposals and reviews of a project; `recordId` opens an item, or on the Deterministic tab names the project. No mobile screen. User guide: [Learning](./user/learning.md).
+  `packages/contracts/src/plugins/learning.ts`, `prompts.ts` and `deterministic.ts`. Web: `apps/web/src/plugins/learning/`, the Learning screen at `/plugins/learning` with the items, corrections, prompts, deterministic proposals and reviews of a project; `recordId` opens an item, or on the Deterministic tab names the project. No mobile screen, and the mobile composer does not list prompts. User guide: [Learning](./user/learning.md).
 - **policy**: reviewed working rules per project (`*` is the whole environment), versioned in the
   plugin's database and rendered as one marked block each, with `<state dir>/RULES.md` ahead of
   the body, into the instruction file each agent reads from the user's home. Verify re-reads the
