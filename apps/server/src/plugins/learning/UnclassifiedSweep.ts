@@ -8,7 +8,12 @@ import * as CorrectionStore from "./CorrectionStore.ts";
 
 const PLUGIN_ID = "learning";
 const FLAG_KIND = "unowned_finding";
-const RESUME_ACTION = { label: "Open learning", target: "settings" } as const;
+const RESUME_ACTION = {
+  label: "Open corrections",
+  target: "plugin",
+  pluginId: PLUGIN_ID,
+  tab: "corrections",
+} as const;
 
 /** How many days a correction may stay without a mode before it is flagged. */
 const UNCLASSIFIED_AFTER_DAYS = 7;

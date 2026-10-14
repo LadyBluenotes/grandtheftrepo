@@ -241,6 +241,12 @@ it.effect(
             name: "learning_correction_declare",
             arguments: { id, declaredMode: "incomplete" },
           });
+        // `security` is the scan's to name, so a person or agent declaring it is refused.
+        const security = yield* rpc(10, "tools/call", {
+          name: "learning_correction_declare",
+          arguments: { id: bare.id, declaredMode: "security" },
+        });
+        expect(JSON.parse(security)).toMatchObject({ error: { code: -32602 } });
         const declared = decodeCorrection(resultText(yield* declare(bare.id)));
         expect([declared.declaredMode, declared.classifiedAt]).toEqual(["incomplete", null]);
         expect(JSON.parse(resultText(yield* declare(bare.id)))).toMatchObject({

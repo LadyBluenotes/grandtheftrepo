@@ -128,8 +128,10 @@ it.effect(
           ],
         );
         assert.deepEqual(JSON.parse(raised[0]?.resume_action ?? ""), {
-          label: "Open learning",
-          target: "settings",
+          label: "Open corrections",
+          target: "plugin",
+          pluginId: "learning",
+          tab: "corrections",
         });
         // Keyed to the project, so the board's strip and the weekly report list it, and only there.
         assert.isTrue(flagKeyedToProject(raised[0]?.thread_id ?? "", projectA));

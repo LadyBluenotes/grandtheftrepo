@@ -41,7 +41,7 @@ in the past seven days, [findings](#findings) nobody took on, or
 [corrections](./learning.md#corrections) left without a failure mode. A policy for the whole
 environment affects every project, so its flag is on every board. Each row names its thread, or the
 project for a flag about the whole project, and has a button that takes you to the thread, the
-board, or the Plugins page.
+board, the Plugins page, or a plugin's screen, such as Learning's Corrections tab.
 Rows cannot be dismissed: a row leaves on its own once its request is answered or its cause clears.
 Requests on settled or archived threads are not listed. A new flag shows up when you come back to
 the window or the board changes, and the strip is hidden while nothing waits.
