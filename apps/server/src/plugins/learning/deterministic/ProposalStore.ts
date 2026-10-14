@@ -233,7 +233,8 @@ const make = Effect.gen(function* () {
     sql<Row>`SELECT * FROM deterministic_proposals
       WHERE project_id = ${projectId}
         AND ((decided_at >= ${from} AND decided_at < ${to})
-          OR (state IN ('waiting', 'pending') AND window_from < ${to}))
+          OR (state IN ('waiting', 'pending')
+            AND strftime('%Y-%m-%dT%H:%M:%fZ', window_from, '+7 days') <= ${to}))
       ORDER BY id`.pipe(
       Effect.flatMap((rows) => Effect.forEach(rows, toProposal)),
       Effect.catchTags({ SqlError: failed, SchemaError: failed }),

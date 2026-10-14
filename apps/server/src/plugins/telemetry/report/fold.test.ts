@@ -410,6 +410,8 @@ it("could be deterministic: decided in the range or still undecided, accepted fi
         proposal(6, { windowFrom: FROM, createdAt: TO }),
         // Found in the week after the range: not yet there.
         proposal(7, { windowFrom: TO, createdAt: TO }),
+        // From a week that ends after the range: not yet there either.
+        proposal(8, { windowFrom: "2026-10-08T00:00:00.000Z", createdAt: TO }),
       ],
     },
   });

@@ -194,6 +194,9 @@ export const reportRange = (
  * The report over loaded rows: no clock, no database, so the same input always gives the same
  * report. A section whose plugin is off is `unavailable`, naming the plugin.
  */
+
+/** A proposal's source window: an undecided one counts once its week ended inside the range. */
+const PROPOSAL_WEEK_MS = 7 * 24 * 60 * 60 * 1000;
 export const foldReport = (input: ReportInput): TelemetryReport => {
   const inRange = (at: string | null) => at !== null && at >= input.from && at < input.to;
   const threads = input.threads.toSorted(byKeys((thread) => thread.id));
@@ -295,7 +298,9 @@ export const foldReport = (input: ReportInput): TelemetryReport => {
 
   const proposals: Section<"deterministic">["items"] = (learning?.proposals ?? [])
     .filter((proposal) =>
-      proposal.decidedAt === null ? proposal.windowFrom < input.to : inRange(proposal.decidedAt),
+      proposal.decidedAt === null
+        ? Date.parse(proposal.windowFrom) + PROPOSAL_WEEK_MS <= Date.parse(input.to)
+        : inRange(proposal.decidedAt),
     )
     .toSorted(
       byKeys(
