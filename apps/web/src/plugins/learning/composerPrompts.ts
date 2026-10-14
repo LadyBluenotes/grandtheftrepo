@@ -85,10 +85,11 @@ export function useSavedPromptMenuItems<T>(
     query === null || projectId === null ? null : activePromptsAtom({ environmentId, projectId }),
   );
   return useMemo(() => {
-    if (query === null || prompts.data === null) return items;
+    // A failed re-read keeps the last list, which may name prompts the server no longer serves.
+    if (query === null || prompts.data === null || prompts.error !== null) return items;
     const saved = savedPromptMenuItems(environmentId, prompts.data, query);
     return saved.length === 0 ? items : [...items, ...saved];
-  }, [environmentId, items, prompts.data, query]);
+  }, [environmentId, items, prompts.data, prompts.error, query]);
 }
 
 /**
