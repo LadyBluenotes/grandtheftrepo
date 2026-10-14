@@ -132,13 +132,17 @@ them half-evaluated. The host hands `toolkitRegistration` to `ServerPlugin.mcp` 
   attention flag when two agents write one project, and the `decisions` sweep one per conflicted
   decision, keyed
   `decision:<projectId>:<category>/<id>`; it sees only projects the store has loaded, so a flag on
-  one not loaded since the server started stays until the store next loads it. The `findings`
-  sweep keeps one `unowned_finding` flag per project, keyed `findings:<projectId>`, counting the
-  findings with no review on its unarchived Triage cards captured three or more days ago: a
-  finding's reviewer owns it, so any review takes it off the count. It reads every project through
-  `KanbanStore.issues`, which reads a board that is not loaded once from its issue files and
-  leaves it unloaded: no folder, watcher or archiving, so a tick costs no retained board and a dry
-  run changes nothing.
+  one not loaded since the server started stays until the store next loads it. Done also needs a
+  decision listing the issue or a `noDecision` reason, and no open finding, for an issue carrying
+  `closureCheck`, which every new issue does; files from before have none and stay exempt. A
+  settled or merged thread's card failing it gets a `closure_held` flag, keyed
+  `closure:<projectId>:<issueId>`, instead of Done, and the `closure` sweep clears it once the card
+  passes. The `findings` sweep keeps one `unowned_finding` flag per project, keyed
+  `findings:<projectId>`, counting the findings with no review on its unarchived Triage cards
+  captured three or more days ago: a finding's reviewer owns it, so any review takes it off the
+  count. It reads every project through `KanbanStore.issues`, which reads a board that is not
+  loaded once from its issue files and leaves it unloaded: no folder, watcher or archiving, so a
+  tick costs no retained board and a dry run changes nothing.
   `kanban.attention.list` feeds the strip above the board from the project's open host
   flags, its threads' pending questions and permission requests, and, while routing runs, its
   routing mismatches. The thread header's decision count reads `kanban.listDecisions` with

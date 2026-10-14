@@ -129,17 +129,32 @@ function IssueDetails({
   const [note, setNote] = useState("");
   const [blockReason, setBlockReason] = useState("");
   const [criterion, setCriterion] = useState("");
+  // Null while not being edited, so the field shows the reason as it is now, whoever set it.
+  const [noDecision, setNoDecision] = useState<string | null>(null);
   const [reopenTo, setReopenTo] = useState<KanbanStatus | null>(null);
   const [recording, setRecording] = useState(false);
   const [decisionTarget, setDecisionTarget] = useState<DecisionTarget | null>(null);
   const openIssue = useOpenBoardIssue();
   const [starting, setStarting] = useState(false);
 
-  const change = async (input: Omit<Parameters<typeof write>[0]["input"], "projectId">) =>
-    reportFailure(
-      "Could not update the issue",
-      await write({ environmentId, input: { projectId, ...input } }),
-    );
+  const change = async (input: Omit<Parameters<typeof write>[0]["input"], "projectId">) => {
+    const result = await write({ environmentId, input: { projectId, ...input } });
+    reportFailure("Could not update the issue", result);
+    return result;
+  };
+  /** Saves an edited no-decision reason that differs, then shows the issue's own again. */
+  const saveNoDecision = async () => {
+    const draft = noDecision;
+    if (draft === null) return;
+    const reason = draft.trim();
+    if (reason !== (issue.noDecision?.reason ?? "")) {
+      const result = await change({ action: "issue.noDecision", id: issue.id, reason });
+      // A failed save keeps the draft in the field, next to the error.
+      if (result._tag !== "Success") return;
+    }
+    // Text typed while the save ran is a newer draft, left for its own blur to save.
+    setNoDecision((current) => (current === draft ? null : current));
+  };
   const update = (patch: {
     title?: string;
     description?: string;
@@ -574,7 +589,11 @@ function IssueDetails({
               />
             ) : null}
             {decisions.length === 0 && !recording ? (
-              <p className="text-sm text-muted-foreground">None about this ticket.</p>
+              <p className="text-sm text-muted-foreground">
+                {issue.closureCheck && issue.noDecision === null
+                  ? "None about this ticket. Done needs one, or a reason none was needed."
+                  : "None about this ticket."}
+              </p>
             ) : (
               <ul className="flex flex-col gap-1.5">
                 {sortDecisions(decisions).map((decision) => (
@@ -589,6 +608,17 @@ function IssueDetails({
                 ))}
               </ul>
             )}
+            {issue.noDecision !== null || (decisions.length === 0 && canWrite) ? (
+              <Input
+                size="sm"
+                aria-label="Why no decision was needed"
+                value={noDecision ?? issue.noDecision?.reason ?? ""}
+                disabled={!canWrite}
+                placeholder="No decision needed, because…"
+                onChange={(event) => setNoDecision(event.target.value)}
+                onBlur={() => void saveNoDecision()}
+              />
+            ) : null}
             <DecisionDrawer
               environmentId={environmentId}
               projectId={projectId}

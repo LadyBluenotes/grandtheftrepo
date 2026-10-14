@@ -35,6 +35,8 @@ describe("KanbanFiles", () => {
           review: { by: "user", at: "2026-10-12T13:55:00.000Z", reason: "Path=/ is intended." },
         },
       ],
+      closureCheck: true,
+      noDecision: { reason: "A bug fix.", at: "2026-10-12T14:05:00.000Z", by: "user" },
       blocked: {
         reason: "Need a TTL decision",
         at: "2026-10-12T14:03:00.000Z",
@@ -92,6 +94,9 @@ describe("KanbanFiles", () => {
     assert.deepStrictEqual(parsed?.issue.criteria, []);
     assert.deepStrictEqual(parsed?.issue.findings, []);
     assert.strictEqual(parsed?.issue.reopened, null);
+    // A file without the marker predates the closure check, so it is exempt from it.
+    assert.strictEqual(parsed?.issue.closureCheck, false);
+    assert.strictEqual(parsed?.issue.noDecision, null);
     assert.strictEqual(parsed?.issue.updatedAt, "2026-10-12T00:00:00.000Z");
     assert.deepStrictEqual(parsed?.issue.log, []);
     assert.strictEqual(parsed?.issue.description, "Body only.");
