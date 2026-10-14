@@ -219,6 +219,7 @@ export const DECLARED_MODES = [
   "missing_verification",
   "convention",
   "unclear_spec",
+  "security",
 ] as const satisfies ReadonlyArray<LearningDeclaredMode>;
 export const isDeclaredMode = oneOf(DECLARED_MODES);
 export const DECLARED_MODE_LABEL: Record<LearningDeclaredMode, string> = {
@@ -228,6 +229,7 @@ export const DECLARED_MODE_LABEL: Record<LearningDeclaredMode, string> = {
   missing_verification: "Missing verification",
   convention: "Convention",
   unclear_spec: "Unclear spec",
+  security: "Security",
 };
 
 export const PROMOTION_STATE_LABEL: Record<LearningPromotion["state"], string> = {
