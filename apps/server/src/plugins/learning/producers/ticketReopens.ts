@@ -31,7 +31,8 @@ export const recordTicketReopen = Effect.fn("learning.recordTicketReopen")(funct
   if (Option.isNone(corrections) || thread === undefined || issue.reopened === null) return;
   const { reason, at } = issue.reopened;
   yield* corrections.value
-    .record({
+    .recordForProject({
+      projectId,
       threadId: thread.id,
       failureKind: "reopened_after_settlement",
       declaredMode: MODE_BY_REASON[reason],

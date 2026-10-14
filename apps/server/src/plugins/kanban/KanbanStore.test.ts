@@ -434,7 +434,8 @@ it.layer(layerTest)("KanbanStore", (it) => {
             const learning = yield* learningPlugin;
             const first = ThreadId.make("thr_reopen_first");
             const last = ThreadId.make("thr_reopen_last");
-            for (const id of [first, last]) yield* learning.remember(id);
+            // `last` is not projected into the learning plugin yet: a reopen still records it.
+            yield* learning.remember(first);
             const reopen = (
               title: string,
               reopenReason: "defect" | "scope_change",
