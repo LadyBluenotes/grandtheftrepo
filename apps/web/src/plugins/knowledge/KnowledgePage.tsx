@@ -45,6 +45,8 @@ import {
   useKnowledgeCommands,
   useKnowledgeDelivery,
   useKnowledgeEntries,
+  useKnowledgeLocation,
+  folderProblem,
 } from "./state";
 
 /**
@@ -62,6 +64,7 @@ export default function KnowledgePage() {
 
   const entries = useKnowledgeEntries(projectId);
   const delivery = useKnowledgeDelivery(projectId);
+  const location = useKnowledgeLocation(projectId);
   const commands = useKnowledgeCommands();
   const [busy, setBusy] = useState(false);
   const locked = busy || entries.isPending || delivery.isPending;
@@ -74,6 +77,7 @@ export default function KnowledgePage() {
     const result = await command();
     entries.refresh();
     delivery.refresh();
+    location.refresh();
     setBusy(false);
     if (result._tag === "Success" || isAtomCommandInterrupted(result)) return;
     const failure = squashAtomCommandFailure(result);
@@ -132,6 +136,19 @@ export default function KnowledgePage() {
         ) : (
           <ScrollArea className="min-h-0 flex-1">
             <WorkspacePageContainer>
+              <FolderSection
+                // The saved folder seeds the field; a new project or a save starts it over.
+                key={`${projectId}:${location.data?.directory ?? ""}`}
+                saved={location.data?.directory ?? null}
+                loaded={location.data !== undefined}
+                locked={locked || !commands.canWrite}
+                onSave={(directory) =>
+                  void run("Could not change the knowledge folder", () =>
+                    commands.setLocation(projectId, directory),
+                  )
+                }
+              />
+
               <SettingsSection
                 title="Delivery"
                 headerAction={
@@ -203,7 +220,7 @@ export default function KnowledgePage() {
                 {groups.accepted.length === 0 ? (
                   <SettingsRow
                     title="No pages"
-                    description="Accepted pages are written to the project's .knowledge directory and listed in each agent's instruction file."
+                    description="Accepted pages are written to the project's knowledge folder and listed in each agent's instruction file."
                   />
                 ) : (
                   groups.accepted.map((page) => (
@@ -250,6 +267,58 @@ export default function KnowledgePage() {
         )}
       </div>
     </SidebarInset>
+  );
+}
+
+/** Where this project's pages are written: its own `.knowledge`, or a folder on the server's machine. */
+function FolderSection({
+  saved,
+  loaded,
+  locked,
+  onSave,
+}: {
+  readonly saved: string | null;
+  readonly loaded: boolean;
+  readonly locked: boolean;
+  readonly onSave: (directory: string | null) => void;
+}) {
+  const [text, setText] = useState(saved ?? "");
+  const problem = text.trim() === (saved ?? "") ? null : folderProblem(text);
+  return (
+    <SettingsSection title="Folder">
+      <SettingsRow
+        title={saved ?? "The project's .knowledge directory"}
+        description="Pages already written elsewhere are left in place. A folder outside the project is listed by its full path, so it only works on the server's machine."
+        control={
+          saved === null ? undefined : (
+            <Button size="xs" variant="ghost-muted" disabled={locked} onClick={() => onSave(null)}>
+              Use the project's own
+            </Button>
+          )
+        }
+      >
+        <div className="flex items-center gap-1.5 pb-3">
+          <Input
+            size="sm"
+            aria-label="Knowledge folder"
+            placeholder="/Users/you/OneDrive/knowledge"
+            value={text}
+            disabled={locked || !loaded}
+            onChange={(event) => setText(event.target.value)}
+          />
+          <Button
+            size="xs"
+            disabled={locked || !loaded || text.trim() === (saved ?? "") || problem !== null}
+            onClick={() => onSave(text.trim())}
+          >
+            Save
+          </Button>
+        </div>
+        {problem === null || text.trim() === "" ? null : (
+          <p className="pb-3 text-xs text-destructive">{problem}</p>
+        )}
+      </SettingsRow>
+    </SettingsSection>
   );
 }
 

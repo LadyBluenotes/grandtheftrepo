@@ -36,6 +36,16 @@ const knowledgeVerify = createPluginRpcQueryAtomFamily(connectionAtomRuntime, {
   method: KNOWLEDGE_METHODS.verify,
 });
 
+const knowledgeLocation = createPluginRpcQueryAtomFamily(connectionAtomRuntime, {
+  label: "environment-data:plugins:knowledge-location",
+  method: KNOWLEDGE_METHODS.location,
+});
+
+const knowledgeSetLocation = createPluginRpcCommand(connectionAtomRuntime, {
+  label: "knowledge:setLocation",
+  method: KNOWLEDGE_METHODS.setLocation,
+});
+
 const knowledgeAccept = createPluginRpcCommand(connectionAtomRuntime, {
   label: "knowledge:accept",
   method: KNOWLEDGE_METHODS.accept,
@@ -81,6 +91,16 @@ export function useKnowledgeDelivery(projectId: ProjectId | null) {
   );
 }
 
+/** Where one project's pages are written; a null directory is the project's own `.knowledge`. */
+export function useKnowledgeLocation(projectId: ProjectId | null) {
+  const environmentId = usePluginEnvironmentId();
+  return useEnvironmentQuery(
+    environmentId === null || projectId === null
+      ? null
+      : knowledgeLocation({ environmentId, input: { projectId } }),
+  );
+}
+
 const notConnected = () =>
   Promise.resolve(
     AsyncResult.failure(
@@ -98,6 +118,7 @@ export function useKnowledgeCommands() {
   const runRetire = useAtomCommand(knowledgeRetire, { reportFailure: false });
   const runDiscard = useAtomCommand(knowledgeDiscard, { reportFailure: false });
   const runInstall = useAtomCommand(knowledgeInstall, { reportFailure: false });
+  const runSetLocation = useAtomCommand(knowledgeSetLocation, { reportFailure: false });
   const runPropose = useAtomCommand(knowledgePropose, { reportFailure: false });
   const canWrite = useAtomValue(knowledgeAccept.permissionAtom(environmentId));
   const canPropose = useAtomValue(knowledgePropose.permissionAtom(environmentId));
@@ -112,6 +133,10 @@ export function useKnowledgeCommands() {
       environmentId === null ? notConnected() : runDiscard({ environmentId, input: { id } }),
     install: (projectId: ProjectId) =>
       environmentId === null ? notConnected() : runInstall({ environmentId, input: { projectId } }),
+    setLocation: (projectId: ProjectId, directory: string | null) =>
+      environmentId === null
+        ? notConnected()
+        : runSetLocation({ environmentId, input: { projectId, directory } }),
     restore: (page: KnowledgeEntry) =>
       environmentId === null
         ? notConnected()
@@ -230,3 +255,12 @@ export const deliveryBadge = (status: KnowledgeVerifyResult["status"]) => DELIVE
 /** True when an install would change something for at least one agent in use. */
 export const needsInstall = (results: ReadonlyArray<KnowledgeVerifyResult>) =>
   results.some((result) => result.status !== "ok");
+
+/** Why a typed folder cannot be saved, or null when it can; the server holds the final say. */
+export function folderProblem(text: string): string | null {
+  const folder = text.trim();
+  if (folder.length === 0) return "Enter a folder, or use the project's own.";
+  if (!/^([/\\]|[A-Za-z]:[/\\])/.test(folder))
+    return "Use an absolute path on the server's machine.";
+  return null;
+}

@@ -396,3 +396,38 @@ it.effect(
       );
     }).pipe(Effect.provide(layerTest)),
 );
+
+it.effect(
+  "a folder of its own takes the pages and lists them by full path; null brings them back",
+  () =>
+    Effect.gen(function* () {
+      const store = yield* KnowledgeStore.KnowledgeStore;
+      const w = yield* world;
+      const elsewhere = `${w.root}-vault`;
+
+      assert.deepStrictEqual(yield* store.location({ projectId }), { projectId, directory: null });
+      assert.include(
+        yield* failure(store.setLocation({ projectId, directory: "notes" })),
+        "absolute path",
+      );
+
+      yield* accepted("db", "Where the database lives", "In sqlite.");
+      yield* store.setLocation({ projectId, directory: elsewhere });
+      assert.deepStrictEqual(yield* store.location({ projectId }), {
+        projectId,
+        directory: elsewhere,
+      });
+
+      assert.include(yield* w.fs.readFileString(`${elsewhere}/db.md`), "Where the database lives");
+      assert.include(yield* w.fs.readFileString(w.claudeFile), `- ${elsewhere}/db.md: Where`);
+      assert.deepStrictEqual(
+        (yield* store.verify({ projectId })).map((result) => result.status),
+        ["ok"],
+      );
+      assert.strictEqual((yield* store.pagePath(projectId))("db"), `${elsewhere}/db.md`);
+
+      yield* store.setLocation({ projectId, directory: null });
+      assert.include(yield* w.fs.readFileString(w.page("db")), "Where the database lives");
+      assert.include(yield* w.fs.readFileString(w.claudeFile), "- .knowledge/db.md: Where");
+    }).pipe(Effect.provide(layerTest)),
+);

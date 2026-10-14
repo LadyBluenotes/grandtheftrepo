@@ -6,7 +6,7 @@ import { PolicyAgent } from "./policy.ts";
 /** Where a project's accepted pages live, relative to its root. The one place it is named. */
 export const KNOWLEDGE_DIRECTORY = ".knowledge";
 
-/** A page's path relative to the project root, as the index block lists it. */
+/** A page's path relative to the project root, as the index block lists it by default. */
 export const knowledgePagePath = (key: string) => `${KNOWLEDGE_DIRECTORY}/${key}.md`;
 
 /** A page's file name under the project's knowledge directory, without `.md`; unique per project among pages not retired. */
@@ -93,6 +93,17 @@ export type KnowledgeIdInput = typeof KnowledgeIdInput.Type;
 export const KnowledgeProjectInput = Schema.Struct({ projectId: ProjectId });
 export type KnowledgeProjectInput = typeof KnowledgeProjectInput.Type;
 
+/**
+ * Where a project's pages are written, on the machine the server runs on; null is the project's
+ * own `.knowledge` directory. It is an absolute path, checked by the server, on one line because
+ * the index block lists each page by it.
+ */
+export const KnowledgeLocation = Schema.Struct({
+  projectId: ProjectId,
+  directory: Schema.NullOr(TrimmedNonEmptyString.check(Schema.isPattern(/^[^\r\n]*$/))),
+});
+export type KnowledgeLocation = typeof KnowledgeLocation.Type;
+
 /** One agent in use: its instruction file in the project, and whether this install changed it. */
 export const KnowledgeInstallResult = Schema.Struct({
   agent: PolicyAgent,
@@ -164,6 +175,24 @@ export const KNOWLEDGE_METHODS = definePluginMethods({
     gateway: "settingsWrite",
     input: KnowledgeProjectInput,
     output: Schema.Array(KnowledgeInstallResult),
+    error: KnowledgeError,
+  },
+  location: {
+    method: "knowledge.location",
+    gateway: "read",
+    input: KnowledgeProjectInput,
+    output: KnowledgeLocation,
+    error: KnowledgeError,
+  },
+  /**
+   * Moves where the project's pages are written, then installs there. Files already written in the
+   * old place are left as they are.
+   */
+  setLocation: {
+    method: "knowledge.setLocation",
+    gateway: "settingsWrite",
+    input: KnowledgeLocation,
+    output: KnowledgeLocation,
     error: KnowledgeError,
   },
   verify: {

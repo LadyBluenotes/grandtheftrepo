@@ -29,12 +29,20 @@ Agents list the accepted pages with the `knowledge_list` tool.
 are listed under **Retired**, where **Restore as draft** brings one back to accept again. To change
 an accepted page, retire it, restore it, edit the draft and accept it.
 
+## Folder
+
+Pages go to `.knowledge/` in the project by default. To keep them elsewhere, such as a OneDrive
+folder, a repository or a local directory, enter an absolute path under **Folder** and save. The
+setting is per project and applies to the machine that runs T3 Code. T3 Code writes the pages there
+and lists them in the index by full path. Pages already written in the old place stay where they
+are. **Use the project's own** goes back to `.knowledge/`.
+
 ## Delivery
 
 A project's instruction files are written only for the agents set up on the machine that runs T3
 Code: Claude Code, Codex or Copilot with its home directory present. **Delivery** shows, for each
 one, whether its files are up to date, changed by hand, or missing, and **Reinstall** writes them
-again. The pages in `.knowledge/` are written even when none of these agents is set up.
+again. The pages in the knowledge folder are written even when none of these agents is set up.
 
 Accepting and retiring write the files at once. When that write fails, or an agent is set up
 later, T3 Code catches up by itself once no thread in the project has a run, so the files never

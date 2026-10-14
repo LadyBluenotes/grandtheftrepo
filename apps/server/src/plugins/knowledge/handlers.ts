@@ -24,5 +24,7 @@ export const table = PluginRpc.defineHandlers(KNOWLEDGE_METHODS)({
   retire: (input) => Effect.flatMap(store, (pages) => pages.retire(input)),
   discard: (input) => Effect.flatMap(store, (pages) => pages.discard(input)),
   install: (input) => Effect.flatMap(store, (pages) => pages.install(input)),
+  location: (input) => Effect.flatMap(store, (pages) => pages.location(input)),
+  setLocation: (input) => Effect.flatMap(store, (pages) => pages.setLocation(input)),
   verify: (input) => Effect.flatMap(store, (pages) => pages.verify(input)),
 });

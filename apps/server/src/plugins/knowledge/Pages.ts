@@ -30,19 +30,24 @@ export interface Rendered {
   readonly block: { readonly text: string; readonly hash: string } | undefined;
 }
 
-/** What the accepted pages render to: each page with its title as the heading, and the index. */
+/**
+ * What the accepted pages render to: each page with its title as the heading, and the index.
+ * `pagePath` names a page's file as the index lists it; by default a path in the project, and a
+ * folder of the project's own gives an absolute one.
+ */
 export const render = (
   accepted: ReadonlyArray<{ readonly key: string; readonly title: string; readonly body: string }>,
+  pagePath: (key: string) => string = knowledgePagePath,
 ): Rendered => {
   const sorted = accepted.toSorted((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0));
   const content =
     sorted.length === 0
       ? undefined
-      : `${INDEX_LEAD}\n\n${sorted.map((page) => `- ${knowledgePagePath(page.key)}: ${page.title}`).join("\n")}\n`;
+      : `${INDEX_LEAD}\n\n${sorted.map((page) => `- ${pagePath(page.key)}: ${page.title}`).join("\n")}\n`;
   return {
     pages: sorted.map((page) => {
       const text = `# ${page.title}\n\n${page.body.trim()}\n`;
-      return { key: page.key, path: knowledgePagePath(page.key), text, hash: sha256(text) };
+      return { key: page.key, path: pagePath(page.key), text, hash: sha256(text) };
     }),
     block:
       content === undefined

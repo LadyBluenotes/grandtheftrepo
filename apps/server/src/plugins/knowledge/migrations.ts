@@ -41,4 +41,18 @@ export const migrations: ReadonlyArray<PluginMigration> = [
       `;
     }),
   ],
+  [
+    2,
+    "knowledge_location",
+    Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      // A project without a row keeps its pages in its own `.knowledge` directory.
+      yield* sql`
+        CREATE TABLE knowledge_location (
+          project_id TEXT PRIMARY KEY,
+          directory TEXT NOT NULL
+        )
+      `;
+    }),
+  ],
 ];

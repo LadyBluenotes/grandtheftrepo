@@ -13,6 +13,7 @@ import {
   type KnowledgeEntry,
   type KnowledgeInstallResult,
   type KnowledgeListInput,
+  type KnowledgeLocation,
   type KnowledgeProjectInput,
   type KnowledgeProposeInput,
   type KnowledgeIdInput,
@@ -142,6 +143,21 @@ export class KnowledgeStore extends Context.Service<
     readonly install: (
       input: KnowledgeProjectInput,
     ) => Effect.Effect<ReadonlyArray<KnowledgeInstallResult>, KnowledgeError>;
+    /** Where the project's pages are written; a null directory is its own `.knowledge`. */
+    readonly location: (
+      input: KnowledgeProjectInput,
+    ) => Effect.Effect<KnowledgeLocation, KnowledgeError>;
+    /**
+     * Moves the project's pages to `directory` (absolute, on this machine) or back to its own
+     * `.knowledge` with null, then installs. Files at the old place are left as they are.
+     */
+    readonly setLocation: (
+      input: KnowledgeLocation,
+    ) => Effect.Effect<KnowledgeLocation, KnowledgeError>;
+    /** A page's path as the index lists it, and as an agent reads it. */
+    readonly pagePath: (
+      projectId: ProjectId,
+    ) => Effect.Effect<(key: string) => string, KnowledgeError>;
     /** Re-reads the project's pages and each agent's index block against what renders now. */
     readonly verify: (
       input: KnowledgeProjectInput,
@@ -224,6 +240,9 @@ const make = Effect.gen(function* () {
   /** Installs read the files they rewrite, so two at once would drop one's change; verify shares it. */
   const installLock = yield* Semaphore.make(1);
   const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
+  /** A page's path as the index lists it: in the project by default, absolute in a folder of its own. */
+  const pagePathIn = (directory: string | null) => (key: string) =>
+    directory === null ? knowledgePagePath(key) : path.join(directory, `${key}.md`);
 
   /** Every page of the project, by key; a project holds a handful. */
   const entries = SqlSchema.findAll({
@@ -307,6 +326,18 @@ const make = Effect.gen(function* () {
     return project.value.workspaceRoot;
   });
 
+  const locationRow = SqlSchema.findOneOption({
+    Request: Schema.String,
+    Result: Schema.Struct({ directory: Schema.String }),
+    execute: (projectId) =>
+      sql`SELECT directory FROM knowledge_location WHERE project_id = ${projectId}`,
+  });
+  const directoryOf = (projectId: ProjectId) =>
+    Effect.map(
+      locationRow(projectId),
+      Option.match({ onNone: () => null, onSome: (r) => r.directory }),
+    );
+
   /** Agents whose home directory exists, resolved as the policy plugin resolves them. */
   const agentsInUse = Effect.fn("KnowledgeStore.agentsInUse")(function* () {
     const settings = yield* Effect.serviceOption(ServerSettings.ServerSettingsService);
@@ -328,10 +359,13 @@ const make = Effect.gen(function* () {
     const accepted = all.filter((entry) => entry.state === "accepted");
     const live = new Set(accepted.map((entry) => entry.key));
     const root = yield* projectRoot(projectId);
+    const directory = yield* directoryOf(projectId);
     const agents = yield* agentsInUse();
+    const pagePath = pagePathIn(directory);
     return {
-      rendered: Pages.render(accepted),
-      pageFile: (relative: string) => path.join(root, relative),
+      rendered: Pages.render(accepted, pagePath),
+      // An absolute page path stays where it is; a relative one is the project's.
+      pageFile: (page: string) => path.resolve(root, page),
       agents: agents.map((agent) => ({
         agent,
         path: path.join(root, Pages.PROJECT_INSTRUCTION_FILES[agent]),
@@ -341,7 +375,7 @@ const make = Effect.gen(function* () {
         ...new Set(
           all
             .filter((entry) => entry.state === "retired" && !live.has(entry.key))
-            .map((entry) => path.join(root, knowledgePagePath(entry.key))),
+            .map((entry) => path.resolve(root, pagePath(entry.key))),
         ),
       ],
     };
@@ -697,6 +731,61 @@ const make = Effect.gen(function* () {
     }),
   );
 
+  const location = Effect.fn("KnowledgeStore.location")(
+    function* ({ projectId }: KnowledgeProjectInput) {
+      yield* projectRoot(projectId);
+      return { projectId, directory: yield* directoryOf(projectId) };
+    },
+    Effect.catchTags({
+      SqlError: io("Could not read the location."),
+      SchemaError: io("Could not read the location."),
+      ProjectOperationError: io("Could not read the project."),
+    }),
+  );
+
+  const pagePath = Effect.fn("KnowledgeStore.pagePath")(
+    function* (projectId: ProjectId) {
+      return pagePathIn(yield* directoryOf(projectId));
+    },
+    Effect.catchTags({
+      SqlError: io("Could not read the location."),
+      SchemaError: io("Could not read the location."),
+    }),
+  );
+
+  const setLocation = Effect.fn("KnowledgeStore.setLocation")(
+    function* ({ projectId, directory }: KnowledgeLocation) {
+      yield* projectRoot(projectId);
+      if (directory !== null && !path.isAbsolute(directory)) {
+        return yield* invalid("A knowledge folder is an absolute path on the server's machine.");
+      }
+      if (directory === null) {
+        yield* sql`DELETE FROM knowledge_location WHERE project_id = ${projectId}`;
+      } else {
+        yield* sql`
+          INSERT INTO knowledge_location (project_id, directory) VALUES (${projectId}, ${directory})
+          ON CONFLICT(project_id) DO UPDATE SET directory = excluded.directory
+        `;
+      }
+      yield* install({ projectId }).pipe(
+        Effect.catchTags({
+          KnowledgeError: (error) =>
+            Effect.fail(
+              new KnowledgeError({
+                code: error.code,
+                message: `The folder is saved, but the install failed: ${error.message}`,
+              }),
+            ),
+        }),
+      );
+      return { projectId, directory };
+    },
+    Effect.catchTags({
+      SqlError: io("Could not save the location."),
+      ProjectOperationError: io("Could not read the project."),
+    }),
+  );
+
   /** Installs after a person changed what is accepted; a failure says the change itself stands. */
   const installAfter = (entry: KnowledgeEntry, done: string) =>
     install({ projectId: entry.projectId }).pipe(
@@ -844,6 +933,9 @@ const make = Effect.gen(function* () {
     retire,
     discard,
     install,
+    location,
+    setLocation,
+    pagePath,
     verify,
     status,
     drift,

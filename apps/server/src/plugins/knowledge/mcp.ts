@@ -4,7 +4,6 @@ import {
   KnowledgeEntry,
   KnowledgeKey,
   KnowledgeTitle,
-  knowledgePagePath,
   OrchestratorMcpFailure,
   ProjectId,
   type KnowledgeError,
@@ -108,7 +107,8 @@ export const handlers = McpToolAccess.toLayer(
           const projectId = yield* resolveProjectId(context, input.projectId);
           const pages = yield* (yield* store).list({ projectId, state: "accepted" });
           if (pages.length === 0) return "No accepted knowledge pages.";
-          return pages.map((page) => `${knowledgePagePath(page.key)}: ${page.title}`).join("\n");
+          const pagePath = yield* (yield* store).pagePath(projectId);
+          return pages.map((page) => `${pagePath(page.key)}: ${page.title}`).join("\n");
         }).pipe(Effect.catchTags({ KnowledgeError: (error) => Effect.fail(failure(error)) })),
       ),
     };
