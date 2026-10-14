@@ -96,7 +96,7 @@ describe("scopedBoardProjects", () => {
     ]);
   });
 
-  it("covers an older id registered at the same path, which can have a board of its own", () => {
+  it("covers an older id registered at the same path, told apart by a short id", () => {
     const older = { ...project(local, "notes-old", "notes"), workspaceRoot: notes.workspaceRoot };
     const both = [{ ...notes, updatedAt: "2026-02-01T00:00:00.000Z" }, older];
     const withOlder = buildSidebarProjectSnapshots({
@@ -108,10 +108,29 @@ describe("scopedBoardProjects", () => {
     });
     // The sidebar shows the fresher registration only, but scopes by both.
     expect(withOlder[0]?.memberProjects.map((p) => p.id)).toEqual([notes.id]);
+    // Both ids can have a board of their own; their shared path tells them apart no better.
     expect(scopedBoardProjects(withOlder, null, both)).toEqual([
-      { environmentId: local, projectId: notes.id, label: "notes" },
-      { environmentId: local, projectId: older.id, label: "notes" },
+      { environmentId: local, projectId: notes.id, label: "notes · notes" },
+      { environmentId: local, projectId: older.id, label: "notes · notes-ol" },
     ]);
+  });
+
+  it("tells two groups of one name on one environment apart by their paths", () => {
+    const api = { ...project(local, "api-a", "api"), workspaceRoot: "/work/a/api" };
+    const otherApi = { ...project(local, "api-b", "api"), workspaceRoot: "/work/b/api" };
+    const twoApis = buildSidebarProjectSnapshots({
+      projects: [api, otherApi],
+      settings: { sidebarProjectGroupingMode: "repository", sidebarProjectGroupingOverrides: {} },
+      groupScratchProjects: true,
+      primaryEnvironmentId: local,
+      resolveEnvironmentLabel: () => "Laptop",
+    });
+    expect(twoApis).toHaveLength(2);
+    expect(
+      scopedBoardProjects(twoApis, null, [api, otherApi])
+        .map((p) => p.label)
+        .toSorted(),
+    ).toEqual(["api · /work/a/api", "api · /work/b/api"]);
   });
 });
 

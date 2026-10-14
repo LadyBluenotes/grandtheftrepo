@@ -11,8 +11,8 @@ import type { Project } from "~/types";
 /** A project the board can show, named as the sidebar names its group. */
 export interface BoardProject extends ScopedProjectRef {
   /**
-   * The group's name, with the environment's label once the scope spans more than one, and the
-   * checkout's path when its group has another checkout on the same environment.
+   * The group's name, with the environment's label once the scope spans more than one, and, when
+   * another project would read the same, the checkout's path, or a short id where that is shared.
    */
   readonly label: string;
 }
@@ -66,21 +66,33 @@ export function scopedBoardProjects(
     ]),
   );
   const spansEnvironments = new Set(refs.map(({ ref }) => ref.environmentId)).size > 1;
-  return refs.map(({ group, ref }) => {
-    const onEnvironment = group.memberProjects.filter(
-      (member) => member.environmentId === ref.environmentId,
-    );
+  const named = refs.map(({ group, ref }) => ({
+    environmentId: ref.environmentId,
+    projectId: ref.projectId,
+    label: [
+      group.displayName,
+      spansEnvironments
+        ? (group.memberProjects.find((member) => member.environmentId === ref.environmentId)
+            ?.environmentLabel ?? null)
+        : null,
+    ]
+      .filter((part) => part !== null)
+      .join(" · "),
+  }));
+  // Projects that would read alike (two checkouts of a group on one environment, a path registered
+  // twice, two groups of one name) are told apart by their paths, else by a short id.
+  const alike = new Map<string, Array<BoardProject>>();
+  for (const project of named)
+    alike.set(project.label, [...(alike.get(project.label) ?? []), project]);
+  const pathOf = (ref: ScopedProjectRef) => workspaceRoots.get(boardProjectKey(ref));
+  return named.map((project) => {
+    const others = (alike.get(project.label) ?? []).filter((other) => other !== project);
+    if (others.length === 0) return project;
+    const path = pathOf(project);
+    const own = path !== undefined && others.every((other) => pathOf(other) !== path);
     return {
-      environmentId: ref.environmentId,
-      projectId: ref.projectId,
-      label: [
-        group.displayName,
-        spansEnvironments ? (onEnvironment[0]?.environmentLabel ?? null) : null,
-        // Two checkouts of the group on one environment are told apart by their paths.
-        onEnvironment.length > 1 ? (workspaceRoots.get(boardProjectKey(ref)) ?? null) : null,
-      ]
-        .filter((part) => part !== null)
-        .join(" · "),
+      ...project,
+      label: `${project.label} · ${own ? path : project.projectId.slice(0, 8)}`,
     };
   });
 }
