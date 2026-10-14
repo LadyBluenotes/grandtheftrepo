@@ -144,14 +144,16 @@ function IssueDetails({
   };
   /** Saves an edited no-decision reason that differs, then shows the issue's own again. */
   const saveNoDecision = async () => {
-    if (noDecision === null) return;
-    const reason = noDecision.trim();
+    const draft = noDecision;
+    if (draft === null) return;
+    const reason = draft.trim();
     if (reason !== (issue.noDecision?.reason ?? "")) {
       const result = await change({ action: "issue.noDecision", id: issue.id, reason });
       // A failed save keeps the draft in the field, next to the error.
       if (result._tag !== "Success") return;
     }
-    setNoDecision(null);
+    // Text typed while the save ran is a newer draft, left for its own blur to save.
+    setNoDecision((current) => (current === draft ? null : current));
   };
   const update = (patch: {
     title?: string;
