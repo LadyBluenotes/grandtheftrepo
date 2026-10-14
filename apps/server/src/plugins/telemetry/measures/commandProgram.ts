@@ -286,6 +286,9 @@ export const runsInlineScript = (command: string, depth = 0): boolean => {
     for (let index = at + 1; index < tokens.length; index += 1) {
       const token = tokens[index]!;
       if (inline?.has(token)) return true;
+      // `--eval=<script>` is one word; a short option never takes `=`.
+      const equals = token.indexOf("=");
+      if (token.startsWith("--") && equals > 0 && inline?.has(token.slice(0, equals))) return true;
       if (!token.startsWith("-") || token === "--") {
         return found.program === "deno" && token === "eval";
       }

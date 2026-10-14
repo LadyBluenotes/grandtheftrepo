@@ -236,6 +236,17 @@ it("finds the same 900-character heredoc script in three threads as one script c
   assert.deepEqual(candidates[0]?.example.scripts, [HEREDOC.slice(0, COMMAND_CHARS)]);
 });
 
+it("shows a script's stored head with what looks like a secret redacted", () => {
+  const script = sh(
+    "node -e 'fetch(url, { headers: { Authorization: \"Bearer abc123\" } })' API_KEY=sk-live-42",
+  );
+  const [candidate] = candidatesOf(windowOf([1, 2, 3].flatMap((n) => inThread(n, script))));
+  const shown = candidate?.example.scripts[0] ?? "";
+  assert.include(shown, "[redacted]");
+  assert.notInclude(shown, "abc123");
+  assert.notInclude(shown, "sk-live-42");
+});
+
 it("shapes a dynamic tool by its pattern and relative path, or else by its input's keys", () => {
   const shape = (overrides: Partial<ToolCallRow>, directory: string | null = DIRECTORY) =>
     shapeOf(recorded(overrides), directory);

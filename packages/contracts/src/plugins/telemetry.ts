@@ -86,7 +86,8 @@ export const TelemetryExtractionCandidate = Schema.Struct({
   form: TelemetryExtractionForm,
   /**
    * One occurrence to look at. `runId` is null for a provider's subagent's calls. `scripts` holds,
-   * for each step, a script's command line as stored, at most its first 512 characters, so a
+   * for each step, a script's command line as stored, at most its first 512 characters, with what
+   * looks like a secret redacted, so a
    * longer script is cut short; null for a step that is not a script.
    */
   example: Schema.Struct({
