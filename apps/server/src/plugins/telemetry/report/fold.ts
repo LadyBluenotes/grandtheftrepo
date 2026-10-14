@@ -86,7 +86,10 @@ export interface ReportInput {
         readonly promotions: ReadonlyArray<LearningPromotion>;
         /** Owner kinds a plugin hands items to. */
         readonly promoters: ReadonlyArray<LearningOwnerKind>;
-        /** Proposals decided in the range, and those created before `to` and still undecided. */
+        /**
+         * Proposals decided in the range, and those still undecided that were found in a week
+         * starting before `to`: the review proposes from a week once it has ended.
+         */
         readonly proposals: ReadonlyArray<DeterministicProposal>;
       }
     | undefined;
@@ -423,7 +426,7 @@ export const foldReport = (input: ReportInput): TelemetryReport => {
             learning.proposals
               .filter((proposal) =>
                 proposal.decidedAt === null
-                  ? proposal.createdAt < input.to
+                  ? proposal.windowFrom < input.to
                   : inRange(proposal.decidedAt),
               )
               .toSorted(

@@ -95,7 +95,10 @@ export class ProposalStore extends Context.Service<
     readonly list: (
       input: DeterministicProposalsInput,
     ) => Effect.Effect<ReadonlyArray<DeterministicProposal>, LearningError>;
-    /** A project's proposals decided in `[from, to)`, and those created before `to` and undecided. */
+    /**
+     * A project's proposals decided in `[from, to)`, and the undecided ones found in a week that
+     * starts before `to`, so a report on a week lists what its review proposed after it ended.
+     */
     readonly inRange: (input: {
       readonly projectId: ProjectId;
       readonly from: string;
@@ -210,7 +213,7 @@ const make = Effect.gen(function* () {
     sql<Row>`SELECT * FROM deterministic_proposals
       WHERE project_id = ${projectId}
         AND ((decided_at >= ${from} AND decided_at < ${to})
-          OR (state IN ('waiting', 'pending') AND created_at < ${to}))
+          OR (state IN ('waiting', 'pending') AND window_from < ${to}))
       ORDER BY id`.pipe(
       Effect.flatMap((rows) => Effect.forEach(rows, toProposal)),
       Effect.catchTags({ SqlError: failed, SchemaError: failed }),

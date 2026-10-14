@@ -406,8 +406,10 @@ it("could be deterministic: decided in the range or still undecided, accepted fi
       proposals: [
         ...input.learning.proposals,
         proposal(5, { state: "waiting", waitingReason: "The kanban plugin is off." }),
-        // Proposed after the range: not yet there.
-        proposal(6, { createdAt: TO }),
+        // Found in the week the range ends with, and proposed once it ended: listed.
+        proposal(6, { windowFrom: FROM, createdAt: TO }),
+        // Found in the week after the range: not yet there.
+        proposal(7, { windowFrom: TO, createdAt: TO }),
       ],
     },
   });
@@ -420,6 +422,7 @@ it("could be deterministic: decided in the range or still undecided, accepted fi
     ]),
     [
       [1, "accepted", 1000, null],
+      [6, "pending", 6000, null],
       [2, "pending", 2000, null],
       [5, "waiting", 5000, null],
       [3, "dismissed", 3000, "Noise."],
@@ -427,7 +430,7 @@ it("could be deterministic: decided in the range or still undecided, accepted fi
   );
   assert.include(
     renderHtml(report),
-    "Accepted: 1, saving about 1000 estimated tokens a week. Undecided: 2, about 7000. Dismissed: 1, about 3000.",
+    "Accepted: 1, saving about 1000 estimated tokens a week. Undecided: 3, about 13000. Dismissed: 1, about 3000.",
   );
 });
 
