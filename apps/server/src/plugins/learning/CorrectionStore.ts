@@ -121,9 +121,10 @@ export class CorrectionStore extends Context.Service<
       input: Omit<NewCorrection, "projectId"> & { readonly projectId?: ProjectId | undefined },
     ) => Effect.Effect<LearningCorrection, LearningError>;
     /**
-     * Stores a correction for a caller that knows the thread's project from its own records, such
-     * as a kanban ticket's linked thread. A thread the reactor has not replayed yet is remembered
-     * under that project rather than refused, so a correction is not lost to projection lag.
+     * Stores a correction for a caller that has checked the thread's project against the core's
+     * thread shell, as a kanban ticket's reopen does. A thread the reactor has not replayed yet is
+     * remembered under that project rather than refused, so a correction is not lost to projection
+     * lag; the caller's check is what keeps it from landing in another project.
      */
     readonly recordForProject: (
       input: NewCorrection,

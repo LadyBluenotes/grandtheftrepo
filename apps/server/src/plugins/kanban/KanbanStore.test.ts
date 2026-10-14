@@ -16,6 +16,8 @@ import * as SqlClient from "effect/sql/SqlClient";
 import * as Stream from "effect/Stream";
 
 import * as ServerConfig from "../../config.ts";
+import { liveThreadShell } from "../../mcp/McpToolAccess.testkit.ts";
+import * as ThreadManagementService from "../../orchestration-v2/ThreadManagementService.ts";
 import * as ProjectService from "../../project/ProjectService.ts";
 import * as ClassifySweep from "../learning/ClassifySweep.ts";
 import * as CorrectionStore from "../learning/CorrectionStore.ts";
@@ -434,8 +436,23 @@ it.layer(layerTest)("KanbanStore", (it) => {
             const learning = yield* learningPlugin;
             const first = ThreadId.make("thr_reopen_first");
             const last = ThreadId.make("thr_reopen_last");
-            // `last` is not projected into the learning plugin yet: a reopen still records it.
+            const elsewhere = ThreadId.make("thr_reopen_elsewhere");
+            // `last` is not projected into the learning plugin yet: a reopen still records it,
+            // because the core places it in the ticket's project.
             yield* learning.remember(first);
+            const owners = new Map([
+              [first, projectId],
+              [last, projectId],
+              [elsewhere, ProjectId.make("project-2")],
+            ]);
+            const core = Layer.mock(ThreadManagementService.ThreadManagementService)({
+              getThreadShell: (id) => {
+                const owner = owners.get(id);
+                return Effect.succeed(
+                  owner === undefined ? null : { ...liveThreadShell(id), projectId: owner },
+                );
+              },
+            });
             const reopen = (
               title: string,
               reopenReason: "defect" | "scope_change",
@@ -465,7 +482,16 @@ it.layer(layerTest)("KanbanStore", (it) => {
               reopen("Login needs SSO too", "scope_change", [last]),
               // No linked thread, so no agent's work to learn from.
               reopen("Typo on the board", "defect", []),
-            ]).pipe(Effect.provideService(CorrectionStore.CorrectionStore, learning.corrections));
+              // A ticket links any thread id; one the core places elsewhere, or does not know,
+              // is not claimed for this project.
+              reopen("Linked to another project's thread", "defect", [elsewhere]),
+              reopen("Linked to a thread that never existed", "defect", [
+                ThreadId.make("thr_reopen_missing"),
+              ]),
+            ]).pipe(
+              Effect.provideService(CorrectionStore.CorrectionStore, learning.corrections),
+              Effect.provide(core),
+            );
 
             const at = DateTime.formatIso(yield* DateTime.now);
             const recorded = yield* learning.corrections.list({ projectId, from: at, to: at });

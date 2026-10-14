@@ -190,7 +190,8 @@ them half-evaluated. The host hands `toolkitRegistration` to `ServerPlugin.mcp` 
   while changes are requested, and threads reopened after settlement. `KanbanStore.write` also
   records a done ticket it reopens, on the thread linked to it last, through
   `producers/ticketReopens.ts` and `Effect.serviceOption`, so a reopen while learning is off
-  records nothing. Agents read and add them over MCP. A correction declares a failure mode only
+  records nothing. A ticket can link any thread id, so the reopen is recorded only when the core's
+  thread shell places that thread in the ticket's project. Agents read and add them over MCP. A correction declares a failure mode only
   when its source names the cause: a review verdict, a person, the security scan (`security`) or a
   reopened ticket (`defect` for a defect, `unclear_spec` for a scope change); a provider failure
   never does. Two sweeps turn corrections with a declared failure mode into learning items, one
