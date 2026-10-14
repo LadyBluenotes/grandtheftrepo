@@ -123,6 +123,72 @@ export const KanbanReopen = Schema.Struct({
 });
 export type KanbanReopen = typeof KanbanReopen.Type;
 
+/** How far a finding was confirmed. */
+export const KanbanFindingTruth = Schema.Literals([
+  "seen",
+  "partially_verified",
+  "reproduced",
+  "refuted",
+  "unknown",
+]);
+export type KanbanFindingTruth = typeof KanbanFindingTruth.Type;
+
+/** How a finding relates to the change the agent was making when it found it. */
+export const KanbanFindingScope = Schema.Literals([
+  "caused_by_current_change",
+  "pre_existing",
+  "adjacent",
+  "unrelated",
+  "unknown",
+]);
+export type KanbanFindingScope = typeof KanbanFindingScope.Type;
+
+/** What is to be done about a finding: `open` until a review decides, and again once reopened. */
+export const KanbanFindingDisposition = Schema.Literals([
+  "open",
+  "fix_now",
+  "ticketed",
+  "accepted_risk",
+  "duplicate",
+  "rejected",
+  "wont_fix",
+]);
+export type KanbanFindingDisposition = typeof KanbanFindingDisposition.Type;
+export const KANBAN_FINDING_DISPOSITIONS = KanbanFindingDisposition.literals;
+
+/** The latest review: who set the disposition, when and why. */
+export const KanbanFindingReview = Schema.Struct({
+  by: KanbanActor,
+  at: IsoDateTime,
+  reason: Schema.String,
+});
+
+/**
+ * A problem an agent found outside its task, kept on the issue it concerns or on the Triage issue
+ * labeled `finding` opened for it. The id is server-made and unique in the project, and stays
+ * the same when the finding moves to another issue.
+ */
+export const KanbanFinding = Schema.Struct({
+  id: KanbanSlug,
+  title: TrimmedNonEmptyString,
+  evidence: Schema.String,
+  truthStatus: KanbanFindingTruth,
+  scopeRelation: KanbanFindingScope,
+  disposition: KanbanFindingDisposition,
+  /** `thread:<threadId>` of the agent that captured it, which may not review it. */
+  proposedBy: KanbanActor,
+  /** When it was captured; a move keeps it. */
+  proposedAt: IsoDateTime,
+  /** The thread it was found in. */
+  threadId: ThreadId,
+  /**
+   * The latest review, null until someone other than the proposer reviews it. The reviewer owns
+   * the finding from then on, so a finding with no review has no owner.
+   */
+  review: Schema.NullOr(KanbanFindingReview),
+});
+export type KanbanFinding = typeof KanbanFinding.Type;
+
 const KanbanIssueFields = {
   id: KanbanSlug,
   title: TrimmedNonEmptyString,
@@ -142,7 +208,7 @@ const KanbanIssueFields = {
   archivedAt: Schema.NullOr(IsoDateTime),
 };
 
-/** What the board needs per card; the body, log and criteria travel only with `getIssue`. */
+/** What the board needs per card; the body, log, criteria and findings travel only with `getIssue`. */
 export const KanbanIssueSummary = Schema.Struct({
   ...KanbanIssueFields,
   criteriaOpen: Schema.Int,
@@ -157,6 +223,7 @@ export const KanbanLogKind = Schema.Literals([
   "unblocked",
   "reopened",
   "criterion",
+  "finding",
 ]);
 export type KanbanLogKind = typeof KanbanLogKind.Type;
 
@@ -171,6 +238,7 @@ export type KanbanLogEntry = typeof KanbanLogEntry.Type;
 export const KanbanIssue = Schema.Struct({
   ...KanbanIssueFields,
   criteria: Schema.Array(KanbanCriterion),
+  findings: Schema.Array(KanbanFinding),
   description: Schema.String,
   log: Schema.Array(KanbanLogEntry),
 });
@@ -316,6 +384,31 @@ export const KanbanSetDirectoryInput = Schema.Struct({
   directory: Schema.NullOr(TrimmedNonEmptyString),
 });
 export type KanbanSetDirectoryInput = typeof KanbanSetDirectoryInput.Type;
+
+/** Sets a finding's disposition; `open` reopens it. Its proposer is refused. */
+export const KanbanFindingReviewInput = Schema.Struct({
+  projectId: ProjectId,
+  id: KanbanSlug,
+  disposition: KanbanFindingDisposition,
+  reason: TrimmedNonEmptyString,
+});
+export type KanbanFindingReviewInput = typeof KanbanFindingReviewInput.Type;
+
+export const KanbanFindingMoveInput = Schema.Struct({
+  projectId: ProjectId,
+  id: KanbanSlug,
+  /** Where it goes; omitted, a Triage issue labeled `finding` is opened for it. */
+  issueId: Schema.optional(KanbanSlug),
+});
+export type KanbanFindingMoveInput = typeof KanbanFindingMoveInput.Type;
+
+/** A finding and the issue holding it, after a capture, review or move. */
+export const KanbanFindingPlacement = Schema.Struct({
+  projectId: ProjectId,
+  issueId: KanbanSlug,
+  finding: KanbanFinding,
+});
+export type KanbanFindingPlacement = typeof KanbanFindingPlacement.Type;
 
 /**
  * The emergency stop while it is set: nothing the supervisor starts may launch a ticket. It
@@ -537,6 +630,20 @@ export const KANBAN_METHODS = definePluginMethods({
     gateway: "read",
     input: KanbanProjectInput,
     output: Schema.Array(KanbanAttentionRow),
+    error: KanbanError,
+  },
+  findingReview: {
+    method: "kanban.finding.review",
+    gateway: "operate",
+    input: KanbanFindingReviewInput,
+    output: KanbanFindingPlacement,
+    error: KanbanError,
+  },
+  findingMove: {
+    method: "kanban.finding.move",
+    gateway: "operate",
+    input: KanbanFindingMoveInput,
+    output: KanbanFindingPlacement,
     error: KanbanError,
   },
 });

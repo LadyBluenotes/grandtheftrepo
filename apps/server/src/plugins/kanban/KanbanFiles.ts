@@ -4,9 +4,11 @@ import {
   KanbanAlternative,
   KanbanBlock,
   KanbanCriterion,
+  KanbanDecision,
   KanbanDecisionRef,
   KanbanDecisionRevision,
   KanbanDecisionState,
+  KanbanFinding,
   KanbanLabel,
   KanbanLogEntry,
   KanbanLogKind,
@@ -19,7 +21,6 @@ import {
   KanbanVerification,
   ThreadId,
   TrimmedNonEmptyString,
-  type KanbanDecision,
   type KanbanIssue,
 } from "@t3tools/contracts";
 import { fromYaml } from "@t3tools/shared/schemaYaml";
@@ -65,6 +66,7 @@ const IssueFrontmatter = Schema.Struct({
   verification: Schema.optional(Schema.NullOr(KanbanVerification)),
   tier: Schema.optional(Schema.NullOr(KanbanTier)),
   criteria: Schema.optional(Schema.NullOr(Schema.Array(KanbanCriterion))),
+  findings: Schema.optional(Schema.NullOr(Schema.Array(KanbanFinding))),
   blocked: Schema.optional(Schema.NullOr(KanbanBlock)),
   reopened: Schema.optional(Schema.NullOr(KanbanReopen)),
   threads: Schema.optional(Schema.NullOr(Schema.Array(KanbanThreadLink))),
@@ -113,6 +115,7 @@ export function parseIssue(id: string, text: string): ParsedIssue | null {
       verification: front.verification ?? "unverified",
       tier: front.tier ?? null,
       criteria: front.criteria ?? [],
+      findings: front.findings ?? [],
       blocked: front.blocked ?? null,
       reopened: front.reopened ?? null,
       threads: front.threads ?? [],
@@ -157,11 +160,12 @@ export function formatLogEntry(entry: KanbanLogEntry): string {
 }
 
 export function serializeIssue(issue: KanbanIssue, project: string): string {
-  const { id: _id, description, log, blocked, reopened, criteria, ...rest } = issue;
+  const { id: _id, description, log, blocked, reopened, criteria, findings, ...rest } = issue;
   const front = {
     ...rest,
     project,
     ...(criteria.length === 0 ? {} : { criteria }),
+    ...(findings.length === 0 ? {} : { findings }),
     ...(blocked === null ? {} : { blocked }),
     ...(reopened === null ? {} : { reopened }),
   };

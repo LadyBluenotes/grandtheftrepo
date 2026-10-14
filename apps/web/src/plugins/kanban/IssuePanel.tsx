@@ -7,6 +7,7 @@ import {
   type EnvironmentId,
   type KanbanDecision,
   type KanbanIssue,
+  type KanbanIssueSummary,
   type KanbanLogEntry,
   type KanbanStatus,
   type KanbanTier,
@@ -46,6 +47,7 @@ import { useAtomCommand } from "~/state/use-atom-command";
 import { buildThreadRouteParams } from "~/threadRoutes";
 import { STATUS_LABEL, labelColor, reportFailure } from "./BoardPage";
 import { DecisionForm, DecisionRow } from "./DecisionsView";
+import { FindingRow } from "./FindingRow";
 import { ReopenDialog } from "./ReopenDialog";
 import { buildIssuePrompt, kanbanDecisions, kanbanIssue, kanbanWrite } from "./state";
 
@@ -54,6 +56,8 @@ interface IssuePanelProps {
   readonly projectId: ProjectId;
   readonly issueId: string | null;
   readonly categories: ReadonlyArray<{ readonly category: string; readonly count: number }>;
+  /** The board's issues, where a finding can move to. */
+  readonly issues: ReadonlyArray<KanbanIssueSummary>;
   readonly canWrite: boolean;
   readonly onClose: () => void;
 }
@@ -65,6 +69,7 @@ export function IssuePanel({
   projectId,
   issueId,
   categories,
+  issues,
   canWrite,
   onClose,
 }: IssuePanelProps) {
@@ -91,6 +96,7 @@ export function IssuePanel({
             issue={issue.data}
             decisions={decisions.data ?? []}
             categories={categories}
+            issues={issues}
             canWrite={canWrite}
           />
         )}
@@ -105,6 +111,7 @@ function IssueDetails({
   issue,
   decisions,
   categories,
+  issues,
   canWrite,
 }: Omit<IssuePanelProps, "issueId" | "onClose"> & {
   readonly issue: KanbanIssue;
@@ -525,6 +532,24 @@ function IssueDetails({
             </Field>
           ) : null}
 
+          {issue.findings.length > 0 ? (
+            <Field label={findingsLabel(issue)}>
+              <ul className="flex flex-col gap-2">
+                {issue.findings.map((finding) => (
+                  <FindingRow
+                    key={finding.id}
+                    environmentId={environmentId}
+                    projectId={projectId}
+                    issueId={issue.id}
+                    finding={finding}
+                    issues={issues}
+                    canWrite={canWrite}
+                  />
+                ))}
+              </ul>
+            </Field>
+          ) : null}
+
           <Field
             label="Decisions"
             action={
@@ -623,6 +648,11 @@ function Field({
   );
 }
 
+function findingsLabel(issue: KanbanIssue): string {
+  const open = issue.findings.filter((finding) => finding.disposition === "open").length;
+  return open === 0 ? "Findings" : `Findings (${open} open)`;
+}
+
 function formatTime(iso: string): string {
   const date = new Date(iso);
   return Number.isNaN(date.getTime()) ? iso : date.toLocaleString();
@@ -646,6 +676,8 @@ function LogRow({ entry }: { readonly entry: KanbanLogEntry }) {
           <>reopened: {entry.text === "defect" ? "the work was wrong" : "the ask changed"}</>
         ) : entry.kind === "criterion" ? (
           <>criterion {entry.text}</>
+        ) : entry.kind === "finding" ? (
+          <>finding {entry.text}</>
         ) : (
           entry.text
         )}

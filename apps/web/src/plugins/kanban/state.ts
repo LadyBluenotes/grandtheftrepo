@@ -45,6 +45,16 @@ export const kanbanWrite = createPluginRpcCommand(connectionAtomRuntime, {
   method: KANBAN_METHODS.write,
 });
 
+export const kanbanFindingReview = createPluginRpcCommand(connectionAtomRuntime, {
+  label: "kanban:finding-review",
+  method: KANBAN_METHODS.findingReview,
+});
+
+export const kanbanFindingMove = createPluginRpcCommand(connectionAtomRuntime, {
+  label: "kanban:finding-move",
+  method: KANBAN_METHODS.findingMove,
+});
+
 export const kanbanSetDirectory = createPluginRpcCommand(connectionAtomRuntime, {
   label: "kanban:set-directory",
   method: KANBAN_METHODS.setDirectory,
