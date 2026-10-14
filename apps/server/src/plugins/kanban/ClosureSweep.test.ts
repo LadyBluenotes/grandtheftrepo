@@ -154,6 +154,27 @@ it.effect("a flag whose card or project is gone clears", () =>
   ),
 );
 
+it.effect("an unreadable card file keeps its flag until the file is deleted", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const { run, hold, store, fs, open } = yield* fixture;
+      const issues = `${yield* store.directory(projectId)}/issues`;
+      const file = `${issues}/broken.md`;
+      yield* fs.makeDirectory(issues, { recursive: true });
+      yield* fs.writeFileString(file, "not a card");
+      yield* hold(projectId, [{ id: "broken", title: "Broken", missing: ["it needs a decision"] }]);
+
+      // Loading the project skips the file, so the store reports the card missing.
+      assert.deepEqual(yield* run({ dryRun: false }), { examined: 1, acted: 0, flags: 1 });
+      assert.lengthOf(yield* open, 1);
+
+      yield* fs.remove(file);
+      assert.deepEqual(yield* run({ dryRun: false }), { examined: 1, acted: 1, flags: 0 });
+      assert.deepEqual(yield* open, []);
+    }),
+  ),
+);
+
 it.effect("a dry run leaves a project the store has not loaded alone", () =>
   Effect.scoped(
     Effect.gen(function* () {

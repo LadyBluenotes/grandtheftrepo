@@ -1,9 +1,12 @@
 import { ProjectId } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
+import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 
 import * as Attention from "../Attention.ts";
 import * as PluginSupervisor from "../PluginSupervisor.ts";
+import * as Files from "./KanbanFiles.ts";
 import * as KanbanStore from "./KanbanStore.ts";
 
 const PLUGIN_ID = "kanban";
@@ -50,14 +53,32 @@ export const hold = Effect.gen(function* () {
 
 /**
  * Builds the closure sweep. It clears each open `closure_held` flag once its card passes the
- * closure check, reaches Done, is archived or is gone, and rewrites its text while what the card
- * lacks changes. A card it cannot read for another reason keeps its flag. A dry run reads no
+ * closure check, reaches Done, is archived, or its file or project is gone, and rewrites its text
+ * while what the card lacks changes. A card it cannot read for another reason, such as a file
+ * still there but unreadable, keeps its flag. A dry run reads no
  * card, since reading one loads its project, which creates folders and watchers and archives old
  * cards; it counts the open flags as they are and writes nothing.
  */
 export const sweep = Effect.gen(function* () {
   const store = yield* KanbanStore.KanbanStore;
   const attention = yield* Attention.Attention;
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+
+  /**
+   * Null once the card's file or project is gone, undefined while the file is still there (a load
+   * skips one it cannot parse, so the store reports that card missing too) or the check fails.
+   */
+  const fileGone = (projectId: ProjectId, id: string) =>
+    store.directory(projectId).pipe(
+      Effect.flatMap((directory) =>
+        fs.exists(path.join(directory, "issues", `${id}${Files.ISSUE_EXTENSION}`)).pipe(
+          Effect.map((exists) => (exists ? undefined : null)),
+          Effect.orElseSucceed(() => undefined),
+        ),
+      ),
+      Effect.catch((error) => Effect.succeed(error.code === "not_found" ? null : undefined)),
+    );
 
   /**
    * The text a card's flag should carry while the card is held, null once the flag should go, and
@@ -76,7 +97,9 @@ export const sweep = Effect.gen(function* () {
         return missing.length === 0 ? null : flagText({ id, title: issue.title, missing });
       }),
       // A card or project that is gone takes its flag with it.
-      Effect.catch((error) => Effect.succeed(error.code === "not_found" ? null : undefined)),
+      Effect.catch((error) =>
+        error.code === "not_found" ? fileGone(projectId, id) : Effect.succeed(undefined),
+      ),
     );
 
   return Effect.fn("ClosureSweep.run")(function* (input: { readonly dryRun: boolean }) {
