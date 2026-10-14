@@ -254,12 +254,17 @@ const INLINE_OPTIONS: ReadonlyMap<string, ReadonlySet<string>> = new Map([
   ["ruby", words("-e")],
 ]);
 
-/** Whether a heredoc or here-string comes before any argument but `-`, the stdin marker. */
+/**
+ * Whether a heredoc or here-string feeds the program its script: one before any argument, or
+ * any after `-`, the stdin marker, whose later words are the script's own arguments.
+ */
 const readsHeredocScript = (tokens: ReadonlyArray<string>, at: number): boolean => {
+  let stdin = false;
   for (let index = at + 1; index < tokens.length; index += 1) {
     const token = tokens[index]!;
     if (token.startsWith("<<")) return true;
-    if (token !== "-" && !token.startsWith("-")) return false;
+    if (token === "-") stdin = true;
+    else if (!stdin && !token.startsWith("-")) return false;
   }
   return false;
 };

@@ -167,6 +167,7 @@ it("finds an interpreter running a script written into the command line", () => 
       "cd app && node --input-type=module -e 'console.log(1)'",
       "python3 - <<'EOF'\nprint(1)\nEOF",
       "python3 <<< 'print(1)'",
+      "python3 - --verbose input.json <<'EOF'\nimport sys\nEOF",
       "bash <<EOF\necho hi\nEOF",
       "sh -s <<'EOF'\necho hi\nEOF",
       "/bin/zsh -lc \"python3 -c 'print(1)'\"",
