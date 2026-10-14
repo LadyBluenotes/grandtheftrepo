@@ -76,6 +76,7 @@ resolved by keeping the line.
 | `apps/server/src/orchestration-v2/toolOutputImageBytes.ts`   | `export function carriesImage`, the one exported function: does a record hold image bytes or the size stripping left, so the estimate matches what ingestion stores |
 | `third-party-licenses.config.json`                           | the `Caveman reply rules` and `Ponytail ladder` entries at the end of `customNotices`, so the adapted policy text is credited in the app's license list             |
 | `scripts/build-desktop-artifact.ts`                          | in `createBuildConfig`, unsigned Mac builds get `identity: "-"`, `hardenedRuntime: false` and no GitHub update feed, plus their tests                               |
+| `packages/provider-core/.../orchestrationInstructions.ts`    | `export let` on `T3_CODE_ORCHESTRATION_INSTRUCTIONS` and `setPluginOrchestrationInstructions` at the end, which the host calls with the capture rule                |
 
 ## Plugin services and the type system
 
@@ -120,7 +121,11 @@ them half-evaluated. The host hands `toolkitRegistration` to `ServerPlugin.mcp` 
   active-plugin atoms, the attention atom and the strip's row model in
   `packages/client-runtime/src/plugins/kanban.ts`, and the contract's
   `KANBAN_ATTENTION_KIND_LABELS` names each kind, so a new kind needs a label there and nothing per
-  client. Server: `apps/server/src/plugins/kanban/`. Contracts:
+  client. While kanban runs, the host appends the capture rule (`plugins/CaptureRule.ts`), when to
+  record a decision, a correction or a knowledge page, to the orchestration instructions, which
+  every adapter sends only to a turn with the `t3-code` MCP server. Each line is dropped while its
+  plugin is off. Pi bakes that text into its extension at import, before the host starts, and Muse
+  gets none, so neither sees the rule. Server: `apps/server/src/plugins/kanban/`. Contracts:
   `packages/contracts/src/plugins/kanban.ts`. Web: `apps/web/src/plugins/kanban/`. Mobile:
   `apps/mobile/src/features/kanban/`. User guide: [Kanban board](./user/kanban.md).
 - **telemetry**: the eighteen efficiency measures of #1, #35 and #36 over a project's window, from the
