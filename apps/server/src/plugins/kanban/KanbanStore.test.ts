@@ -592,6 +592,8 @@ describe("boardFolders", () => {
   const otherId = ProjectId.make("project-2");
   // A second checkout under the same title, so the same default folder; its id sorts first.
   const twinId = ProjectId.make("project-0");
+  // Projects the test deletes; `getById` stops finding them, as it does a deleted project.
+  const deleted = new Set<ProjectId>();
   const layerTwoProjects = (store: typeof KanbanStore.layer) =>
     Layer.empty.pipe(
       Layer.provideMerge(store),
@@ -599,13 +601,15 @@ describe("boardFolders", () => {
         Layer.mock(ProjectService.ProjectService)({
           getById: (id) =>
             Effect.succeed(
-              id === projectId
-                ? Option.some(project)
-                : id === otherId
-                  ? Option.some({ ...project, id: otherId, title: "Other Repo" })
-                  : id === twinId
-                    ? Option.some({ ...project, id: twinId, workspaceRoot: "/elsewhere" })
-                    : Option.none(),
+              deleted.has(id)
+                ? Option.none()
+                : id === projectId
+                  ? Option.some(project)
+                  : id === otherId
+                    ? Option.some({ ...project, id: otherId, title: "Other Repo" })
+                    : id === twinId
+                      ? Option.some({ ...project, id: twinId, workspaceRoot: "/elsewhere" })
+                      : Option.none(),
             ),
         }),
       ),
@@ -682,6 +686,19 @@ describe("boardFolders", () => {
         ]);
         assert.isFalse(yield* fs.exists(unused));
       }).pipe(Effect.provide(layerTwoProjects(KanbanStore.layer))),
+  );
+
+  it.effect("leaves out a loaded board once its project is deleted", () =>
+    Effect.gen(function* () {
+      const store = yield* KanbanStore.KanbanStore;
+      yield* store.board(otherId);
+      assert.deepEqual(yield* withBoard(store, [otherId]), [otherId]);
+      deleted.add(otherId);
+      assert.deepEqual(yield* store.boardFolders([otherId]), []);
+    }).pipe(
+      Effect.ensuring(Effect.sync(() => deleted.clear())),
+      Effect.provide(layerTwoProjects(KanbanStore.layer)),
+    ),
   );
 
   it.effect("shows a folder two projects share under the first of them by id only", () =>

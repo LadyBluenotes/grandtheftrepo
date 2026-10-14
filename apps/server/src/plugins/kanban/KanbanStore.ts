@@ -297,15 +297,16 @@ const make = Effect.gen(function* () {
   const folderOf = (
     projectId: ProjectId,
     overrides: typeof Overrides.Type,
-  ): Effect.Effect<KanbanBoardFolder | null, KanbanError> => {
-    const state = loaded.get(projectId);
-    if (state !== undefined)
-      return Effect.succeed({ projectId, directory: state.directory, board: true });
-    return readProject(projectId).pipe(
+  ): Effect.Effect<KanbanBoardFolder | null, KanbanError> =>
+    // The project first: deleting one does not unload its board, which must not outlive it here.
+    readProject(projectId).pipe(
       Effect.flatMap(
         Option.match({
           onNone: () => Effect.succeed(null),
           onSome: (project) => {
+            const state = loaded.get(projectId);
+            if (state !== undefined)
+              return Effect.succeed({ projectId, directory: state.directory, board: true });
             const { directory } = directoryOf(projectId, project.title, overrides);
             return fs.exists(directory).pipe(
               Effect.map((board) => ({ projectId, directory, board })),
@@ -315,7 +316,6 @@ const make = Effect.gen(function* () {
         }),
       ),
     );
-  };
   const hasBoard = (projectId: ProjectId, overrides: typeof Overrides.Type) =>
     Effect.map(folderOf(projectId, overrides), (folder) => folder?.board === true);
 
