@@ -634,6 +634,7 @@ it.layer(layerTest)("KanbanStore", (it) => {
               verification: "unverified",
               tier: null,
               criteria: [],
+              findings: [],
               blocked: null,
               reopened: null,
               threads: [],

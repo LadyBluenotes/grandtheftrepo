@@ -125,6 +125,36 @@ const securityDeclaredMode: PluginMigration[2] = Effect.gen(function* () {
     WHERE failure_kind = 'security' AND declared_mode IS NULL`;
 });
 
+// A promotion is reviewed before it is adopted. `pending` becomes `proposed`; a written draft is
+// `in_review` until someone other than its proposer adopts or rejects it, and an adopted one can be
+// rolled back. Its proposer is a person (`user`) when a person routed the item, else the rules
+// (`supervisor`). A record delivered before reviews existed was acted on as adopted, so it is
+// adopted at its delivery time, which keeps its outcome window where it was.
+const promotionReview: PluginMigration[2] = Effect.gen(function* () {
+  const sql = yield* SqlClient.SqlClient;
+  yield* sql`ALTER TABLE learning_promotions
+    ADD COLUMN proposed_by TEXT NOT NULL DEFAULT 'supervisor'`;
+  yield* sql`ALTER TABLE learning_promotions ADD COLUMN delivered_at TEXT`;
+  yield* sql`ALTER TABLE learning_promotions ADD COLUMN adopted_at TEXT`;
+  yield* sql`ALTER TABLE learning_promotions ADD COLUMN rolled_back_at TEXT`;
+  yield* sql`ALTER TABLE learning_promotions ADD COLUMN rolled_back_by TEXT`;
+  yield* sql`UPDATE learning_promotions SET proposed_by = 'user'
+    WHERE item_id IN (SELECT id FROM learning_items WHERE disposition_by = 'person')`;
+  yield* sql`UPDATE learning_promotions SET state = 'proposed' WHERE state = 'pending'`;
+  yield* sql`UPDATE learning_promotions
+    SET state = 'adopted', delivered_at = updated_at, adopted_at = updated_at
+    WHERE state = 'delivered'`;
+  yield* sql`CREATE TABLE promotion_reviews (
+    id INTEGER PRIMARY KEY,
+    promotion_id INTEGER NOT NULL REFERENCES learning_promotions (id),
+    verdict TEXT NOT NULL,
+    reviewer TEXT NOT NULL,
+    note TEXT,
+    created_at TEXT NOT NULL
+  )`;
+  yield* sql`CREATE INDEX promotion_reviews_promotion ON promotion_reviews (promotion_id)`;
+});
+
 export const migrations = [
   [1, "Corrections", corrections],
   [2, "LearningItems", learningItems],
@@ -133,4 +163,5 @@ export const migrations = [
   [5, "DispositionAt", dispositionAt],
   [6, "PromotionOutcome", promotionOutcome],
   [7, "SecurityDeclaredMode", securityDeclaredMode],
+  [8, "PromotionReview", promotionReview],
 ] as const satisfies ReadonlyArray<PluginMigration>;

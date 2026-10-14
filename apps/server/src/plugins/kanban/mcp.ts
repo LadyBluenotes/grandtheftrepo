@@ -39,7 +39,7 @@ const shared = {
 const KanbanListTool = Tool.make("kanban_list", {
   ...shared,
   description:
-    "List the project's kanban issues or decisions, one line each; pass id for one item in full (issue: description, acceptance criteria with ids, log, related decisions; decision: why, alternatives, reconsider-when, supersession, threads, revisions). Issue line: id · status · priority · title · labels · verification · tier · criteria done/total · BLOCKED · threads. Columns in order: triage (found, verification unverified/partial/verified), inbox (reproduced, waiting for the user), todo, in_progress, in_review, done. Decision line: category/id · state · title · issues; decisions are grouped by category; narrow with category or issue. To find one by its words, use kanban_decisions.",
+    "List the project's kanban issues or decisions, one line each; pass id for one item in full (issue: description, acceptance criteria with ids, findings, log, related decisions; decision: why, alternatives, reconsider-when, supersession, threads, revisions). Issue line: id · status · priority · title · labels · verification · tier · criteria done/total · BLOCKED · threads. Columns in order: triage (found, verification unverified/partial/verified), inbox (reproduced, waiting for the user), todo, in_progress, in_review, done. Decision line: category/id · state · title · issues; decisions are grouped by category; narrow with category or issue. To find one by its words, use kanban_decisions.",
   parameters: Schema.Struct({
     projectId: Schema.optional(ProjectId),
     kind: Schema.Literals(["issue", "decision"]),
@@ -124,7 +124,7 @@ export const KanbanToolkit = Toolkit.make(
   KanbanSpecGetTool,
 );
 
-const failure = (error: KanbanError) =>
+export const failure = (error: KanbanError) =>
   new OrchestratorMcpFailure({
     code:
       error.code === "io" || error.code === "inactive" ? "orchestration_error" : "invalid_request",
@@ -191,6 +191,17 @@ const issueText = (issue: KanbanIssue, decisions: ReadonlyArray<KanbanDecision>)
       ? [
           "Acceptance criteria:",
           ...issue.criteria.map((c) => `- [${c.checked ? "x" : " "}] ${c.id} ${c.text}`),
+        ]
+      : []),
+    ...(issue.findings.length > 0
+      ? [
+          "Findings:",
+          ...issue.findings.map(
+            (f) =>
+              `- ${f.id} · ${f.disposition} · ${f.truthStatus} · ${f.scopeRelation} · ${f.title}${
+                f.review === null ? "" : ` · ${f.review.by}: ${f.review.reason}`
+              }\n    evidence: ${f.evidence}`,
+          ),
         ]
       : []),
     ...(issue.log.length > 0 ? ["Log:", ...issue.log.map(formatLogEntry)] : []),

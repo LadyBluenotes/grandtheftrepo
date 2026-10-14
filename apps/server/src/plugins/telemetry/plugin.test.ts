@@ -310,11 +310,12 @@ const seedLearning = (sql: SqlClient.SqlClient) =>
     // Another project's promoted item for a mode this project has not handed over.
     yield* item(3, "project:elsewhere", "convention", "promoted", "2026-10-02T00:00:00.000Z");
     yield* sql`INSERT INTO learning_promotions
-        (id, item_id, project_id, failure_mode, owner_kind, state, attempts, created_at, updated_at)
-      VALUES (1, 1, ${projectId}, 'defect', 'prompt', 'delivered', 0, '2026-10-02T00:00:00.000Z',
-        '2026-10-04T00:00:00.000Z'),
-        (2, 3, 'project:elsewhere', 'convention', 'prompt', 'delivered', 0,
-        '2026-10-02T00:00:00.000Z', '2026-10-02T00:00:00.000Z')`;
+        (id, item_id, project_id, failure_mode, owner_kind, state, attempts, delivered_at,
+          created_at, updated_at)
+      VALUES (1, 1, ${projectId}, 'defect', 'prompt', 'in_review', 0, '2026-10-04T00:00:00.000Z',
+        '2026-10-02T00:00:00.000Z', '2026-10-04T00:00:00.000Z'),
+        (2, 3, 'project:elsewhere', 'convention', 'prompt', 'adopted', 0,
+        '2026-10-02T00:00:00.000Z', '2026-10-02T00:00:00.000Z', '2026-10-02T00:00:00.000Z')`;
 
     const give = (id: number, mode: string | null, createdAt: string) =>
       sql`INSERT INTO corrections

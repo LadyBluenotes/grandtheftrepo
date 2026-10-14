@@ -54,6 +54,8 @@ const detail = (
     createdAt: at,
   })),
   promotions: [],
+  reviews: [],
+  outcomes: [],
 });
 
 const keyFor = (promotionId: number, itemId = 7): Promoter.PromotionKey => ({

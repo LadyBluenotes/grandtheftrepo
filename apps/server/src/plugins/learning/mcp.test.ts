@@ -7,16 +7,22 @@ import {
   LearningItem,
   LearningItemDetail,
   ProjectId,
+  ProviderInstanceId,
+  ThreadId,
 } from "@t3tools/contracts";
+import * as Context from "effect/Context";
+import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/sql/SqlClient";
+import { McpSchema, McpServer } from "effect/ai";
 import { HttpBody, HttpClient, HttpRouter } from "effect/http";
 
 import * as ServerConfig from "../../config.ts";
 import * as McpHttpServer from "../../mcp/McpHttpServer.ts";
-import type * as McpInvocationContext from "../../mcp/McpInvocationContext.ts";
+import * as McpInvocationContext from "../../mcp/McpInvocationContext.ts";
+import { liveThreadShell } from "../../mcp/McpToolAccess.testkit.ts";
 import * as McpSessionRegistry from "../../mcp/McpSessionRegistry.ts";
 import * as ThreadManagementService from "../../orchestration-v2/ThreadManagementService.ts";
 import * as ProjectService from "../../project/ProjectService.ts";
@@ -25,8 +31,10 @@ import * as PluginHost from "../PluginHost.ts";
 import * as PluginSupervisor from "../PluginSupervisor.ts";
 import * as ClassifySweep from "./ClassifySweep.ts";
 import * as CorrectionStore from "./CorrectionStore.ts";
+import { plugin } from "./index.ts";
 import * as ItemStore from "./items/ItemStore.ts";
 import { migrations } from "./migrations.ts";
+import * as PromotionStore from "./PromotionStore.ts";
 
 const environmentId = EnvironmentId.make("env-1");
 const projectId = ProjectId.make("project-1");
@@ -148,6 +156,8 @@ it.effect(
         expect(tools).toContain('"learning_correction_add"');
         expect(tools).toContain('"learning_items"');
         expect(tools).toContain('"learning_item"');
+        expect(tools).toContain('"learning_promotion_review"');
+        expect(tools).toContain('"learning_promotion_rollback"');
 
         const added = decodeCorrection(
           resultText(
@@ -236,4 +246,138 @@ it.effect(
         ),
       ),
     ),
+);
+
+/** A provider session T3 Code launched for `threadId`. */
+const threadScope = (threadId: ThreadId): McpInvocationContext.McpInvocationScope => ({
+  environmentId,
+  requestNamespace: `provider:${threadId}`,
+  thread: {
+    threadId,
+    providerSessionId: `session:${threadId}`,
+    // The instance `liveThreadShell` gives every thread.
+    providerInstanceId: ProviderInstanceId.make("codex"),
+  },
+  client: undefined,
+  capabilities: new Set(["orchestration" as const]),
+  issuedAt: 0,
+});
+
+const mcpClient = McpSchema.McpServerClient.of({
+  clientId: 1,
+  protocolVersion: "2025-06-18",
+  clientCapabilities: {},
+  clientInfo: { name: "learning", version: "1" },
+  initializePayload: {
+    protocolVersion: "2025-06-18",
+    capabilities: {},
+    clientInfo: { name: "learning", version: "1" },
+  },
+  getClient: Effect.die("unused"),
+});
+
+it.effect("an agent reviews and rolls back a promotion it did not propose, as its thread", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const { sql } = yield* PluginDatabase.open({
+        id: "learning",
+        filename: ":memory:",
+        migrations,
+      });
+      const stores = yield* Layer.build(
+        Layer.mergeAll(CorrectionStore.layer, ItemStore.layer).pipe(
+          Layer.provide(Layer.succeed(SqlClient.SqlClient, sql)),
+        ),
+      );
+      const services = yield* Layer.build(
+        plugin.mcp(McpHttpServer.toolkitRegistration).pipe(
+          Layer.provideMerge(McpServer.McpServer.layer),
+          Layer.provide(Layer.succeedContext(stores)),
+          Layer.provide(
+            Layer.mock(ThreadManagementService.ThreadManagementService)({
+              getThreadShell: (id) => Effect.succeed(liveThreadShell(id)),
+            }),
+          ),
+        ),
+      );
+      const server = Context.get(services, McpServer.McpServer);
+      const call = (scope: McpInvocationContext.McpInvocationScope, name: string, args: object) =>
+        server
+          .callTool({ name, arguments: args })
+          .pipe(
+            Effect.provideService(McpInvocationContext.McpInvocationContext, scope),
+            Effect.provideService(McpSchema.McpServerClient, mcpClient),
+          );
+      const failureOf = (result: {
+        readonly content: ReadonlyArray<{ readonly type: string; readonly text?: string }>;
+      }) => JSON.parse(result.content[0]?.text ?? "{}") as { code?: string; message?: string };
+
+      // Two drafts in review: one the rules proposed, one an agent's own thread proposed.
+      const items = Context.get(stores, ItemStore.ItemStore);
+      const inReview = (mode: string) =>
+        Effect.gen(function* () {
+          const item = yield* items.strengthen(projectId, mode, `${mode}:1`, "Seeded.");
+          const now = yield* DateTime.now;
+          yield* PromotionStore.open(
+            {
+              id: item.id,
+              project_id: projectId,
+              failure_mode: mode,
+              owner_kind: item.ownerKind!,
+              disposition_by: "rule",
+            },
+            now,
+          );
+          const [promotion] = yield* PromotionStore.forItem(item.id);
+          yield* PromotionStore.deliver(promotion!, now);
+          return promotion!.id;
+        }).pipe(Effect.provideService(SqlClient.SqlClient, sql));
+      const byRules = yield* inReview("scope_drift");
+      const byAgent = yield* inReview("missing_verification");
+      yield* sql`UPDATE learning_promotions SET proposed_by = 'thread:reviewer' WHERE id = ${byAgent}`;
+      const reviewer = threadScope(ThreadId.make("reviewer"));
+
+      const own = yield* call(reviewer, "learning_promotion_review", {
+        promotionId: byAgent,
+        verdict: "adopt",
+      });
+      expect(own.isError).toBe(true);
+      expect(failureOf(own)).toEqual({
+        _tag: "OrchestratorMcpFailure",
+        code: "invalid_request",
+        message: `Promotion ${byAgent} was proposed by thread:reviewer, so someone else reviews it.`,
+      });
+      const other = yield* call(threadScope(ThreadId.make("other")), "learning_promotion_review", {
+        promotionId: byAgent,
+        verdict: "reject",
+        note: "Not a policy matter.",
+      });
+      expect(other.structuredContent).toMatchObject({ state: "rejected" });
+
+      const outside = yield* call(clientScope, "learning_promotion_review", {
+        promotionId: byRules,
+        verdict: "adopt",
+      });
+      expect(outside.isError).toBe(true);
+      expect(failureOf(outside).code).toBe("thread_credential_required");
+
+      const adopted = yield* call(reviewer, "learning_promotion_review", {
+        promotionId: byRules,
+        verdict: "adopt",
+      });
+      expect(adopted.structuredContent).toMatchObject({ state: "adopted" });
+      const rolledBack = yield* call(reviewer, "learning_promotion_rollback", {
+        promotionId: byRules,
+      });
+      expect(rolledBack.structuredContent).toMatchObject({
+        state: "rolled_back",
+        rolledBackBy: "thread:reviewer",
+      });
+      expect(
+        (yield* items.get(
+          (yield* items.list({ projectId })).find((i) => i.failureMode === "scope_drift")!.id,
+        )).reviews.map((review) => [review.verdict, review.reviewer]),
+      ).toEqual([["adopt", "thread:reviewer"]]);
+    }),
+  ),
 );

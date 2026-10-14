@@ -57,6 +57,29 @@ export const hashSource = (issue: Pick<KanbanIssue, "createdAt" | "title" | "des
     )
     .digest("hex");
 
+/** A new issue `by` files at `at`: no criteria, findings or threads, and its column as its log. */
+export const newIssue = (
+  fields: Pick<
+    KanbanIssue,
+    "id" | "title" | "status" | "priority" | "labels" | "verification" | "tier" | "description"
+  >,
+  by: KanbanActor,
+  at: string,
+): KanbanIssue => ({
+  ...fields,
+  criteria: [],
+  findings: [],
+  blocked: null,
+  reopened: null,
+  threads: [],
+  createdAt: at,
+  createdBy: by,
+  updatedAt: at,
+  doneAt: fields.status === "done" ? at : null,
+  archivedAt: null,
+  log: [{ at, by, kind: "status", text: fields.status }],
+});
+
 /** Done issues wait this long before the sweep archives them. */
 const ARCHIVE_AFTER = Duration.days(7);
 
@@ -131,6 +154,21 @@ export class KanbanStore extends Context.Service<
     readonly linkedProject: (threadId: ThreadId) => Effect.Effect<ProjectId | undefined>;
     /** Every loaded project's decisions. No disk read: a project loads on its board's first use. */
     readonly loadedDecisions: Effect.Effect<ReadonlyMap<ProjectId, ReadonlyArray<KanbanDecision>>>;
+    /**
+     * Runs `change` under the write lock on the project's issues as they are now, saves the issues
+     * it returns and, when there are any, publishes the board. For changes that are no `write`
+     * action, such as a finding, which can touch two issues at once.
+     */
+    readonly transact: <A>(
+      projectId: ProjectId,
+      change: (
+        issues: ReadonlyMap<string, KanbanIssue>,
+        at: string,
+      ) => Effect.Effect<
+        { readonly result: A; readonly save: ReadonlyArray<KanbanIssue> },
+        KanbanError
+      >,
+    ) => Effect.Effect<A, KanbanError>;
   }
 >()("t3/plugins/kanban/KanbanStore") {}
 
@@ -382,6 +420,7 @@ const make = Effect.gen(function* () {
   const summary = ({
     description: _description,
     log: _log,
+    findings: _findings,
     criteria,
     ...rest
   }: KanbanIssue): KanbanIssueSummary => ({
@@ -558,26 +597,20 @@ const make = Effect.gen(function* () {
             message: "Agents file issues into Triage or Inbox; the user decides what starts.",
           });
         const id = Files.uniqueSlug(Files.slugOf(title), (slug) => state.issues.has(slug));
-        const created: KanbanIssue = {
-          id,
-          title,
-          status,
-          priority: w.priority ?? "p3",
-          labels: w.labels ?? [],
-          verification: w.verification ?? "unverified",
-          tier: w.tier ?? null,
-          criteria: [],
-          blocked: null,
-          reopened: null,
-          threads: [],
-          createdAt: at,
-          createdBy: actor,
-          updatedAt: at,
-          doneAt: status === "done" ? at : null,
-          archivedAt: null,
-          description: w.description ?? "",
-          log: [{ at, by: actor, kind: "status", text: status }],
-        };
+        const created = newIssue(
+          {
+            id,
+            title,
+            status,
+            priority: w.priority ?? "p3",
+            labels: w.labels ?? [],
+            verification: w.verification ?? "unverified",
+            tier: w.tier ?? null,
+            description: w.description ?? "",
+          },
+          actor,
+          at,
+        );
         yield* saveIssue(state, created);
         return { id };
       }
@@ -1013,6 +1046,20 @@ const make = Effect.gen(function* () {
     },
   );
 
+  const transact: KanbanStore["Service"]["transact"] = (projectId, change) =>
+    Effect.gen(function* () {
+      const state = yield* load(projectId);
+      const { result, save } = yield* state.lock.withPermits(1)(
+        Effect.flatMap(nowIso, (at) => change(state.issues, at)).pipe(
+          Effect.tap(({ save }) =>
+            Effect.forEach(save, (issue) => saveIssue(state, issue), { discard: true }),
+          ),
+        ),
+      );
+      if (save.length > 0) yield* publish(projectId);
+      return result;
+    });
+
   const setDirectory: KanbanStore["Service"]["setDirectory"] = Effect.fn(
     "KanbanStore.setDirectory",
   )(function* ({ projectId, directory }) {
@@ -1092,6 +1139,7 @@ const make = Effect.gen(function* () {
           ]),
         ),
     ),
+    transact,
   });
 });
 
