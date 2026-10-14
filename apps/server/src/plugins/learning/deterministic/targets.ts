@@ -328,7 +328,7 @@ export const make = Effect.gen(function* () {
           );
           if (
             Option.isSome(issue) &&
-            issue.value.status === "triage" &&
+            (issue.value.status === "triage" || issue.value.status === "inbox") &&
             issue.value.archivedAt === null
           ) {
             yield* store.value.write(projectId, by, {

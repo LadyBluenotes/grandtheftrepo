@@ -577,6 +577,31 @@ it.effect(
     ),
 );
 
+it.effect("dismissing archives a draft card a person moved to Inbox", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const world = yield* setup();
+      const kanban = yield* fakeKanban;
+      world.weeks.set(WEEK_1, [
+        candidate("4007000000000002", { steps: ["command:vp fmt <path>"], form: "hook" }),
+      ]);
+      yield* world.tick(kanban.context);
+      const [card] = yield* kanban.issues;
+      yield* Effect.flatMap(KanbanStore.KanbanStore, (store) =>
+        store.write(projectA.id, "user", { action: "issue.move", id: card!.id, status: "inbox" }),
+      ).pipe(Effect.provide(kanban.context));
+
+      const [proposal] = yield* world.store.list({ projectId: projectA.id });
+      yield* world.store
+        .dismiss({ id: proposal!.id, reason: "Not worth a hook." }, "user")
+        .pipe(Effect.provide(kanban.context));
+      const [after] = yield* kanban.issues;
+      assert.strictEqual(after?.status, "inbox");
+      assert.isNotNull(after?.archivedAt);
+    }),
+  ),
+);
+
 it.effect(
   "a card proposal dismissed and proposed again at twice the cost files a new card that accepting moves to Todo",
   () =>
