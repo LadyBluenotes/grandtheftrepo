@@ -313,23 +313,30 @@ export const verdict: ReviewVerdict = {
   invalidatedAt: null,
 };
 
-/** A promotion delivered after its record was opened. */
+const DELIVERED_AT = "2026-10-02T12:00:00.000Z";
+
+/** A promotion delivered after its record was opened, and in review since. */
 export const promotion: LearningPromotion = {
   id: 1,
   itemId: 1,
   projectId,
   failureMode: "defect",
   ownerKind: "prompt",
-  state: "delivered",
+  state: "in_review",
+  proposedBy: "supervisor",
   attempts: 0,
   nextAttemptAt: null,
   lastError: null,
+  deliveredAt: DELIVERED_AT,
+  adoptedAt: null,
+  rolledBackAt: null,
+  rolledBackBy: null,
   createdAt: "2026-10-01T12:00:00.000Z",
-  updatedAt: "2026-10-02T12:00:00.000Z",
+  updatedAt: DELIVERED_AT,
 };
 
 /** The handover `ItemStore.deliveredAt` lists for that promotion. */
 export const delivery: ItemDelivery = {
   failureMode: promotion.failureMode,
-  deliveredAt: promotion.updatedAt,
+  deliveredAt: DELIVERED_AT,
 };

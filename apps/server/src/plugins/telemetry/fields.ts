@@ -250,14 +250,14 @@ export const verdictFields = (verdict: ReviewVerdict) => ({
 });
 
 /**
- * A failure mode's handover as `ItemStore.deliveredAt` lists it: the earliest delivered
- * promotion's `updatedAt`, which delivery sets and nothing changes after. It is read from the
- * promotion records, not the item, whose `updatedAt` moves with every later piece of evidence and
- * whose state with a person's later choice.
+ * A failure mode's handover as `ItemStore.deliveredAt` lists it: the earliest promotion's
+ * `deliveredAt`, which delivery sets and nothing changes after. It is read from the promotion
+ * records, not the item, whose `updatedAt` moves with every later piece of evidence and whose
+ * state with a person's later choice.
  */
 export const deliveredFields = (delivery: ItemDelivery) => ({
   "learning.promotion.failureMode": delivery.failureMode,
-  "learning.promotion.updatedAt": delivery.deliveredAt,
+  "learning.promotion.deliveredAt": delivery.deliveredAt,
 });
 
 /** A path a measure may cite in `provenance`. */

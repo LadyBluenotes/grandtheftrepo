@@ -129,7 +129,7 @@ it("renders the five costliest extraction candidates as a sub-table of the effic
       candidates: [
         candidate(["command:pnpm lint", "command:pnpm test"], 9000, 1),
         candidate(["Read <b>AGENTS.md</b>"], 8000, 2),
-        candidate(["Grep <pattern> <path>"], 7000, 3),
+        candidate(["Grep <pattern> <path>", "Read <path>"], 7000, 3),
         candidate(["command:git status"], 6000, 4),
         candidate(["file_search:TODO"], 5000, 5),
         candidate(["command:pnpm audit"], 4000, 6),

@@ -35,6 +35,7 @@ import {
   TableRow,
 } from "~/components/ui/table";
 import { stackedThreadToast, toastManager } from "~/components/ui/toast";
+import { HandoverChain } from "./HandoverChain";
 import {
   ITEM_STATE_LABEL,
   ITEM_STATE_VARIANT,
@@ -58,7 +59,10 @@ interface ItemDrawerProps {
   readonly onChanged: () => void;
 }
 
-/** One item's evidence and promotions, and the disposition a person sets on it. */
+/**
+ * One item's handover chain, evidence and promotions, the disposition a person sets on it, and
+ * their verdict on a handover in review.
+ */
 export function ItemDrawer({ environmentId, itemId, onClose, onChanged }: ItemDrawerProps) {
   const detail = useLearningItem(environmentId, itemId);
   return (
@@ -86,13 +90,14 @@ export function ItemDrawer({ environmentId, itemId, onClose, onChanged }: ItemDr
 
 function ItemDetails({
   environmentId,
-  detail: { item, evidence, promotions },
+  detail,
   onChanged,
 }: {
   readonly environmentId: EnvironmentId;
   readonly detail: LearningItemDetail;
   readonly onChanged: () => void;
 }) {
+  const { item, evidence, promotions } = detail;
   const { canWrite, set } = useLearningSetDisposition(environmentId);
   const [saving, setSaving] = useState(false);
   const locked = !canWrite || saving;
@@ -190,8 +195,12 @@ function ItemDetails({
             </div>
             <p className="text-xs text-muted-foreground">
               Candidate and promoted are not yours to set: the owner kind makes an open item a
-              candidate, and handing it over makes it promoted.
+              candidate, and adopting its handover makes it promoted.
             </p>
+          </Field>
+
+          <Field label="Handover">
+            <HandoverChain environmentId={environmentId} detail={detail} onChanged={onChanged} />
           </Field>
 
           <Field label="Evidence">

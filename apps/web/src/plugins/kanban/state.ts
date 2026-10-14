@@ -80,11 +80,12 @@ export const kanbanAttention = createKanbanAttentionAtomFamily(connectionAtomRun
 
 /**
  * Where a strip row's button leads, always on the board's environment: the row's thread, the
- * board, that environment's Plugins page, where budgets and other plugin settings live, or a
- * plugin's screen on the tab and record the flag names. Null when a thread row has no thread.
+ * board (its decisions view for a decision conflict), that environment's Plugins page, where
+ * budgets and other plugin settings live, or a plugin's screen on the tab and record the flag
+ * names. Null when a thread row has no thread.
  */
 export function attentionResumeTarget(
-  row: Pick<KanbanAttentionRow, "resumeAction" | "threadId">,
+  row: Pick<KanbanAttentionRow, "resumeAction" | "threadId" | "kind">,
   board: { readonly environmentId: EnvironmentId; readonly projectId: ProjectId },
 ) {
   switch (row.resumeAction.target) {
@@ -96,7 +97,9 @@ export function attentionResumeTarget(
             params: buildThreadRouteParams(scopeThreadRef(board.environmentId, row.threadId)),
           } as const);
     case "board":
-      return { to: "/board", search: board } as const;
+      return row.kind === "decision_conflict"
+        ? ({ to: "/board", search: { ...board, view: "decisions" } } as const)
+        : ({ to: "/board", search: board } as const);
     case "settings":
       return { to: "/plugins", search: { machine: board.environmentId } } as const;
     case "plugin": {
@@ -129,17 +132,21 @@ export function buildIssuePrompt(
   decisions: ReadonlyArray<KanbanDecision>,
   categories: ReadonlyArray<{ readonly category: string; readonly count: number }>,
 ): string {
-  const byCategory = new Map<string, { for: number; against: number }>();
+  // Per category, how many decisions are in each state, in the order the states first appear.
+  const byCategory = new Map<string, Map<KanbanDecision["state"], number>>();
   for (const decision of decisions) {
-    const counts = byCategory.get(decision.category) ?? { for: 0, against: 0 };
-    counts[decision.stance] += 1;
+    const counts = byCategory.get(decision.category) ?? new Map<KanbanDecision["state"], number>();
+    counts.set(decision.state, (counts.get(decision.state) ?? 0) + 1);
     byCategory.set(decision.category, counts);
   }
   const onTicket =
     decisions.length === 0
       ? "Decisions on this ticket: none."
       : `Decisions on this ticket (${decisions.length}): ${[...byCategory]
-          .map(([category, counts]) => `${category}: for ${counts.for}, against ${counts.against}`)
+          .map(
+            ([category, counts]) =>
+              `${category}: ${[...counts].map(([state, count]) => `${state} ${count}`).join(", ")}`,
+          )
           .join("; ")}`;
   const all =
     categories.length === 0

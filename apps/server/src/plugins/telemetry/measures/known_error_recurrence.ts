@@ -9,7 +9,7 @@ const spec = {
     "learning.correction.createdAt",
     "learning.correction.declaredMode",
     "learning.promotion.failureMode",
-    "learning.promotion.updatedAt",
+    "learning.promotion.deliveredAt",
   ],
 } as const satisfies Spec;
 
@@ -40,7 +40,7 @@ export const knownErrorRecurrence: Measure = (input) => {
     handedOver.some(
       (delivery) =>
         delivery["learning.promotion.failureMode"] === mode &&
-        delivery["learning.promotion.updatedAt"] < at,
+        delivery["learning.promotion.deliveredAt"] < at,
     ),
   );
   return ok(spec, recurred.length / declared.length, declared.length);

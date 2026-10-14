@@ -28,6 +28,9 @@ export const table = {
     items: (input) => Effect.flatMap(items, (s) => s.list(input)),
     item: ({ id }) => Effect.flatMap(items, (s) => s.get(id)),
     itemsSetDisposition: (input) => Effect.flatMap(items, (s) => s.setDisposition(input)),
+    // A client is a person; agents review through the `learning_promotion_review` tool.
+    promotionReview: (input) => Effect.flatMap(items, (s) => s.reviewPromotion(input, "user")),
+    promotionRollBack: (input) => Effect.flatMap(items, (s) => s.rollBackPromotion(input, "user")),
   }),
   ...PluginRpc.defineHandlers(PROMPT_METHODS)({
     list: (input) => Effect.flatMap(prompts, (s) => s.list(input)),

@@ -25,6 +25,8 @@ import * as Promoter from "./Promoter.ts";
 
 const projectId = ProjectId.make("project:learning");
 const threadId = ThreadId.make("thread:learning");
+/** An agent reviewing from its own thread. */
+const reviewer = "thread:reviewer";
 
 /** The plugin's stores and both sweeps over a fresh database, as the plugin's layer builds them. */
 const setup = Effect.gen(function* () {
@@ -130,7 +132,7 @@ it.effect(
         assert.deepEqual(yield* learning.promotions, [
           {
             owner_kind: "project_knowledge",
-            state: "pending",
+            state: "proposed",
             attempts: 0,
             next_attempt_at: null,
             last_error: null,
@@ -160,8 +162,14 @@ it.effect(
             },
           ],
         );
+        // The draft is written and waits for review; the item is not promoted until it is adopted.
+        assert.strictEqual((yield* learning.items.get(item!.id)).item.state, "candidate");
+        assert.strictEqual((yield* learning.promotions)[0]?.state, "in_review");
+        yield* learning.items.reviewPromotion(
+          { promotionId: record!.id, verdict: "adopt" },
+          "user",
+        );
         assert.strictEqual((yield* learning.items.get(item!.id)).item.state, "promoted");
-        assert.strictEqual((yield* learning.promotions)[0]?.state, "delivered");
 
         // The same mode again strengthens the one item; a promoted item is not handed over twice.
         yield* learning.correction("convention");
@@ -295,7 +303,7 @@ it.effect("a failing promoter is retried after six hours and gives up after five
       assert.deepEqual(yield* learning.promotions, [
         {
           owner_kind: "policy",
-          state: "pending",
+          state: "proposed",
           attempts: 1,
           next_attempt_at: "1970-01-01T06:00:00.000Z",
           last_error: "Page is locked.",
@@ -355,7 +363,7 @@ it.effect("a promoter whose plugin is not running waits without counting an atte
         assert.deepEqual(yield* learning.promotions, [
           {
             owner_kind: "policy",
-            state: "pending",
+            state: "proposed",
             attempts: 0,
             next_attempt_at: null,
             last_error: null,
@@ -367,7 +375,7 @@ it.effect("a promoter whose plugin is not running waits without counting an atte
       assert.deepEqual(yield* learning.promoters.ownerKinds, ["policy"]);
       assert.deepEqual((yield* learning.tick).promote, { examined: 1, acted: 1, flags: 0 });
       assert.strictEqual((yield* Ref.get(calls)).length, 1);
-      assert.strictEqual((yield* learning.promotions)[0]?.state, "delivered");
+      assert.strictEqual((yield* learning.promotions)[0]?.state, "in_review");
     }),
   ),
 );
@@ -423,10 +431,19 @@ it.effect("a person's disposition survives later sweeps; promoted is never set b
       });
       assert.strictEqual((yield* Ref.get(calls)).length, 0);
 
-      // Reopened, it is a candidate again and its record goes out.
+      // Reopened, it is a candidate again and its record goes out for review.
       yield* learning.items.setDisposition({ id: ruled!.id, state: "open" });
       yield* learning.tick;
       assert.strictEqual((yield* Ref.get(calls)).length, 1);
+      const record = (yield* learning.items.get(ruled!.id)).promotions.find(
+        (promotion) => promotion.ownerKind === "policy",
+      );
+      // A person picked the owner kind, so a person proposed it and an agent reviews it.
+      assert.deepInclude(record, { state: "in_review", proposedBy: "user" });
+      yield* learning.items.reviewPromotion(
+        { promotionId: record!.id, verdict: "adopt" },
+        reviewer,
+      );
       assert.strictEqual((yield* learning.items.get(ruled!.id)).item.state, "promoted");
       // Local only has nothing to hand over: the item is open.
       const local = yield* learning.items.setDisposition({
@@ -475,7 +492,7 @@ it.effect("a dry run counts and writes nothing", () =>
         flags: 0,
       });
       assert.strictEqual((yield* Ref.get(calls)).length, 0);
-      assert.deepInclude((yield* learning.promotions)[0], { state: "pending", attempts: 0 });
+      assert.deepInclude((yield* learning.promotions)[0], { state: "proposed", attempts: 0 });
     }),
   ),
 );
@@ -498,7 +515,7 @@ it.effect("an interrupted handover is offered again with the same key", () =>
       const first = yield* Effect.forkChild(learning.promote.run({ dryRun: false }));
       yield* Deferred.await(wrote);
       yield* Fiber.interrupt(first);
-      assert.deepInclude((yield* learning.promotions)[0], { state: "pending", attempts: 0 });
+      assert.deepInclude((yield* learning.promotions)[0], { state: "proposed", attempts: 0 });
 
       yield* learning.tick;
       const keys = (yield* Ref.get(calls)).map(({ key }) => key);
@@ -509,13 +526,13 @@ it.effect("an interrupted handover is offered again with the same key", () =>
         keys[0]?.promotionId,
         (yield* learning.items.get(item!.id)).promotions[0]?.id,
       );
-      assert.strictEqual(item?.state, "promoted");
-      assert.strictEqual((yield* learning.promotions)[0]?.state, "delivered");
+      assert.strictEqual(item?.state, "candidate");
+      assert.strictEqual((yield* learning.promotions)[0]?.state, "in_review");
     }),
   ),
 );
 
-it.effect("a handover is stamped when the promoter returns, not when the tick began", () =>
+it.effect("a draft goes into review when the promoter returns, not when the tick began", () =>
   Effect.scoped(
     Effect.gen(function* () {
       const learning = yield* setup;
@@ -530,10 +547,13 @@ it.effect("a handover is stamped when the promoter returns, not when the tick be
       const [item] = yield* learning.items.list({ projectId });
       const detail = yield* learning.items.get(item!.id);
       assert.deepEqual(
-        detail.promotions.map(({ state, createdAt, updatedAt }) => [state, createdAt, updatedAt]),
-        [["delivered", "1970-01-01T00:00:00.000Z", "1970-01-01T02:00:00.000Z"]],
+        detail.promotions.map(({ state, createdAt, deliveredAt }) => [
+          state,
+          createdAt,
+          deliveredAt,
+        ]),
+        [["in_review", "1970-01-01T00:00:00.000Z", "1970-01-01T02:00:00.000Z"]],
       );
-      assert.deepInclude(detail.item, { state: "promoted", updatedAt: "1970-01-01T02:00:00.000Z" });
     }),
   ),
 );
@@ -553,18 +573,20 @@ it.effect("lists each failure mode's earliest delivery, whatever its item's stat
         item: { readonly id: number; readonly projectId: ProjectId; readonly failureMode: string },
         ownerKind: LearningOwnerKind,
         state: string,
-        updatedAt: string,
+        deliveredAt: string | null,
       ) =>
         learning.sql`INSERT INTO learning_promotions
-          (item_id, project_id, failure_mode, owner_kind, state, attempts, created_at, updated_at)
+          (item_id, project_id, failure_mode, owner_kind, state, attempts, delivered_at,
+            created_at, updated_at)
           VALUES (${item.id}, ${item.projectId}, ${item.failureMode}, ${ownerKind}, ${state}, 0,
-            '2026-10-01T00:00:00.000Z', ${updatedAt})`;
-      // Two delivered promotions of one mode: the earlier one is when it was first handed over.
-      yield* promotion(defect, "policy", "delivered", "2026-10-06T00:00:00.000Z");
-      yield* promotion(defect, "prompt", "delivered", "2026-10-04T00:00:00.000Z");
-      yield* promotion(convention, "prompt", "delivered", "2026-10-05T00:00:00.000Z");
-      yield* promotion(incomplete, "prompt", "pending", "2026-10-02T00:00:00.000Z");
-      yield* promotion(otherDefect, "prompt", "delivered", "2026-10-01T00:00:00.000Z");
+            ${deliveredAt}, '2026-10-01T00:00:00.000Z', '2026-10-09T00:00:00.000Z')`;
+      // Two delivered promotions of one mode: the earlier one is when it was first handed over,
+      // whatever its review made of it.
+      yield* promotion(defect, "policy", "adopted", "2026-10-06T00:00:00.000Z");
+      yield* promotion(defect, "prompt", "rejected", "2026-10-04T00:00:00.000Z");
+      yield* promotion(convention, "prompt", "in_review", "2026-10-05T00:00:00.000Z");
+      yield* promotion(incomplete, "prompt", "proposed", null);
+      yield* promotion(otherDefect, "prompt", "rolled_back", "2026-10-01T00:00:00.000Z");
       // A person closes the item after the handover; the handover stands.
       yield* learning.items.setDisposition({ id: defect.id, state: "closed" });
       assert.strictEqual((yield* learning.items.get(defect.id)).item.state, "closed");
@@ -612,20 +634,21 @@ it.effect("lists a range's deliveries to the owner kinds asked for, oldest first
         item: { readonly id: number; readonly projectId: ProjectId },
         ownerKind: LearningOwnerKind,
         state: string,
-        updatedAt: string,
+        deliveredAt: string | null,
         failureMode = "defect",
       ) =>
         learning.sql`INSERT INTO learning_promotions
-          (item_id, project_id, failure_mode, owner_kind, state, attempts, created_at, updated_at)
+          (item_id, project_id, failure_mode, owner_kind, state, attempts, delivered_at,
+            created_at, updated_at)
           VALUES (${item.id}, ${item.projectId}, ${failureMode}, ${ownerKind}, ${state}, 0,
-            '2026-10-01T00:00:00.000Z', ${updatedAt})`;
-      yield* promotion(defect, "prompt", "delivered", "2026-10-06T00:00:00.000Z");
-      yield* promotion(defect, "project_knowledge", "delivered", "2026-10-05T00:00:00.000Z");
-      // Another owner kind, one at the range's end, one still pending, and another project's.
-      yield* promotion(defect, "policy", "delivered", "2026-10-06T00:00:00.000Z");
-      yield* promotion(defect, "local_only", "delivered", "2026-10-12T00:00:00.000Z");
-      yield* promotion(defect, "local_only", "pending", "2026-10-06T00:00:00.000Z", "convention");
-      yield* promotion(other, "prompt", "delivered", "2026-10-06T00:00:00.000Z");
+            ${deliveredAt}, '2026-10-01T00:00:00.000Z', '2026-10-06T00:00:00.000Z')`;
+      yield* promotion(defect, "prompt", "adopted", "2026-10-06T00:00:00.000Z");
+      yield* promotion(defect, "project_knowledge", "in_review", "2026-10-05T00:00:00.000Z");
+      // Another owner kind, one at the range's end, one not delivered, and another project's.
+      yield* promotion(defect, "policy", "adopted", "2026-10-06T00:00:00.000Z");
+      yield* promotion(defect, "local_only", "adopted", "2026-10-12T00:00:00.000Z");
+      yield* promotion(defect, "local_only", "proposed", null, "convention");
+      yield* promotion(other, "prompt", "adopted", "2026-10-06T00:00:00.000Z");
 
       const delivered = (ownerKinds: ReadonlyArray<LearningOwnerKind>) =>
         learning.items.deliveredIn({
@@ -637,7 +660,7 @@ it.effect("lists a range's deliveries to the owner kinds asked for, oldest first
       assert.deepEqual(
         (yield* delivered(["project_knowledge", "prompt", "local_only"])).map((p) => [
           p.ownerKind,
-          p.updatedAt,
+          p.deliveredAt,
         ]),
         [
           ["project_knowledge", "2026-10-05T00:00:00.000Z"],
@@ -674,8 +697,8 @@ it.effect("an item a person moves during its handover stays a candidate for the 
       assert.deepEqual(
         (yield* learning.promotions).map((p) => [p.owner_kind, p.state]),
         [
-          ["project_knowledge", "delivered"],
-          ["policy", "pending"],
+          ["project_knowledge", "in_review"],
+          ["policy", "proposed"],
         ],
       );
     }),
@@ -706,6 +729,235 @@ it.effect("a tick takes at most one batch of candidates and one of due promotion
       assert.deepEqual(yield* promote, rest);
       assert.deepEqual(yield* promote, { examined: 0, acted: 0, flags: 0 });
       assert.strictEqual((yield* Ref.get(calls)).length, total);
+    }),
+  ),
+);
+
+/** A scope drift item with its policy draft in review, written by a promoter that accepts all. */
+const inReview = (learning: Effect.Success<typeof setup>) =>
+  Effect.gen(function* () {
+    const { promoter } = yield* fakePromoter("policy");
+    yield* learning.promoters.register(promoter);
+    yield* learning.correction("scope_drift");
+    yield* learning.tick;
+    const [item] = yield* learning.items.list({ projectId });
+    const [promotion] = (yield* learning.items.get(item!.id)).promotions;
+    return { item: item!, promotion: promotion! };
+  });
+
+it.effect("a promotion is adopted only after a verdict from someone other than its proposer", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const learning = yield* setup;
+      yield* learning.correction("convention");
+      yield* learning.tick;
+      const [item] = yield* learning.items.list({ projectId });
+      // A person routes it, so a person proposed the handover.
+      yield* learning.items.setDisposition({ id: item!.id, ownerKind: "policy" });
+      yield* learning.tick;
+      const promotion = (yield* learning.items.get(item!.id)).promotions.find(
+        (record) => record.ownerKind === "policy",
+      )!;
+      assert.deepInclude(promotion, { state: "proposed", proposedBy: "user" });
+      const review = (verdict: "adopt" | "reject" | "revise", by: string, note?: string) =>
+        learning.items.reviewPromotion(
+          { promotionId: promotion.id, verdict, ...(note === undefined ? {} : { note }) },
+          by,
+        );
+
+      // Nothing to review until the draft is written.
+      assert.deepInclude(yield* Effect.flip(review("adopt", reviewer)), {
+        code: "invalid",
+        message: `Promotion ${promotion.id} is proposed; only one in review takes a verdict.`,
+      });
+      const { promoter } = yield* fakePromoter("policy");
+      yield* learning.promoters.register(promoter);
+      yield* learning.tick;
+
+      // The proposer's own verdict is refused, whatever it is.
+      for (const verdict of ["adopt", "reject", "revise"] as const) {
+        assert.deepInclude(yield* Effect.flip(review(verdict, "user")), {
+          code: "invalid",
+          message: `A person proposed promotion ${promotion.id}, so someone else reviews it, such as an agent with learning_promotion_review.`,
+        });
+      }
+      assert.deepEqual((yield* learning.items.get(item!.id)).reviews, []);
+
+      // A revision keeps it in review; the note is redacted.
+      yield* TestClock.adjust("1 hour");
+      const revised = yield* review("revise", reviewer, "Narrow it to tests. TOKEN=abc");
+      assert.deepInclude(revised, { state: "in_review", adoptedAt: null });
+      assert.strictEqual((yield* learning.items.get(item!.id)).item.state, "candidate");
+
+      // An item closed meanwhile no longer wants it; reopened, it does again.
+      yield* learning.items.setDisposition({ id: item!.id, state: "closed" });
+      assert.deepInclude(yield* Effect.flip(review("adopt", reviewer)), {
+        code: "invalid",
+        message: `Promotion ${promotion.id}'s item no longer waits for it; reopen the item with that owner kind to adopt it.`,
+      });
+      yield* learning.items.setDisposition({ id: item!.id, state: "open" });
+      yield* TestClock.adjust("1 hour");
+      const adopted = yield* review("adopt", reviewer);
+      assert.deepInclude(adopted, { state: "adopted", adoptedAt: "1970-01-01T02:00:00.000Z" });
+      const detail = yield* learning.items.get(item!.id);
+      assert.strictEqual(detail.item.state, "promoted");
+      assert.deepEqual(
+        detail.reviews.map(({ verdict, reviewer: by, note, createdAt }) => [
+          verdict,
+          by,
+          note,
+          createdAt,
+        ]),
+        [
+          ["revise", reviewer, "Narrow it to tests. TOKEN=[redacted]", "1970-01-01T01:00:00.000Z"],
+          ["adopt", reviewer, null, "1970-01-01T02:00:00.000Z"],
+        ],
+      );
+      // Decided: a second verdict is refused.
+      assert.deepInclude(yield* Effect.flip(review("reject", "thread:another")), {
+        code: "invalid",
+        message: `Promotion ${promotion.id} is adopted; only one in review takes a verdict.`,
+      });
+      assert.strictEqual(
+        (yield* Effect.flip(
+          learning.items.reviewPromotion({ promotionId: 999, verdict: "adopt" }, reviewer),
+        )).code,
+        "not_found",
+      );
+    }),
+  ),
+);
+
+it.effect("a rule's handover is reviewed by a person, and a rejection reopens the item", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const learning = yield* setup;
+      const { item, promotion } = yield* inReview(learning);
+      assert.deepInclude(promotion, { state: "in_review", proposedBy: "supervisor" });
+
+      const rejected = yield* learning.items.reviewPromotion(
+        { promotionId: promotion.id, verdict: "reject", note: "Too broad." },
+        "user",
+      );
+      assert.strictEqual(rejected.state, "rejected");
+      assert.deepInclude((yield* learning.items.get(item.id)).item, {
+        state: "open",
+        ownerKind: "policy",
+        reason: "The policy handover was rejected.",
+      });
+
+      // The rules no longer route it, and nothing goes to that owner kind again.
+      yield* learning.correction("scope_drift");
+      yield* learning.tick;
+      assert.deepInclude((yield* learning.items.get(item.id)).item, {
+        state: "open",
+        occurrences: 2,
+      });
+      assert.strictEqual(
+        (yield* learning.items.setDisposition({ id: item.id, ownerKind: "policy" })).state,
+        "open",
+      );
+      // Another owner kind gets a handover of its own.
+      const moved = yield* learning.items.setDisposition({ id: item.id, ownerKind: "prompt" });
+      assert.strictEqual(moved.state, "candidate");
+      yield* learning.tick;
+      assert.deepEqual(
+        (yield* learning.items.get(item.id)).promotions.map((p) => [p.ownerKind, p.state]),
+        [
+          ["policy", "rejected"],
+          ["prompt", "proposed"],
+        ],
+      );
+    }),
+  ),
+);
+
+it.effect("rolling back an adopted promotion reopens its item, even a closed one", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const learning = yield* setup;
+      const { item, promotion } = yield* inReview(learning);
+      const rollBack = learning.items.rollBackPromotion({ promotionId: promotion.id }, reviewer);
+      // Only an adopted promotion rolls back.
+      assert.deepInclude(yield* Effect.flip(rollBack), {
+        code: "invalid",
+        message: `Promotion ${promotion.id} is in review; only an adopted one rolls back.`,
+      });
+      yield* learning.items.reviewPromotion(
+        { promotionId: promotion.id, verdict: "adopt" },
+        "user",
+      );
+      yield* learning.items.setDisposition({ id: item.id, state: "closed" });
+
+      yield* TestClock.adjust("1 hour");
+      assert.deepInclude(yield* rollBack, {
+        state: "rolled_back",
+        rolledBackAt: "1970-01-01T01:00:00.000Z",
+        rolledBackBy: reviewer,
+      });
+      assert.deepInclude((yield* learning.items.get(item.id)).item, {
+        state: "open",
+        ownerKind: "policy",
+        reason: "The policy handover was rolled back.",
+      });
+      assert.strictEqual((yield* Effect.flip(rollBack)).code, "invalid");
+      // The rules leave it open for a person to route elsewhere or close.
+      yield* learning.correction("scope_drift");
+      yield* learning.tick;
+      assert.strictEqual((yield* learning.items.get(item.id)).item.state, "open");
+    }),
+  ),
+);
+
+it.effect("migration 8 adopts earlier deliveries at their delivery time", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const { sql } = yield* PluginDatabase.open({
+        id: "learning",
+        filename: ":memory:",
+        migrations: migrations.filter(([id]) => id < 8),
+      });
+      const item = (id: number, mode: string, by: string) =>
+        sql`INSERT INTO learning_items
+          (id, project_id, failure_mode, occurrences, state, owner_kind, disposition_by, reason,
+            created_at, updated_at)
+          VALUES (${id}, ${projectId}, ${mode}, 1, 'candidate', 'policy', ${by}, 'Seeded.',
+            '2026-10-01T00:00:00.000Z', '2026-10-01T00:00:00.000Z')`;
+      yield* item(1, "scope_drift", "rule");
+      yield* item(2, "convention", "person");
+      yield* item(3, "security", "rule");
+      yield* sql`INSERT INTO learning_promotions
+        (id, item_id, project_id, failure_mode, owner_kind, state, attempts, created_at, updated_at)
+        VALUES (1, 1, ${projectId}, 'scope_drift', 'policy', 'delivered', 0,
+            '2026-10-01T00:00:00.000Z', '2026-10-03T00:00:00.000Z'),
+          (2, 2, ${projectId}, 'convention', 'policy', 'pending', 2,
+            '2026-10-01T00:00:00.000Z', '2026-10-02T00:00:00.000Z'),
+          (3, 3, ${projectId}, 'security', 'policy', 'failed', 5,
+            '2026-10-01T00:00:00.000Z', '2026-10-02T00:00:00.000Z')`;
+
+      const [, , promotionReview] = migrations.find(([id]) => id === 8)!;
+      yield* promotionReview.pipe(Effect.provideService(SqlClient.SqlClient, sql));
+      assert.deepEqual(
+        yield* sql`SELECT id, state, proposed_by, delivered_at, adopted_at
+          FROM learning_promotions ORDER BY id`,
+        [
+          {
+            id: 1,
+            state: "adopted",
+            proposed_by: "supervisor",
+            delivered_at: "2026-10-03T00:00:00.000Z",
+            adopted_at: "2026-10-03T00:00:00.000Z",
+          },
+          { id: 2, state: "proposed", proposed_by: "user", delivered_at: null, adopted_at: null },
+          {
+            id: 3,
+            state: "failed",
+            proposed_by: "supervisor",
+            delivered_at: null,
+            adopted_at: null,
+          },
+        ],
+      );
     }),
   ),
 );
