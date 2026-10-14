@@ -1312,14 +1312,18 @@ const make = Effect.gen(function* () {
     // and leaves the board, its watchers and `kanban.json` as they were. It takes no lock.
     if (hadBoard)
       yield* openFolders((yield* resolveDirectory(projectId, withDirectory(overrides))).directory);
-    // Re-read under `overridesLock`, so a capture toggle made meanwhile is kept. Nothing below loads
-    // while it is held: `setCapture` takes `loadLock` before it.
-    yield* updateOverrides(withDirectory);
-    const previous = loaded.get(projectId);
-    if (previous !== undefined) {
-      loaded.delete(projectId);
-      yield* Scope.close(previous.scope, Exit.void);
-    }
+    // Re-read under `overridesLock`, so a capture toggle made meanwhile is kept. Under `loadLock`
+    // first, as `setCapture` takes them, so a first load in flight can't cache the old folder.
+    yield* loadLock.withPermits(1)(
+      Effect.gen(function* () {
+        yield* updateOverrides(withDirectory);
+        const previous = loaded.get(projectId);
+        if (previous !== undefined) {
+          loaded.delete(projectId);
+          yield* Scope.close(previous.scope, Exit.void);
+        }
+      }),
+    );
     // Loaded before this returns, so a client that asks `boardFolders` next still finds the
     // board, and does not drop the subscription that would have created its new folder.
     if (hadBoard) yield* load(projectId);
