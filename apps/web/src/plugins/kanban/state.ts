@@ -2,6 +2,7 @@ import {
   createKanbanActiveAtomFamily,
   createKanbanBoardAtomFamily,
   createKanbanProjectsAttentionAtomFamily,
+  type KanbanAttentionStripRow,
 } from "@t3tools/client-runtime/plugins/kanban";
 import {
   createPluginRpcCommand,
@@ -121,18 +122,19 @@ export function attentionResumeTarget(
 const kanbanActiveAtom = createKanbanActiveAtomFamily(connectionAtomRuntime);
 
 /**
- * Bumped after a write that may have started a board (a project's first card, or a new folder),
- * so `kanbanBoardEnvironments` reads which projects have one again.
+ * Bumped after a write that may have started a board or moved one (a project's first card, or a
+ * new folder), so `kanbanBoardEnvironments` reads the projects' board folders again.
  */
 export const kanbanBoardsChanged = Atom.make(0).pipe(Atom.keepAlive);
 
 const boardsSignal = Atom.make((get) => [get(Atom.windowFocusSignal), get(kanbanBoardsChanged)]);
 
 /**
- * Of some projects of one environment, the ones with a board. Creates nothing. Nothing pushes a
- * new board, so it re-reads when the window comes back into view and after `kanbanBoardsChanged`.
+ * The board folders of some projects of one environment, and which have a board. Creates nothing.
+ * Nothing pushes a new board or folder, so it re-reads when the window comes back into view and
+ * after `kanbanBoardsChanged`.
  */
-const kanbanBoardProjects = createPluginRpcQueryAtomFamily(connectionAtomRuntime, {
+const kanbanBoardFolders = createPluginRpcQueryAtomFamily(connectionAtomRuntime, {
   label: "environment-data:kanban:boards",
   method: KANBAN_METHODS.boards,
   refreshTrigger: () => boardsSignal,
@@ -156,23 +158,23 @@ const kanbanBoardEnvironmentsFamily = Atom.family((key: string) => {
   return Atom.make((get): ReadonlyArray<BoardEnvironment> =>
     environments.map(([environmentId, projectIds]) => {
       const active = get(kanbanActiveAtom(environmentId));
-      if (active !== true) return { environmentId, active, boards: null, error: null };
-      const result = get(kanbanBoardProjects({ environmentId, input: { projectIds } }));
+      if (active !== true) return { environmentId, active, folders: null, error: null };
+      const result = get(kanbanBoardFolders({ environmentId, input: { projectIds } }));
       return {
         environmentId,
         active,
-        boards: Option.getOrNull(AsyncResult.value(result)),
+        folders: Option.getOrNull(AsyncResult.value(result)),
         error: failureMessage(result),
       };
     }),
   ).pipe(Atom.withLabel(`kanban:board-environments:${key}`));
 });
 
-/** Per environment of `refs`: whether it runs kanban and, once known, which projects have a board. */
+/** Per environment of `refs`: whether it runs kanban and, once known, its projects' board folders. */
 export const kanbanBoardEnvironments = (refs: ReadonlyArray<ScopedProjectRef>) =>
   kanbanBoardEnvironmentsFamily(projectRefCollectionKey(refs));
 
-export interface LoadedBoard extends ScopedProjectRef {
+interface LoadedBoard extends ScopedProjectRef {
   readonly board: KanbanBoard | null;
   readonly error: string | null;
 }
@@ -225,6 +227,19 @@ const kanbanBoardAttentionFamily = Atom.family((key: string) => {
       .toSorted((left, right) => order(left.since, right.since) || order(left.id, right.id)),
   ).pipe(Atom.withLabel(`kanban:board-attention:${key}`));
 });
+
+/**
+ * A strip row's title on the board: its thread's (the shared formatter names an untitled one),
+ * else the project it is about, or every project for a policy of the whole environment.
+ */
+export function boardAttentionTitle(
+  row: KanbanAttentionStripRow<BoardAttentionRow>,
+  projectLabel: (ref: ScopedProjectRef) => string | undefined,
+): string {
+  if (row.threadId !== null) return row.title;
+  if (row.projectId === null) return "Every project";
+  return projectLabel({ environmentId: row.environmentId, projectId: row.projectId }) ?? row.title;
+}
 
 /** What waits on a person in the boards of `refs`: one read per environment, oldest first. */
 export const kanbanBoardAttention = (refs: ReadonlyArray<ScopedProjectRef>) =>

@@ -5,6 +5,7 @@ import {
   KanbanSlug,
   type KanbanActor,
   type KanbanBoard,
+  type KanbanBoardFolder,
   type KanbanCriterion,
   type KanbanDecision,
   type KanbanGetIssueInput,
@@ -128,12 +129,13 @@ export class KanbanStore extends Context.Service<
     /** The project's base folder as the board resolves it; unlike `board`, nothing is loaded or created. */
     readonly directory: (projectId: ProjectId) => Effect.Effect<string, KanbanError>;
     /**
-     * The projects of `projectIds` that have a board: loaded, or with their folder on disk, in the
-     * given order. Nothing is created or loaded, so a project without one gets no folder or watcher.
+     * The board folder of each of `projectIds` that exists, in the given order, and whether the
+     * board is there: loaded, or its folder on disk. Nothing is created or loaded, so a project
+     * without one gets no folder or watcher.
      */
-    readonly boardProjects: (
+    readonly boardFolders: (
       projectIds: ReadonlyArray<ProjectId>,
-    ) => Effect.Effect<ReadonlyArray<ProjectId>, KanbanError>;
+    ) => Effect.Effect<ReadonlyArray<KanbanBoardFolder>, KanbanError>;
     /** The loaded project holding an issue that links `threadId`, if any. No disk or database read. */
     readonly linkedProject: (threadId: ThreadId) => Effect.Effect<ProjectId | undefined>;
   }
@@ -271,25 +273,34 @@ const make = Effect.gen(function* () {
   });
 
   /**
-   * Whether the project is loaded or its folder exists. Nothing is created or loaded. Only a
-   * missing folder (or project) is `false`; a folder that cannot be inspected fails.
+   * The project's board folder and whether the board is there: loaded, or its folder on disk;
+   * null for a project that is gone. Nothing is created or loaded. Only a missing folder means no
+   * board; a folder that cannot be inspected fails.
    */
+  const folderOf = (
+    projectId: ProjectId,
+    overrides: typeof Overrides.Type,
+  ): Effect.Effect<KanbanBoardFolder | null, KanbanError> => {
+    const state = loaded.get(projectId);
+    if (state !== undefined)
+      return Effect.succeed({ projectId, directory: state.directory, board: true });
+    return readProject(projectId).pipe(
+      Effect.flatMap(
+        Option.match({
+          onNone: () => Effect.succeed(null),
+          onSome: (project) => {
+            const { directory } = directoryOf(projectId, project.title, overrides);
+            return fs.exists(directory).pipe(
+              Effect.map((board) => ({ projectId, directory, board })),
+              Effect.catch(io(`Could not inspect ${directory}.`)),
+            );
+          },
+        }),
+      ),
+    );
+  };
   const hasBoard = (projectId: ProjectId, overrides: typeof Overrides.Type) =>
-    loaded.has(projectId)
-      ? Effect.succeed(true)
-      : readProject(projectId).pipe(
-          Effect.flatMap(
-            Option.match({
-              onNone: () => Effect.succeed(false),
-              onSome: (project) => {
-                const { directory } = directoryOf(projectId, project.title, overrides);
-                return fs
-                  .exists(directory)
-                  .pipe(Effect.catch(io(`Could not inspect ${directory}.`)));
-              },
-            }),
-          ),
-        );
+    Effect.map(folderOf(projectId, overrides), (folder) => folder?.board === true);
 
   const load = Effect.fn("KanbanStore.load")(function* (projectId: ProjectId) {
     const existing = loaded.get(projectId);
@@ -807,7 +818,7 @@ const make = Effect.gen(function* () {
       loaded.delete(projectId);
       yield* Scope.close(previous.scope, Exit.void);
     }
-    // Loaded before this returns, so a client that asks `boardProjects` next still finds the
+    // Loaded before this returns, so a client that asks `boardFolders` next still finds the
     // board, and does not drop the subscription that would have created its new folder.
     if (hadBoard) yield* load(projectId);
     yield* publish(projectId);
@@ -847,12 +858,12 @@ const make = Effect.gen(function* () {
     }).pipe(Effect.catch((cause) => Effect.logWarning("kanban: archive sweep failed", { cause }))),
     board: (projectId) => Effect.map(load(projectId), board),
     directory: (projectId) => Effect.map(resolveDirectory(projectId), ({ directory }) => directory),
-    boardProjects: Effect.fn("KanbanStore.boardProjects")(function* (projectIds) {
+    boardFolders: Effect.fn("KanbanStore.boardFolders")(function* (projectIds) {
       const overrides = yield* readOverrides;
-      const withBoard = yield* Effect.forEach(projectIds, (id) => hasBoard(id, overrides), {
+      const folders = yield* Effect.forEach(projectIds, (id) => folderOf(id, overrides), {
         concurrency: 8,
       });
-      return projectIds.filter((_, index) => withBoard[index]);
+      return folders.filter((folder) => folder !== null);
     }),
     linkedProject: (threadId) =>
       Effect.sync(() => {

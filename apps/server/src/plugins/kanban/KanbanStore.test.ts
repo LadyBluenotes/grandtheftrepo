@@ -583,7 +583,12 @@ describe("watcher refresh", () => {
   );
 });
 
-describe("boardProjects", () => {
+describe("boardFolders", () => {
+  /** The projects with a board, from `boardFolders`. */
+  const withBoard = (store: KanbanStore.KanbanStore["Service"], ids: ReadonlyArray<ProjectId>) =>
+    Effect.map(store.boardFolders(ids), (folders) =>
+      folders.filter((folder) => folder.board).map((folder) => folder.projectId),
+    );
   const otherId = ProjectId.make("project-2");
   const layerTwoProjects = (store: typeof KanbanStore.layer) =>
     Layer.empty.pipe(
@@ -632,15 +637,19 @@ describe("boardProjects", () => {
       const { baseDir } = yield* ServerConfig.ServerConfig;
       const gone = ProjectId.make("project-gone");
 
-      assert.deepEqual(yield* store.boardProjects([projectId, otherId, gone]), []);
+      // A project that is gone has no folder; the others name theirs, board or not.
+      assert.deepEqual(yield* store.boardFolders([projectId, otherId, gone]), [
+        { projectId, directory: path.join(baseDir, "wiki", "grand-theft-repo"), board: false },
+        { projectId: otherId, directory: path.join(baseDir, "wiki", "other-repo"), board: false },
+      ]);
       // A folder another client or the user made counts before anything loads it.
       yield* fs.makeDirectory(path.join(baseDir, "wiki", "other-repo"), { recursive: true });
-      assert.deepEqual(yield* store.boardProjects([projectId, otherId, gone]), [otherId]);
+      assert.deepEqual(yield* withBoard(store, [projectId, otherId, gone]), [otherId]);
       assert.isFalse(yield* fs.exists(path.join(baseDir, "wiki", "grand-theft-repo")));
 
       // Filing the first card starts the project's board.
       yield* store.write(projectId, "user", { action: "issue.create", title: "First" });
-      assert.deepEqual(yield* store.boardProjects([otherId, projectId]), [otherId, projectId]);
+      assert.deepEqual(yield* withBoard(store, [otherId, projectId]), [otherId, projectId]);
     }).pipe(Effect.provide(layerTwoProjects(KanbanStore.layer))),
   );
 
@@ -657,12 +666,16 @@ describe("boardProjects", () => {
         // The new folder does not exist yet; it does once the move returns.
         const moved = path.join(baseDir, "elsewhere", "board");
         yield* store.setDirectory({ projectId, directory: moved });
-        assert.deepEqual(yield* store.boardProjects([projectId, otherId]), [projectId]);
+        assert.deepEqual(yield* withBoard(store, [projectId, otherId]), [projectId]);
         assert.isTrue(yield* fs.exists(path.join(moved, "issues")));
 
         const unused = path.join(baseDir, "elsewhere", "other");
         yield* store.setDirectory({ projectId: otherId, directory: unused });
-        assert.deepEqual(yield* store.boardProjects([projectId, otherId]), [projectId]);
+        // Its chosen folder reads back without a board being started there.
+        assert.deepEqual(yield* store.boardFolders([projectId, otherId]), [
+          { projectId, directory: moved, board: true },
+          { projectId: otherId, directory: unused, board: false },
+        ]);
         assert.isFalse(yield* fs.exists(unused));
       }).pipe(Effect.provide(layerTwoProjects(KanbanStore.layer))),
   );
@@ -670,7 +683,7 @@ describe("boardProjects", () => {
   it.effect("fails, rather than leaving the project out, when its folder cannot be inspected", () =>
     Effect.gen(function* () {
       const store = yield* KanbanStore.KanbanStore;
-      assert.strictEqual(yield* failureCode(store.boardProjects([otherId])), "io");
+      assert.strictEqual(yield* failureCode(store.boardFolders([otherId])), "io");
       // Automation only skips such a project.
       yield* store.advance(otherId, ThreadId.make("thr_any"), "in_progress");
     }).pipe(

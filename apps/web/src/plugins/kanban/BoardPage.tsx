@@ -73,10 +73,12 @@ import { useUiStateStore } from "~/uiStateStore";
 import { AttentionStrip } from "./AttentionStrip";
 import {
   boardFanOut,
+  boardFolder,
   boardProjectKey,
   decisionsCategory,
   pickBoardProject,
   scopedBoardProjects,
+  type BoardEnvironment,
   type BoardProject,
 } from "./boardScope";
 import { DecisionsView } from "./DecisionsView";
@@ -91,7 +93,6 @@ import {
   kanbanBoardsChanged,
   kanbanSetDirectory,
   kanbanWrite,
-  type LoadedBoard,
 } from "./state";
 
 export interface BoardSearch {
@@ -365,33 +366,34 @@ function Column({
 
 /**
  * The issues folder of one project, which the board can change. Over several projects it asks
- * which, starting from the project in hand.
+ * which, starting from the project in hand. A project's folder is read without loading its board,
+ * and saving waits until it is known, so an unread folder is never saved back as the default.
  */
 function FolderPopover({
   projects,
   defaultProject,
-  boards,
+  environments,
   onSaved,
 }: {
   readonly projects: ReadonlyArray<BoardProject>;
   readonly defaultProject: BoardProject | null;
-  readonly boards: ReadonlyArray<LoadedBoard>;
+  readonly environments: ReadonlyArray<BoardEnvironment>;
   readonly onSaved: () => void;
 }) {
   const setDirectory = useAtomCommand(kanbanSetDirectory, { reportFailure: false });
   const [picked, setPicked] = useState<BoardProject | null>(null);
-  const [draft, setDraft] = useState("");
+  // Null until edited: the field shows the project's folder as last read.
+  const [draft, setDraft] = useState<string | null>(null);
   const project = picked ?? defaultProject;
   const canSave = useAtomValue(kanbanSetDirectory.permissionAtom(project?.environmentId ?? null));
-  // A project without a board has no folder to show yet; the server falls back to the default.
-  const directoryOf = (ref: ScopedProjectRef | null) =>
-    ref === null ? undefined : boards.find(sameProject(ref))?.board?.directory;
+  const current = project === null ? undefined : boardFolder(environments, project)?.directory;
+  const value = draft ?? current ?? "";
   return (
     <Popover
       onOpenChange={(open) => {
         if (!open) return;
         setPicked(null);
-        setDraft(directoryOf(defaultProject) ?? "");
+        setDraft(null);
       }}
     >
       <PopoverTrigger
@@ -404,8 +406,8 @@ function FolderPopover({
           className="flex flex-col gap-2"
           onSubmit={async (event) => {
             event.preventDefault();
-            if (project === null) return;
-            const directory = draft.trim();
+            if (project === null || current === undefined) return;
+            const directory = value.trim();
             const result = await setDirectory({
               environmentId: project.environmentId,
               input: {
@@ -427,19 +429,23 @@ function FolderPopover({
               value={project}
               onChange={(next) => {
                 setPicked(next);
-                setDraft(directoryOf(next) ?? "");
+                setDraft(null);
               }}
             />
           ) : null}
           <Input
             size="sm"
-            value={draft}
+            value={value}
             onChange={(event) => setDraft(event.target.value)}
-            placeholder={directoryOf(project)}
+            placeholder={current}
             spellCheck={false}
           />
           <div className="flex justify-end gap-2">
-            <Button type="submit" size="xs" disabled={!canSave || project === null}>
+            <Button
+              type="submit"
+              size="xs"
+              disabled={!canSave || project === null || current === undefined}
+            >
               Save
             </Button>
           </div>
@@ -725,7 +731,7 @@ export function BoardPage({ search }: { readonly search: BoardSearch }) {
             <FolderPopover
               projects={writable}
               defaultProject={newCardProject}
-              boards={boards}
+              environments={environments}
               onSaved={boardsChanged}
             />
           </div>

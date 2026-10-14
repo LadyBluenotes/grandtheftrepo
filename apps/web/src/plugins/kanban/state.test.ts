@@ -1,7 +1,8 @@
+import { kanbanAttentionStripRows } from "@t3tools/client-runtime/plugins/kanban";
 import { EnvironmentId, ProjectId, ThreadId } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
-import { attentionResumeTarget, buildIssuePrompt } from "./state";
+import { attentionResumeTarget, boardAttentionTitle, buildIssuePrompt } from "./state";
 
 const issue = {
   id: "fix-login-redirect",
@@ -113,5 +114,42 @@ describe("attentionResumeTarget", () => {
 
   it("has nowhere to go for a thread action without a thread", () => {
     expect(attentionResumeTarget(row("thread"), board)).toBeNull();
+  });
+});
+
+describe("boardAttentionTitle", () => {
+  const environmentId = EnvironmentId.make("local");
+  const projectId = ProjectId.make("project-1");
+  const projectLabel = () => "app";
+  const title = (fields: {
+    threadId: string | null;
+    threadTitle: string | null;
+    projectId: ProjectId | null;
+  }) => {
+    const [row] = kanbanAttentionStripRows([
+      {
+        source: "flag" as const,
+        id: "flag:1",
+        threadId: fields.threadId === null ? null : ThreadId.make(fields.threadId),
+        threadTitle: fields.threadTitle,
+        kind: "two_writers" as const,
+        text: "Something waits.",
+        resumeAction: { label: "Open thread", target: "thread" as const },
+        since: "2026-10-13T08:00:00.000Z",
+        projectId: fields.projectId,
+        environmentId,
+      },
+    ]);
+    return boardAttentionTitle(row!, projectLabel);
+  };
+
+  it("keeps a thread row a thread row, untitled or not", () => {
+    expect(title({ threadId: "thread-1", threadTitle: "Fix login", projectId })).toBe("Fix login");
+    expect(title({ threadId: "thread-1", threadTitle: null, projectId })).toBe("Untitled thread");
+  });
+
+  it("names the project for a project row, and every project for an environment's policy", () => {
+    expect(title({ threadId: null, threadTitle: null, projectId })).toBe("app");
+    expect(title({ threadId: null, threadTitle: null, projectId: null })).toBe("Every project");
   });
 });

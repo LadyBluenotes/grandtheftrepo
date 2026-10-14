@@ -147,6 +147,16 @@ export const KanbanDecision = Schema.Struct({
 });
 export type KanbanDecision = typeof KanbanDecision.Type;
 
+/** Where a project's board lives, or would, and whether it is there; reading it creates nothing. */
+export const KanbanBoardFolder = Schema.Struct({
+  projectId: ProjectId,
+  /** Absolute base folder: the project's override, else the default under T3 home. */
+  directory: Schema.String,
+  /** Whether the board exists: loaded, or its folder on disk. */
+  board: Schema.Boolean,
+});
+export type KanbanBoardFolder = typeof KanbanBoardFolder.Type;
+
 export const KanbanBoard = Schema.Struct({
   /** Absolute base folder holding `issues/` and `decisions/`. */
   directory: Schema.String,
@@ -460,14 +470,15 @@ export const KANBAN_METHODS = definePluginMethods({
     error: KanbanError,
   },
   /**
-   * The projects of `projectIds` that have a board, in the given order. Nothing is created, so a
-   * client can show every board without starting one for each project.
+   * The board folder of each of `projectIds`, in the given order, and whether a board is there; a
+   * project that is gone is left out. Nothing is created, so a client can show every board without
+   * starting one for each project.
    */
   boards: {
     method: "kanban.boards",
     gateway: "read",
     input: KanbanProjectsInput,
-    output: Schema.Array(ProjectId),
+    output: Schema.Array(KanbanBoardFolder),
     error: KanbanError,
   },
 });

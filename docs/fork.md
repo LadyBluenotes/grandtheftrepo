@@ -107,10 +107,10 @@ them half-evaluated. The host hands `toolkitRegistration` to `ServerPlugin.mcp` 
 - **kanban**: a board per project. Issues and decisions are files under
   `<T3 home>/wiki/<project-slug>/`; the folder is changeable per project from the board. The web
   board shows every project's board under the sidebar's project scope
-  (`uiStateStore.sidebarProjectScopeKey`, read and set, never edited): `kanban.boards` names the
-  projects whose folder exists without creating any, and the client subscribes to each of those
-  boards on its own, so a change re-sends one project's board and a project without one gets no
-  folder or watcher.
+  (`uiStateStore.sidebarProjectScopeKey`, read and set, never edited): `kanban.boards` reads each
+  project's board folder and whether a board is there without creating any, and the client
+  subscribes to each board on its own, so a change re-sends one project's board and a project
+  without one gets no folder or watcher.
   Its own database, `plugins/kanban.sqlite`, holds the emergency stop (`StopGate`, which anything
   that starts a thread must ask first; the spec drafting thread is the one launch that asks so far)
   and spec attempts. The `writers` sweep raises an attention flag when two agents write one

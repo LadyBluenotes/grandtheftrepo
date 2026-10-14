@@ -158,6 +158,6 @@ export function kanbanAttentionStripRows<Row extends KanbanAttentionRow>(
   return rows.map((row) => ({
     ...row,
     label: KANBAN_ATTENTION_KIND_LABELS[row.kind],
-    title: row.threadTitle === null ? "This project" : row.threadTitle.trim() || "Untitled thread",
+    title: row.threadId === null ? "This project" : row.threadTitle?.trim() || "Untitled thread",
   }));
 }

@@ -1,10 +1,18 @@
-import type { EnvironmentId, ProjectId, ScopedProjectRef } from "@t3tools/contracts";
+import type {
+  EnvironmentId,
+  KanbanBoardFolder,
+  ProjectId,
+  ScopedProjectRef,
+} from "@t3tools/contracts";
 
 import type { SidebarProjectSnapshot } from "~/sidebarProjectGrouping";
 
 /** A project the board can show, named as the sidebar names its group. */
 export interface BoardProject extends ScopedProjectRef {
-  /** The group's name, with the environment's label once the scope spans more than one. */
+  /**
+   * The group's name, with the environment's label once the scope spans more than one, and the
+   * checkout's path when its group has another checkout on the same environment.
+   */
   readonly label: string;
 }
 
@@ -13,8 +21,11 @@ export interface BoardEnvironment {
   readonly environmentId: EnvironmentId;
   /** Whether it runs kanban; null while unknown. */
   readonly active: boolean | null;
-  /** Its projects with a board; null until known, and on an environment without kanban. */
-  readonly boards: ReadonlyArray<ProjectId> | null;
+  /**
+   * Its projects' board folders, with or without a board there; null until known, and on an
+   * environment without kanban.
+   */
+  readonly folders: ReadonlyArray<KanbanBoardFolder> | null;
   readonly error: string | null;
 }
 
@@ -36,14 +47,22 @@ export function scopedBoardProjects(
     group.memberProjects.map((member) => ({ group, member })),
   );
   const spansEnvironments = new Set(members.map(({ member }) => member.environmentId)).size > 1;
-  return members.map(({ group, member }) => ({
-    environmentId: member.environmentId,
-    projectId: member.id,
-    label:
-      spansEnvironments && member.environmentLabel !== null
-        ? `${group.displayName} · ${member.environmentLabel}`
-        : group.displayName,
-  }));
+  return members.map(({ group, member }) => {
+    const sharesEnvironment = group.memberProjects.some(
+      (other) => other !== member && other.environmentId === member.environmentId,
+    );
+    return {
+      environmentId: member.environmentId,
+      projectId: member.id,
+      label: [
+        group.displayName,
+        spansEnvironments ? member.environmentLabel : null,
+        sharesEnvironment ? member.workspaceRoot : null,
+      ]
+        .filter((part) => part !== null)
+        .join(" · "),
+    };
+  });
 }
 
 /**
@@ -58,10 +77,18 @@ export function boardFanOut(
 ): { readonly writable: ReadonlyArray<BoardProject>; readonly shown: ReadonlyArray<BoardProject> } {
   const byId = new Map(environments.map((environment) => [environment.environmentId, environment]));
   const writable = projects.filter((project) => byId.get(project.environmentId)?.active === true);
-  const shown = writable.filter((project) =>
-    byId.get(project.environmentId)?.boards?.includes(project.projectId),
-  );
+  const shown = writable.filter((project) => boardFolder(environments, project)?.board === true);
   return { writable, shown };
+}
+
+/** The project's board folder as its environment last read it; undefined until then. */
+export function boardFolder(
+  environments: ReadonlyArray<BoardEnvironment>,
+  ref: ScopedProjectRef,
+): KanbanBoardFolder | undefined {
+  return environments
+    .find((environment) => environment.environmentId === ref.environmentId)
+    ?.folders?.find((folder) => folder.projectId === ref.projectId);
 }
 
 /** The first of `preferred` that is one of `options`, else the first option; null without any. */

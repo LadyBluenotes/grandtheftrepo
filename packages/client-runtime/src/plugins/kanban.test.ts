@@ -179,13 +179,16 @@ describe("kanbanAttentionStripRows", () => {
     ]);
   });
 
-  it("calls a thread with a blank title Untitled thread", () => {
+  it.each([
+    ["a blank title", "  "],
+    ["no title", null],
+  ])("calls a thread with %s Untitled thread", (_name, threadTitle) => {
     const [row] = kanbanAttentionStripRows([
       attentionRow({
         id: "flag:1",
         kind: "two_writers",
         threadId: ThreadId.make("thread-3"),
-        threadTitle: "  ",
+        threadTitle,
         since: "2026-10-13T08:00:00.000Z",
       }),
     ]);

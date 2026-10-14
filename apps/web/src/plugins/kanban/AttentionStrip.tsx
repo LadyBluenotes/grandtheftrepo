@@ -6,7 +6,7 @@ import { FlagIcon, MessageCircleQuestionMarkIcon, ShieldAlertIcon } from "lucide
 import { Alert, AlertAction, AlertDescription, AlertTitle } from "~/components/ui/alert";
 import { Badge } from "~/components/ui/badge";
 import { Button } from "~/components/ui/button";
-import { attentionResumeTarget, type BoardAttentionRow } from "./state";
+import { attentionResumeTarget, boardAttentionTitle, type BoardAttentionRow } from "./state";
 
 /**
  * Everything in the board's projects waiting on a person, above the columns, oldest first:
@@ -50,13 +50,7 @@ export function AttentionStrip({
             : row.kind === "permission"
               ? ShieldAlertIcon
               : FlagIcon;
-        const title =
-          row.threadTitle !== null
-            ? row.title
-            : row.projectId === null
-              ? "Every project"
-              : (projectLabel({ environmentId: row.environmentId, projectId: row.projectId }) ??
-                row.title);
+        const title = boardAttentionTitle(row, projectLabel);
         return (
           <Alert
             key={`${row.environmentId}:${row.id}`}

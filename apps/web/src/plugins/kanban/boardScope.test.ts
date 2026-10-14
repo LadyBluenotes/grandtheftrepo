@@ -73,15 +73,40 @@ describe("scopedBoardProjects", () => {
   it("covers every project while the scope names no group", () => {
     expect(scopedBoardProjects(groups, "gone")).toHaveLength(3);
   });
+
+  it("tells two checkouts of one group on one environment apart by their paths", () => {
+    const appClone = { ...project(local, "app-clone", "app", true), workspaceRoot: "/work/clone" };
+    const withClone = buildSidebarProjectSnapshots({
+      projects: [appHere, appClone],
+      settings: { sidebarProjectGroupingMode: "repository", sidebarProjectGroupingOverrides: {} },
+      groupScratchProjects: true,
+      primaryEnvironmentId: local,
+      resolveEnvironmentLabel: () => "Laptop",
+    });
+    expect(scopedBoardProjects(withClone, null).map((p) => p.label)).toEqual([
+      "app · /work/app-here",
+      "app · /work/clone",
+    ]);
+  });
 });
 
 describe("boardFanOut", () => {
   const all = scopedBoardProjects(groups, null);
+  const folder = (p: Project, board: boolean) => ({
+    projectId: p.id,
+    directory: `/home/me/.t3/wiki/${p.id}`,
+    board,
+  });
 
   it("subscribes only to projects with a board on an environment that runs kanban", () => {
     const { writable, shown } = boardFanOut(all, [
-      { environmentId: local, active: true, boards: [appHere.id], error: null },
-      { environmentId: remote, active: false, boards: null, error: null },
+      {
+        environmentId: local,
+        active: true,
+        folders: [folder(appHere, true), folder(notes, false)],
+        error: null,
+      },
+      { environmentId: remote, active: false, folders: null, error: null },
     ]);
     expect(refs(writable).toSorted()).toEqual(["env-local/app-here", "env-local/notes"]);
     expect(refs(shown)).toEqual(["env-local/app-here"]);
@@ -90,8 +115,8 @@ describe("boardFanOut", () => {
   it("subscribes to nothing on an environment until it is known to run kanban and its boards are read", () => {
     expect(
       boardFanOut(all, [
-        { environmentId: local, active: true, boards: null, error: null },
-        { environmentId: remote, active: null, boards: null, error: null },
+        { environmentId: local, active: true, folders: null, error: null },
+        { environmentId: remote, active: null, folders: null, error: null },
       ]),
     ).toEqual({
       writable: all.filter((p) => p.environmentId === local),
