@@ -21,6 +21,20 @@ describe("KanbanFiles", () => {
       verification: "partial" as const,
       tier: "standard" as const,
       criteria: [{ id: "c1", text: "Redirect lands on the requested page", checked: false }],
+      findings: [
+        {
+          id: "cookie-path-too-broad",
+          title: "Cookie path is too broad",
+          evidence: "Set-Cookie: sid=...; Path=/\nSeen in apps/server/src/auth/session.ts:40.",
+          truthStatus: "seen" as const,
+          scopeRelation: "pre_existing" as const,
+          disposition: "rejected" as const,
+          proposedBy: "thread:thr_1",
+          proposedAt: "2026-10-12T13:45:00.000Z",
+          threadId: ThreadId.make("thr_1"),
+          review: { by: "user", at: "2026-10-12T13:55:00.000Z", reason: "Path=/ is intended." },
+        },
+      ],
       blocked: {
         reason: "Need a TTL decision",
         at: "2026-10-12T14:03:00.000Z",
@@ -49,6 +63,12 @@ describe("KanbanFiles", () => {
           text: "Reproduced | on main\nsecond line",
         },
         {
+          at: "2026-10-12T13:55:00.000Z",
+          by: "user",
+          kind: "note" as const,
+          text: "finding cookie-path-too-broad rejected: Path=/ is intended.",
+        },
+        {
           at: "2026-10-12T14:03:00.000Z",
           by: "thread:thr_1",
           kind: "blocked" as const,
@@ -70,6 +90,7 @@ describe("KanbanFiles", () => {
     assert.strictEqual(parsed?.issue.createdBy, "user");
     assert.strictEqual(parsed?.issue.tier, null);
     assert.deepStrictEqual(parsed?.issue.criteria, []);
+    assert.deepStrictEqual(parsed?.issue.findings, []);
     assert.strictEqual(parsed?.issue.reopened, null);
     assert.strictEqual(parsed?.issue.updatedAt, "2026-10-12T00:00:00.000Z");
     assert.deepStrictEqual(parsed?.issue.log, []);
