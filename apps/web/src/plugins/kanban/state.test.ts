@@ -13,6 +13,7 @@ const issue = {
   verification: "verified" as const,
   tier: null,
   criteria: [],
+  findings: [],
   blocked: null,
   reopened: null,
   threads: [],

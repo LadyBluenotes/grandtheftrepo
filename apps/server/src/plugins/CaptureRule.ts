@@ -13,7 +13,10 @@ const lines: ReadonlyArray<{ readonly plugin: string; readonly text: string }> =
     plugin: "kanban",
     text: "When you choose one approach over another, look for it with `kanban_list` kind `decision`, then record it with `kanban_write` action `decision.create` if it is not there.",
   },
-  // A problem found outside the task goes here, with the findings tool, once that tool exists.
+  {
+    plugin: "kanban",
+    text: "When you find a problem outside your task, look for it with `finding_search`, then record it with `finding_capture` and that search's `searchId`.",
+  },
   {
     plugin: "learning",
     text: "When something went wrong that should not recur, call `learning_correction_add` with a `declaredMode`.",
