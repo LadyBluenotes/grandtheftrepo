@@ -1,11 +1,13 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, describe, it } from "@effect/vitest";
 import { ProjectId, ThreadId, type KanbanError, type Project } from "@t3tools/contracts";
+import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
+import * as PlatformError from "effect/PlatformError";
 import * as TestClock from "effect/testing/TestClock";
 
 import * as ServerConfig from "../../../config.ts";
@@ -27,9 +29,43 @@ const project: Project = {
 const finder = ThreadId.make("thr_finder");
 const other = ThreadId.make("thr_other");
 
+/** Issue file names whose writes fail while they are in the set, to stop a change halfway. */
+class FailingWrites extends Context.Service<FailingWrites, Set<string>>()(
+  "t3/plugins/kanban/findings/FindingService.test/FailingWrites",
+) {}
+
+const layerFailingWrites = Layer.unwrap(
+  Effect.sync(() => {
+    const failing = new Set<string>();
+    return Layer.merge(
+      Layer.succeed(FailingWrites, failing),
+      Layer.effect(
+        FileSystem.FileSystem,
+        Effect.map(FileSystem.FileSystem, (real) =>
+          FileSystem.FileSystem.of({
+            ...real,
+            rename: (from, to) =>
+              [...failing].some((name) => to.endsWith(`/${name}`))
+                ? Effect.fail(
+                    PlatformError.systemError({
+                      _tag: "Unknown",
+                      module: "FileSystem",
+                      method: "rename",
+                      description: "EIO: i/o error",
+                    }),
+                  )
+                : real.rename(from, to),
+          }),
+        ),
+      ),
+    );
+  }),
+);
+
 /** A fresh board folder per test. */
 const layerTest = FindingService.layer.pipe(
   Layer.provideMerge(KanbanStore.layer),
+  Layer.provideMerge(layerFailingWrites),
   Layer.provideMerge(
     Layer.mock(ProjectService.ProjectService)({
       getById: (id) => Effect.succeed(id === projectId ? Option.some(project) : Option.none()),
@@ -84,8 +120,16 @@ describe("FindingService", () => {
         yield* failure(capture(fresh.searchId, { issueId: "nope" })),
         'not_found: No issue "nope".',
       );
-      assert.strictEqual(yield* failure(capture(fresh.searchId)), "ok");
+      const landed = yield* capture(fresh.searchId);
       assert.include(yield* failure(capture(fresh.searchId)), "invalid: Search first");
+
+      // A write that failed may have landed, so it uses the search up too.
+      const failing = yield* FailingWrites;
+      const once = yield* search(finder);
+      failing.add(`${landed.issueId}-2.md`);
+      assert.include(yield* failure(capture(once.searchId)), "io:");
+      failing.clear();
+      assert.include(yield* failure(capture(once.searchId)), "invalid: Search first");
     }).pipe(Effect.provide(layerTest)),
   );
 
@@ -156,6 +200,17 @@ describe("FindingService", () => {
       );
       const none = yield* search(other, "unknown words");
       assert.deepStrictEqual([none.findings, none.issues], [[], []]);
+
+      // Words in any script count, whatever their case.
+      yield* store.write(projectId, "user", {
+        action: "issue.create",
+        title: "Повтор без задержки",
+      });
+      yield* store.write(projectId, "user", { action: "issue.create", title: "重试 没有 退避" });
+      const titles = (query: string) =>
+        Effect.map(search(other, query), (result) => result.issues.map((issue) => issue.title));
+      assert.deepStrictEqual(yield* titles("ЗАДЕРЖКИ"), ["Повтор без задержки"]);
+      assert.deepStrictEqual(yield* titles("退避"), ["重试 没有 退避"]);
     }).pipe(Effect.provide(layerTest)),
   );
 
@@ -188,6 +243,56 @@ describe("FindingService", () => {
           `${finding.id} rejected: user says so`,
           `${finding.id} open: thread:${other} says so`,
         ],
+      );
+    }).pipe(Effect.provide(layerTest)),
+  );
+
+  it.effect("a move tried again after its second write failed leaves one copy, reviewed", () =>
+    Effect.gen(function* () {
+      const findings = yield* FindingService.FindingService;
+      const store = yield* KanbanStore.KanbanStore;
+      const failing = yield* FailingWrites;
+      // Created first, so the destination comes before the source when the store looks.
+      const { id: right } = yield* store.write(projectId, "user", {
+        action: "issue.create",
+        title: "Right ticket",
+      });
+      const { id: wrong } = yield* store.write(projectId, "user", {
+        action: "issue.create",
+        title: "Wrong ticket",
+      });
+      const { finding } = yield* capture((yield* search(finder)).searchId, { issueId: wrong });
+
+      failing.add(`${wrong}.md`);
+      assert.include(
+        yield* failure(findings.move({ projectId, id: finding.id, issueId: right }, "user")),
+        "io:",
+      );
+      failing.clear();
+      const holders = Effect.map(store.board(projectId), (board) =>
+        board.issues.map((issue) => issue.id),
+      ).pipe(
+        Effect.flatMap((ids) => Effect.forEach(ids, (id) => store.getIssue({ projectId, id }))),
+        Effect.map((issues) =>
+          issues.filter((issue) => issue.findings.length > 0).map((issue) => issue.id),
+        ),
+      );
+      assert.deepStrictEqual(yield* holders, [right, wrong]);
+
+      // A review meanwhile reaches both copies, so the one kept has it.
+      const reviewed = yield* findings.review(
+        { projectId, id: finding.id, disposition: "ticketed", reason: "Filed upstream." },
+        "user",
+      );
+      const retried = yield* findings.move({ projectId, id: finding.id, issueId: right }, "user");
+      assert.deepStrictEqual(retried, { projectId, issueId: right, finding: reviewed.finding });
+      assert.deepStrictEqual(yield* holders, [right]);
+      assert.deepStrictEqual((yield* store.getIssue({ projectId, id: right })).findings, [
+        reviewed.finding,
+      ]);
+      assert.include(
+        yield* failure(findings.move({ projectId, id: finding.id, issueId: right }, "user")),
+        "invalid: Finding",
       );
     }).pipe(Effect.provide(layerTest)),
   );
