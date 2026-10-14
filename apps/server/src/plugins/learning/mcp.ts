@@ -3,6 +3,7 @@ import {
   DeterministicProposal,
   DeterministicProposalsInput,
   LearningCorrection,
+  LearningCorrectionDeclareInput,
   LearningCorrectionInput,
   LearningCorrectionsInput,
   LearningDeclaredMode,
@@ -82,6 +83,19 @@ const CorrectionAddTool = Tool.make("learning_correction_add", {
   success: LearningCorrection,
 })
   .annotate(Tool.Title, "Record a correction")
+  .annotate(Tool.Readonly, false)
+  .annotate(Tool.Destructive, false)
+  .annotate(Tool.Idempotent, false)
+  .annotate(Tool.OpenWorld, false);
+
+const CorrectionDeclareTool = Tool.make("learning_correction_declare", {
+  ...shared,
+  description:
+    "Declare the review failure mode of a correction that has none, such as a pull request review that asked for changes or a thread reopened after it settled, so the next sweep counts it toward that mode's learning item. A provider failure, or a correction that already declares a mode, is refused.",
+  parameters: LearningCorrectionDeclareInput,
+  success: LearningCorrection,
+})
+  .annotate(Tool.Title, "Declare a correction's mode")
   .annotate(Tool.Readonly, false)
   .annotate(Tool.Destructive, false)
   .annotate(Tool.Idempotent, false)
@@ -205,6 +219,7 @@ export const LearningToolkit = Toolkit.make(
   CorrectionsTool,
   CorrectionTool,
   CorrectionAddTool,
+  CorrectionDeclareTool,
   ItemsTool,
   ItemTool,
   PromptSearchTool,
@@ -298,6 +313,13 @@ export const handlers = McpToolAccess.toLayer(
               sourceKey: null,
             });
           }).pipe(Effect.catchTags({ LearningError: (error) => Effect.fail(failure(error)) })),
+      ),
+      learning_correction_declare: McpToolAccess.writes((input) =>
+        Effect.gen(function* () {
+          yield* readCaller();
+          const corrections = yield* store;
+          return yield* corrections.declare(input);
+        }).pipe(Effect.catchTags({ LearningError: (error) => Effect.fail(failure(error)) })),
       ),
       learning_items: McpToolAccess.reads(({ projectId: given, ...input }) =>
         Effect.gen(function* () {

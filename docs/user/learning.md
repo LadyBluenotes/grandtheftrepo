@@ -85,6 +85,12 @@ The **Corrections** tab lists the project's corrections over the last 7, 30 or 9
 kind of event that recorded each one and its failure mode, if it has one. Narrow the list by kind
 or mode, and open a correction's thread from its row.
 
+For a correction without a failure mode, other than a failed or interrupted turn, pick its mode
+under **Declare mode** in its row; the next sweep adds it to that mode's item. A mode cannot be
+changed once declared. Corrections left without a mode for seven days are flagged on the project's
+board under [Waiting on you](./kanban.md#waiting-on-you), one row with the count, until each has a
+mode or is older than 90 days, the longest the tab shows.
+
 ## Prompts
 
 The **Prompts** tab is the project's prompt library: prompts you send again and again, and

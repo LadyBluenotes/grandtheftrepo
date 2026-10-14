@@ -67,6 +67,7 @@ it.effect(
             { plugin: "learning", name: "regressions" },
             { plugin: "learning", name: "deterministic" },
             { plugin: "learning", name: "outcomes" },
+            { plugin: "learning", name: "unclassified" },
           ]);
           const sql = host.databases.get("learning")!;
           yield* CorrectionStore.insert({
@@ -93,6 +94,8 @@ it.effect(
               ["deterministic", "ok", 0, 0, 0],
               // The one promotion is still proposed, so nothing is adopted to judge.
               ["outcomes", "ok", 0, 0, 0],
+              // The one correction declares its mode.
+              ["unclassified", "ok", 0, 0, 0],
             ],
           );
           const items = yield* PluginHost.handlers[PLUGIN_GATEWAY_WS_METHODS.read]({
