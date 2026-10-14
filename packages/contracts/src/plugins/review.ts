@@ -1,6 +1,6 @@
 import * as Schema from "effect/Schema";
 import { CheckpointId, IsoDateTime, ProjectId, ThreadId } from "../baseSchemas.ts";
-import { LearningDeclaredMode } from "./learning.ts";
+import { LearningDeclaredMode, ReviewFailureMode } from "./learning.ts";
 import { definePluginMethods } from "./method.ts";
 
 export const ReviewOutcome = Schema.Literals(["approve", "changes_requested"]);
@@ -8,7 +8,7 @@ export type ReviewOutcome = typeof ReviewOutcome.Type;
 
 /**
  * What a reviewing agent says about one checkpoint of another thread. `failureMode` is one of the
- * six `LearningDeclaredMode` values, so a mode outside the list never gets past the schema; the
+ * six `ReviewFailureMode` values, so a mode outside the list never gets past the schema; the
  * service requires it with `changes_requested` and refuses it with `approve`. The summary is for
  * people: nothing reads it to learn what went wrong.
  */
@@ -16,7 +16,7 @@ export const ReviewVerdictInput = Schema.Struct({
   threadId: ThreadId,
   checkpointId: CheckpointId,
   outcome: ReviewOutcome,
-  failureMode: Schema.optional(LearningDeclaredMode),
+  failureMode: Schema.optional(ReviewFailureMode),
   summary: Schema.String.check(Schema.isMaxLength(1000)),
 });
 export type ReviewVerdictInput = typeof ReviewVerdictInput.Type;

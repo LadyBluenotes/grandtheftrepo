@@ -51,6 +51,8 @@ const start = Effect.gen(function* () {
  * Records corrections, visible instances of work going wrong, from events the
  * server already emits: failed and interrupted provider turns, pull request
  * wakes while changes are requested, and threads reopened after settlement.
+ * The kanban store and the review plugin's security sweep record theirs too:
+ * tickets reopened from Done and security findings.
  * Two sweeps turn them into learning items, one per recurring failure mode per
  * project, and hand each item once to the owner kind the rules or a person
  * picked; a third opens an item for each efficiency measure that worsened from

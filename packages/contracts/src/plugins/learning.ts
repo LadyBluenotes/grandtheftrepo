@@ -22,8 +22,8 @@ export const LearningFailureKind = Schema.Literals([
 ]);
 export type LearningFailureKind = typeof LearningFailureKind.Type;
 
-/** The review failure modes a reviewer or person can declare, the six the review verdict uses. */
-export const LearningDeclaredMode = Schema.Literals([
+/** The six failure modes a reviewer declares on a verdict. */
+export const ReviewFailureMode = Schema.Literals([
   "defect",
   "incomplete",
   "scope_drift",
@@ -31,6 +31,12 @@ export const LearningDeclaredMode = Schema.Literals([
   "convention",
   "unclear_spec",
 ]);
+
+/**
+ * The failure mode a correction declares: a review failure mode, which a reviewer, a person or a
+ * reopened ticket names, or `security`, which the security scan names.
+ */
+export const LearningDeclaredMode = Schema.Literals([...ReviewFailureMode.literals, "security"]);
 export type LearningDeclaredMode = typeof LearningDeclaredMode.Type;
 
 /** One recorded instance of work being wrong or failing. */
@@ -41,7 +47,7 @@ export const LearningCorrection = Schema.Struct({
   failureKind: LearningFailureKind,
   /** Why it happened: the declared mode once classified, otherwise `unclassified`. */
   causeClass: Schema.String,
-  /** Set only when a reviewer or person declared it. */
+  /** Set only when its source names one; a provider failure never does. */
   declaredMode: Schema.NullOr(LearningDeclaredMode),
   /** Bounded, with secrets redacted. */
   description: Schema.String,
