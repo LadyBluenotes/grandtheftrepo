@@ -317,7 +317,8 @@ const make = Effect.gen(function* () {
           createdAt: v.created_at,
         })),
       };
-    }).pipe(Effect.catchTags({ SqlError: io }));
+      // One snapshot, so the versions listed end at the prompt's own version.
+    }).pipe(sql.withTransaction, Effect.catchTags({ SqlError: io }));
 
   const search: PromptStore["Service"]["search"] = ({ projectId, query }) =>
     Effect.gen(function* () {
