@@ -337,6 +337,27 @@ export const KANBAN_ATTENTION_KIND_LABELS: Record<KanbanAttentionKind, string> =
 };
 
 /**
+ * What to do about a flag: a label and the screen it leads to, on the board's environment. A
+ * `plugin` target opens `/plugins/<pluginId>` on `tab` with `recordId` open, each when given;
+ * mobile, which has no plugin screens, stays on the board.
+ */
+export const AttentionResumeAction = Schema.Union([
+  Schema.Struct({
+    label: Schema.String,
+    target: Schema.Literals(["thread", "board", "settings"]),
+  }),
+  Schema.Struct({
+    label: Schema.String,
+    target: Schema.Literal("plugin"),
+    pluginId: Schema.String,
+    tab: Schema.optional(Schema.String),
+    /** The plugin's own id for the record, such as a learning item's. */
+    recordId: Schema.optional(Schema.String),
+  }),
+]);
+export type AttentionResumeAction = typeof AttentionResumeAction.Type;
+
+/**
  * One thing in a project waiting on a person: a live request on one of its threads, or a flag a
  * plugin raised. A row leaves when its cause clears; nothing dismisses it.
  */
@@ -349,11 +370,7 @@ export const KanbanAttentionRow = Schema.Struct({
   kind: KanbanAttentionKind,
   /** One sentence. */
   text: Schema.String,
-  /** What to do about it: a label and the screen it leads to. */
-  resumeAction: Schema.Struct({
-    label: Schema.String,
-    target: Schema.Literals(["thread", "board", "settings"]),
-  }),
+  resumeAction: AttentionResumeAction,
   /** When it started waiting; rows are ordered by it, oldest first. */
   since: IsoDateTime,
 });
