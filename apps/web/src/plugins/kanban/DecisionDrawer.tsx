@@ -280,8 +280,10 @@ function DecisionDetails({
 
           <Field label="Revisions">
             <ul className="flex flex-col gap-1.5">
-              {decision.revisions.map((revision) => (
-                <li key={`${revision.at}|${revision.change}`} className="flex gap-2">
+              {decision.revisions.map((revision, index) => (
+                // Revisions are append-only and have no id, so a position stays the same row.
+                // oxlint-disable-next-line react/no-array-index-key
+                <li key={index} className="flex gap-2">
                   <span className="shrink-0 text-xs text-muted-foreground tabular-nums">
                     {formatTime(revision.at)}
                   </span>

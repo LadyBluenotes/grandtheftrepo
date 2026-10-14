@@ -1167,6 +1167,10 @@ it.layer(layerTest)("KanbanStore without a board", (it) => {
 
       assert.deepStrictEqual(yield* store.listDecisions({ projectId, thread }), []);
       assert.isFalse(yield* fs.exists(directory));
+      // A folder that exists without the board's `issues/` marker is no board yet either.
+      yield* fs.makeDirectory(directory, { recursive: true });
+      assert.deepStrictEqual(yield* store.listDecisions({ projectId, thread }), []);
+      assert.deepStrictEqual(yield* fs.readDirectory(directory), []);
 
       yield* store.write(projectId, `thread:${thread}`, {
         action: "decision.create",

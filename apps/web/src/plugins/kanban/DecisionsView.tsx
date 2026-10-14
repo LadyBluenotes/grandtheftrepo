@@ -65,9 +65,13 @@ export function DecisionsView({
     () => filterDecisions(all ?? [], { query, state, category: category ?? null, showSuperseded }),
     [all, query, state, category, showSuperseded],
   );
-  const superseded = (all ?? []).filter(
-    (d) => d.state === "superseded" && (category === undefined || d.category === category),
-  ).length;
+  // The superseded ones the search and category would show, so the hint never promises an empty list.
+  const superseded = filterDecisions(all ?? [], {
+    query,
+    state: "superseded",
+    category: category ?? null,
+    showSuperseded: true,
+  }).length;
   return (
     <ScrollArea className="min-h-0 flex-1">
       <div className="mx-auto flex w-full max-w-3xl flex-col gap-3 px-5 pt-4 pb-12 sm:px-6">

@@ -406,13 +406,16 @@ const make = Effect.gen(function* () {
   });
 
   /**
-   * The project's state when it has a board: loaded already, or its folder exists. Null when it
-   * has none, and nothing is created, so a read for any project's thread leaves no folder behind.
+   * The project's state when it has a board: loaded already, or its `issues/` or `decisions/`
+   * folder exists; the project folder alone is no board. Null when it has none, and nothing is
+   * created, so a read for any project's thread leaves no folder behind.
    */
   const loadExisting = Effect.fn("KanbanStore.loadExisting")(function* (projectId: ProjectId) {
     if (!loaded.has(projectId)) {
       const { directory } = yield* resolveDirectory(projectId);
-      if (!(yield* fs.exists(directory).pipe(Effect.orElseSucceed(() => false)))) return null;
+      const exists = (dir: string) =>
+        fs.exists(path.join(directory, dir)).pipe(Effect.orElseSucceed(() => false));
+      if (!(yield* exists("issues")) && !(yield* exists("decisions"))) return null;
     }
     return yield* load(projectId);
   });
