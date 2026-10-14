@@ -143,11 +143,15 @@ it.effect(
           const supervisor = yield* PluginSupervisor.PluginSupervisor;
           assert.deepEqual((yield* supervisor.status).sweeps, [
             { plugin: "kanban", name: "writers" },
+            { plugin: "kanban", name: "decisions" },
           ]);
           const tick = yield* supervisor.tick;
           assert.deepEqual(
             tick.sweeps.map((s) => [s.plugin, s.name, s.status, s.examined, s.acted, s.flags]),
-            [["kanban", "writers", "ok", 2, 1, 1]],
+            [
+              ["kanban", "writers", "ok", 2, 1, 1],
+              ["kanban", "decisions", "ok", 0, 0, 0],
+            ],
           );
           const attention = yield* Attention.Attention;
           const flags = yield* attention.listOpen({ pluginId: "kanban", kind: "two_writers" });
@@ -225,7 +229,10 @@ it.effect("a dry run records the sweep and writes no flag", () =>
         assert.isTrue(tick.dryRun);
         assert.deepEqual(
           tick.sweeps.map((s) => [s.name, s.status, s.acted, s.flags]),
-          [["writers", "ok", 0, 1]],
+          [
+            ["writers", "ok", 0, 1],
+            ["decisions", "ok", 0, 0],
+          ],
         );
         const attention = yield* Attention.Attention;
         assert.deepEqual(
