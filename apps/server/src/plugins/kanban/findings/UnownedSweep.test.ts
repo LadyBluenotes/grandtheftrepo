@@ -1,10 +1,11 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
-import { ProjectId, ThreadId, type Project } from "@t3tools/contracts";
+import { type KanbanIssue, ProjectId, ThreadId, type Project } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as Path from "effect/Path";
 import * as PlatformError from "effect/PlatformError";
 import * as TestClock from "effect/testing/TestClock";
 
@@ -14,6 +15,7 @@ import * as Attention from "../../Attention.ts";
 import { flagKeyedToProject } from "../../attentionKeys.ts";
 import * as HostDatabase from "../../HostDatabase.ts";
 import * as PluginDatabase from "../../PluginDatabase.ts";
+import * as Files from "../KanbanFiles.ts";
 import * as KanbanStore from "../KanbanStore.ts";
 import * as FindingService from "./FindingService.ts";
 import * as UnownedSweep from "./UnownedSweep.ts";
@@ -265,6 +267,87 @@ it.effect("a finding left on two cards counts once, by its most recently reviewe
       yield* copyOnSecond;
       assert.deepEqual(yield* tick(), { examined: 1, acted: 1, flags: 0 });
       assert.deepEqual(yield* open, []);
+    }),
+  ).pipe(Effect.provide(layerTest)),
+);
+
+it.effect("a tick, dry or not, reads a board nobody opened without loading or archiving it", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const { tick, flags } = yield* fixture;
+      const store = yield* KanbanStore.KanbanStore;
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      // Left by an earlier server run: a Done card old enough to archive, which links a thread,
+      // and a Triage card holding a finding nobody reviewed.
+      const directory = yield* store.directory(projectId);
+      const at = "1970-01-01T00:00:00.000Z";
+      const fields = {
+        priority: "p2",
+        verification: "unverified",
+        tier: null,
+        description: "",
+      } as const;
+      const done = {
+        ...KanbanStore.newIssue(
+          { ...fields, id: "ship-login", title: "Ship login", status: "done", labels: [] },
+          "user",
+          at,
+        ),
+        threads: [{ id: finder, linkedAt: at }],
+      };
+      const triage = {
+        ...KanbanStore.newIssue(
+          {
+            ...fields,
+            id: "no-backoff",
+            title: "No backoff",
+            status: "triage",
+            labels: ["finding"],
+          },
+          "user",
+          at,
+        ),
+        findings: [
+          {
+            id: "no-backoff",
+            title: "Retry loop has no backoff",
+            evidence: "Seen in the server log.",
+            truthStatus: "seen",
+            scopeRelation: "unrelated",
+            disposition: "open",
+            proposedBy: `thread:${finder}`,
+            proposedAt: at,
+            threadId: finder,
+            review: null,
+          },
+        ],
+      } satisfies KanbanIssue;
+      const slug = Files.slugOf(withBoard.title);
+      const doneFile = path.join(directory, "issues", `ship-login${Files.ISSUE_EXTENSION}`);
+      yield* fs.makeDirectory(path.join(directory, "issues"), { recursive: true });
+      yield* fs.writeFileString(doneFile, Files.serializeIssue(done, slug));
+      yield* fs.writeFileString(
+        path.join(directory, "issues", `no-backoff${Files.ISSUE_EXTENSION}`),
+        Files.serializeIssue(triage, slug),
+      );
+      const written = yield* fs.readFileString(doneFile);
+      yield* TestClock.adjust("8 days");
+
+      /** The board as the sweep found it: unloaded, unwatched and unarchived. */
+      const untouched = Effect.gen(function* () {
+        // Only a loaded board answers for its thread links.
+        assert.isUndefined(yield* store.linkedProject(finder));
+        assert.strictEqual(yield* fs.readFileString(doneFile), written);
+        assert.isFalse(yield* fs.exists(path.join(directory, "decisions")));
+      });
+
+      assert.deepEqual(yield* tick(true), { examined: 1, acted: 0, flags: 1 });
+      assert.deepEqual(yield* flags, []);
+      yield* untouched;
+
+      assert.deepEqual(yield* tick(), { examined: 1, acted: 1, flags: 1 });
+      yield* untouched;
     }),
   ).pipe(Effect.provide(layerTest)),
 );

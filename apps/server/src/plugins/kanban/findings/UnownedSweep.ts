@@ -59,7 +59,9 @@ const countUnowned = (issues: ReadonlyArray<KanbanIssue>, cutoff: number) => {
  * are one row on the strip. The flag is cleared once none is left, its text follows the count, and
  * a tick that finds what the last one found writes nothing. A project with no board folder has no
  * findings and gets no folder; one whose board cannot be read keeps the flag it had, and a project
- * that is gone loses it. It never reviews or moves a finding. A dry run counts and writes nothing.
+ * that is gone loses it. It never reviews or moves a finding. A board nobody has opened is read
+ * from its files and left unloaded (`KanbanStore.issues`), so a tick, and a dry run, which counts
+ * and writes nothing, change no board.
  */
 export const sweep = Effect.gen(function* () {
   const store = yield* KanbanStore.KanbanStore;

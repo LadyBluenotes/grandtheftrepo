@@ -122,7 +122,9 @@ them half-evaluated. The host hands `toolkitRegistration` to `ServerPlugin.mcp` 
   sweep keeps one `unowned_finding` flag per project, keyed `findings:<projectId>`, counting the
   findings with no review on its unarchived Triage cards captured three or more days ago: a
   finding's reviewer owns it, so any review takes it off the count. It reads every project through
-  `KanbanStore.issues`, which gives a project with no board folder none and creates no folder.
+  `KanbanStore.issues`, which reads a board that is not loaded once from its issue files and
+  leaves it unloaded: no folder, watcher or archiving, so a tick costs no retained board and a dry
+  run changes nothing.
   `kanban.attention.list` feeds the strip above the board from the project's open host
   flags, its threads' pending questions and permission requests, and, while routing runs, its
   routing mismatches. `kanban.ticket.specify` (MCP `kanban_ticket_specify`) checks a Triage or
