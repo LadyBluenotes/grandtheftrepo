@@ -2,6 +2,7 @@ import {
   type DeterministicDraft,
   type KanbanActor,
   LearningError,
+  PROMPT_PREVIEW_LENGTH,
   type ProjectId,
   ScheduledTaskId,
   type TelemetryExtractionCandidate,
@@ -98,7 +99,12 @@ export const make = Effect.gen(function* () {
             origin: "repeated_work",
             sourceKey: `deterministic:${proposal.id}`,
           });
-          return drafted({ kind: "prompt", promptId: prompt.id });
+          return drafted({
+            kind: "prompt",
+            promptId: prompt.id,
+            title: prompt.title,
+            preview: prompt.body.slice(0, PROMPT_PREVIEW_LENGTH),
+          });
         }
         case "context_file": {
           const store = yield* knowledge;
@@ -112,12 +118,13 @@ export const make = Effect.gen(function* () {
               { projectId, ...text },
               { kind: "agent", threadId: ThreadId.make(candidate.example.threadId) },
             ));
-          return drafted({ kind: "knowledge", pageId: page.id });
+          return drafted({ kind: "knowledge", pageId: page.id, key: page.key, title: page.title });
         }
         case "scheduled_task": {
           const service = yield* tasks;
           if (Option.isNone(service)) return waiting("Scheduled tasks are not available.");
           const id = taskIdOf(proposal.id);
+          const text = taskDraft(candidate, windowFrom);
           const existing = (yield* service.value.list()).tasks.some((task) => task.id === id);
           if (!existing) {
             const shell = yield* projects.getShell(projectId);
@@ -127,7 +134,7 @@ export const make = Effect.gen(function* () {
             }
             yield* service.value.upsert({
               id,
-              ...taskDraft(candidate, windowFrom),
+              ...text,
               enabled: false,
               schedule: { type: "fixed_time", timeOfDay: "09:00" },
               projectId,
@@ -140,7 +147,7 @@ export const make = Effect.gen(function* () {
               creationSource: "server",
             });
           }
-          return drafted({ kind: "scheduled_task", taskId: id });
+          return drafted({ kind: "scheduled_task", taskId: id, ...text });
         }
         case "mcp_tool":
         case "hook": {
@@ -163,7 +170,7 @@ export const make = Effect.gen(function* () {
               status: "triage",
               labels: [CARD_LABEL],
             })).id;
-          return drafted({ kind: "kanban", issueId });
+          return drafted({ kind: "kanban", issueId, title: card.title });
         }
       }
     }).pipe(
@@ -181,21 +188,26 @@ export const make = Effect.gen(function* () {
       switch (draft.kind) {
         case "script": {
           const service = yield* settings;
-          if (Option.isNone(service)) {
+          const modify = Option.isSome(service) ? service.value.modifySettings : undefined;
+          if (modify === undefined) {
             return yield* inactive("Project settings are not available on this server.");
           }
           const shell = yield* projects.getShell(projectId);
           if (Option.isNone(shell)) return yield* invalid(`Project ${projectId} no longer exists.`);
-          const current = yield* service.value.getSettings;
-          const scripts = resolveProjectScripts(current, shell.value);
-          if (scripts.some((script) => script.id === draft.script.id)) return;
-          yield* service.value.updateSettings({
-            projectSettingsOverrides: {
-              [projectId]: {
-                ...current.projectSettingsOverrides[projectId],
-                defaultProjectScripts: [...scripts, draft.script],
-              },
-            },
+          // Read, checked and appended under the settings write lock, so an edit to the project's
+          // actions or overrides made meanwhile is kept.
+          yield* modify((current) => {
+            const scripts = resolveProjectScripts(current, shell.value);
+            return scripts.some((script) => script.id === draft.script.id)
+              ? {}
+              : {
+                  projectSettingsOverrides: {
+                    [projectId]: {
+                      ...current.projectSettingsOverrides[projectId],
+                      defaultProjectScripts: [...scripts, draft.script],
+                    },
+                  },
+                };
           });
           return;
         }
@@ -263,8 +275,8 @@ export const make = Effect.gen(function* () {
   /**
    * Withdraws a draft its target still holds undecided: archives the proposed prompt, discards the
    * knowledge draft, deletes the paused task and archives the Triage card, as `by`. A draft a person
-   * already acted on in its target is left alone, and so is one whose target is off. A failure is
-   * logged and does not stop the dismissal.
+   * already acted on in its target, or that is gone, is left alone. A target that is off, or a
+   * withdrawal that fails, fails the call, so the dismissal waits until the draft can go.
    */
   const withdraw = (projectId: ProjectId, draft: DeterministicDraft, by: KanbanActor) =>
     Effect.gen(function* () {
@@ -278,7 +290,11 @@ export const make = Effect.gen(function* () {
         }
         case "knowledge": {
           const store = yield* knowledge;
-          if (Option.isNone(store)) return;
+          if (Option.isNone(store)) {
+            return yield* inactive(
+              "The knowledge plugin is off; turn it on so the draft page can be discarded.",
+            );
+          }
           const page = (yield* store.value.list({ projectId })).find(
             (entry) => entry.id === draft.pageId,
           );
@@ -287,7 +303,11 @@ export const make = Effect.gen(function* () {
         }
         case "scheduled_task": {
           const service = yield* tasks;
-          if (Option.isNone(service)) return;
+          if (Option.isNone(service)) {
+            return yield* inactive(
+              "Scheduled tasks are not available, so the task cannot be deleted.",
+            );
+          }
           const task = (yield* service.value.list()).tasks.find(
             (entry) => entry.id === draft.taskId,
           );
@@ -296,21 +316,38 @@ export const make = Effect.gen(function* () {
         }
         case "kanban": {
           const store = yield* kanban;
-          if (Option.isNone(store)) return;
-          const issue = yield* store.value.getIssue({ projectId, id: draft.issueId });
-          if (issue.status === "triage" && issue.archivedAt === null) {
-            yield* store.value.write(projectId, by, { action: "issue.archive", id: issue.id });
+          if (Option.isNone(store)) {
+            return yield* inactive(
+              "The kanban plugin is off; turn it on so the card can be archived.",
+            );
+          }
+          const issue = yield* store.value.getIssue({ projectId, id: draft.issueId }).pipe(
+            Effect.map(Option.some),
+            // A card deleted since needs no withdrawing.
+            Effect.catchIf(
+              (error) => error.code === "not_found",
+              () => Effect.succeedNone,
+            ),
+          );
+          if (
+            Option.isSome(issue) &&
+            issue.value.status === "triage" &&
+            issue.value.archivedAt === null
+          ) {
+            yield* store.value.write(projectId, by, {
+              action: "issue.archive",
+              id: issue.value.id,
+            });
           }
           return;
         }
       }
     }).pipe(
-      Effect.catch((cause) =>
-        Effect.logWarning("learning: a dismissed proposal's draft could not be withdrawn", {
-          kind: draft.kind,
-          cause,
-        }),
-      ),
+      Effect.catchTags({
+        KnowledgeError: relay,
+        KanbanError: relay,
+        ScheduledTaskError: failedTo("delete the scheduled task"),
+      }),
     );
 
   return { draft, accept, withdraw };

@@ -6,8 +6,10 @@ import {
 import {
   DETERMINISTIC_DISMISS_REASON_MAX_LENGTH,
   DETERMINISTIC_PROPOSALS_LIMIT,
+  type DeterministicDraft,
   type DeterministicProposal,
   type EnvironmentId,
+  type ProjectId,
   ThreadId,
 } from "@t3tools/contracts";
 import { Link } from "@tanstack/react-router";
@@ -35,10 +37,10 @@ import {
 import { Textarea } from "~/components/ui/textarea";
 import { stackedThreadToast, toastManager } from "~/components/ui/toast";
 import {
+  ACCEPT_EFFECT,
   FORM_LABEL,
   PROPOSAL_STATE_LABEL,
   PROPOSAL_STATE_VARIANT,
-  draftPlace,
   stepText,
   useDeterministicCommands,
   useDeterministicProposals,
@@ -216,12 +218,14 @@ function ProposalDetails({
               <p className="text-sm text-muted-foreground">{proposal.waitingReason}</p>
             ) : (
               <>
-                {proposal.draft.kind === "script" ? (
-                  <pre className="overflow-x-auto rounded-md bg-muted p-2 text-xs">
-                    {proposal.draft.script.command}
-                  </pre>
-                ) : null}
-                <p className="text-sm text-muted-foreground">{draftPlace(proposal.draft)}</p>
+                <DraftPreview
+                  environmentId={environmentId}
+                  projectId={proposal.projectId}
+                  draft={proposal.draft}
+                />
+                <p className="text-sm text-muted-foreground">
+                  {ACCEPT_EFFECT[proposal.draft.kind]}
+                </p>
               </>
             )}
           </Field>
@@ -286,4 +290,107 @@ function ProposalDetails({
       </ScrollArea>
     </>
   );
+}
+
+/**
+ * What accepting a draft activates, from what the draft said when it was saved, with a link to
+ * where it waits: the prompt on the Prompts tab, the page on the Knowledge screen, the task in
+ * scheduled tasks, the card on the board.
+ */
+function DraftPreview({
+  environmentId,
+  projectId,
+  draft,
+}: {
+  readonly environmentId: EnvironmentId;
+  readonly projectId: ProjectId;
+  readonly draft: DeterministicDraft;
+}) {
+  switch (draft.kind) {
+    case "script":
+      return (
+        <>
+          <span className="text-sm font-medium">{draft.script.name}</span>
+          <pre className="overflow-x-auto rounded-md bg-muted p-2 text-xs">
+            {draft.script.command}
+          </pre>
+        </>
+      );
+    case "prompt":
+      return (
+        <>
+          <span className="text-sm font-medium">{draft.title}</span>
+          <p className="line-clamp-4 whitespace-pre-wrap text-sm">{draft.preview}</p>
+          <InlineButton
+            tone="muted"
+            render={
+              <Link
+                to="/plugins/$pluginId"
+                params={{ pluginId: "learning" }}
+                search={{
+                  machine: environmentId,
+                  tab: "prompts",
+                  recordId: String(draft.promptId),
+                }}
+              />
+            }
+          >
+            Open the prompt
+          </InlineButton>
+        </>
+      );
+    case "knowledge":
+      return (
+        <>
+          <span className="text-sm font-medium">{draft.title}</span>
+          <code className="text-xs">{draft.key}</code>
+          <InlineButton
+            tone="muted"
+            render={
+              <Link
+                to="/plugins/$pluginId"
+                params={{ pluginId: "knowledge" }}
+                search={{ machine: environmentId }}
+              />
+            }
+          >
+            Open Knowledge
+          </InlineButton>
+        </>
+      );
+    case "scheduled_task":
+      return (
+        <>
+          <span className="text-sm font-medium">{draft.title}</span>
+          <pre className="max-h-48 overflow-auto whitespace-pre-wrap rounded-md bg-muted p-2 text-xs">
+            {draft.prompt}
+          </pre>
+          <InlineButton
+            tone="muted"
+            render={
+              <Link
+                to="/settings/scheduled-tasks"
+                search={{ environmentId, taskId: draft.taskId }}
+              />
+            }
+          >
+            Open the task
+          </InlineButton>
+        </>
+      );
+    case "kanban":
+      return (
+        <>
+          <span className="text-sm font-medium">{draft.title}</span>
+          <InlineButton
+            tone="muted"
+            render={
+              <Link to="/board" search={{ environmentId, projectId, issue: draft.issueId }} />
+            }
+          >
+            Open the card
+          </InlineButton>
+        </>
+      );
+  }
 }

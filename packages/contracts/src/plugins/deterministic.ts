@@ -27,14 +27,31 @@ export type DeterministicProposalState = typeof DeterministicProposalState.Type;
 /**
  * What a proposal drafted, by form. A project script has no draft state of its own, so its draft
  * is held here until accepted; every other draft lives in its target, as a proposed prompt, a
- * knowledge draft, a paused scheduled task or a Triage card labeled `deterministic`.
+ * knowledge draft, a paused scheduled task or a Triage card labeled `deterministic`, and is named
+ * here with what it said when it was saved, so a person sees what accepting activates.
  */
 export const DeterministicDraft = Schema.Union([
   Schema.Struct({ kind: Schema.Literal("script"), script: ProjectScript }),
-  Schema.Struct({ kind: Schema.Literal("prompt"), promptId: Schema.Int }),
-  Schema.Struct({ kind: Schema.Literal("knowledge"), pageId: Schema.Int }),
-  Schema.Struct({ kind: Schema.Literal("scheduled_task"), taskId: ScheduledTaskId }),
-  Schema.Struct({ kind: Schema.Literal("kanban"), issueId: KanbanSlug }),
+  Schema.Struct({
+    kind: Schema.Literal("prompt"),
+    promptId: Schema.Int,
+    title: Schema.String,
+    /** The start of the body, as a prompt summary carries it. */
+    preview: Schema.String,
+  }),
+  Schema.Struct({
+    kind: Schema.Literal("knowledge"),
+    pageId: Schema.Int,
+    key: Schema.String,
+    title: Schema.String,
+  }),
+  Schema.Struct({
+    kind: Schema.Literal("scheduled_task"),
+    taskId: ScheduledTaskId,
+    title: Schema.String,
+    prompt: Schema.String,
+  }),
+  Schema.Struct({ kind: Schema.Literal("kanban"), issueId: KanbanSlug, title: Schema.String }),
 ]);
 export type DeterministicDraft = typeof DeterministicDraft.Type;
 
@@ -129,7 +146,8 @@ export const DETERMINISTIC_METHODS = definePluginMethods({
   /**
    * A `waiting` or `pending` proposal, with a reason. A draft still undecided in its target is
    * withdrawn: the prompt archived, the knowledge draft discarded, the paused task deleted, the
-   * Triage card archived.
+   * Triage card archived. While that target is off, or the withdrawal fails, the proposal stays
+   * undecided and the call fails.
    */
   dismiss: {
     method: "learning.deterministicDismiss",

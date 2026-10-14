@@ -126,11 +126,13 @@ threads, the costliest first. Each proposal's draft goes where its kind of work 
 - **MCP tool** and **Hook**: these need code, so the draft is a card in the board's Triage column
   labeled `deterministic`.
 
-The **Deterministic** tab lists them; open one to see its steps and draft. **Accept** applies the
-draft: the action joins the project's actions, the prompt becomes active, the page is written, the
-task turns on, or the card moves to Todo. Edit it there before you rely on it. **Dismiss** needs a
-reason and withdraws a draft you have not acted on elsewhere. A dismissed proposal comes back only
-when its work costs at least twice as much in a later week. While the knowledge or kanban plugin is
+The **Deterministic** tab lists them, undecided first; open one to see its steps, the draft and a
+link to where it waits. **Accept** applies the draft: the action joins the project's actions, the
+prompt becomes active, the page is written, the task turns on, or the card moves to Todo. Edit it
+there before you rely on it. **Dismiss** needs a reason and withdraws a draft you have not acted on
+elsewhere; while the plugin holding that draft is off, dismissing fails and the proposal stays, so
+turn the plugin on and try again. A dismissed proposal comes back only when its work costs at least
+twice as much in a later week. While the knowledge or kanban plugin is
 off, or the project has no default model for a task, a proposal waits without a draft; it gets one
 once that is fixed.
 

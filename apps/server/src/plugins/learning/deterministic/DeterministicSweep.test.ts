@@ -4,6 +4,7 @@ import {
   type KanbanIssue,
   KanbanError,
   type KnowledgeEntry,
+  KnowledgeError,
   type OrchestrationProjectShell,
   type TelemetryExtractionCandidate,
   type TelemetryMeasuresInput,
@@ -250,8 +251,14 @@ it.effect("a skill candidate becomes one proposed prompt in the library", () =>
         ],
       );
       const [proposal] = yield* world.store.list({ projectId: projectA.id });
-      assert.deepEqual(proposal?.draft, { kind: "prompt", promptId: prompts[0]!.id });
       const { prompt } = yield* world.prompts.get(prompts[0]!.id);
+      // The draft names the prompt with what accepting activates.
+      assert.deepEqual(proposal?.draft, {
+        kind: "prompt",
+        promptId: prompt.id,
+        title: prompt.title,
+        preview: prompt.body.slice(0, 200),
+      });
       assert.include(prompt.body, "Grep <pattern> <path>\nRead <path>");
       assert.include(prompt.body, "thread thread:example");
     }),
@@ -340,9 +347,15 @@ it.effect("a project gets at most five proposals a week, the costliest eligible 
   ),
 );
 
-/** An in-memory knowledge plugin with no pages, recording what it was asked. */
+/**
+ * An in-memory knowledge plugin with no pages, recording what it was asked. `failDiscard` makes a
+ * discard fail as a locked database would; `setState` is a person acting on a page on its screen.
+ */
 const fakeKnowledge = Effect.gen(function* () {
   const pages = yield* Ref.make<ReadonlyArray<KnowledgeEntry>>([]);
+  const failing = yield* Ref.make(false);
+  const setState = (id: number, state: KnowledgeEntry["state"]) =>
+    Ref.update(pages, (all) => all.map((page) => (page.id === id ? { ...page, state } : page)));
   const layer = Layer.mock(KnowledgeStore.KnowledgeStore)({
     list: ({ projectId }) =>
       Effect.map(Ref.get(pages), (all) => all.filter((page) => page.projectId === projectId)),
@@ -359,8 +372,21 @@ const fakeKnowledge = Effect.gen(function* () {
         };
         return [page, [...all, page]];
       }),
+    discard: ({ id }) =>
+      Effect.gen(function* () {
+        if (yield* Ref.get(failing)) {
+          return yield* new KnowledgeError({ code: "io", message: "Could not discard the draft." });
+        }
+        yield* setState(id, "retired");
+        return (yield* Ref.get(pages)).find((page) => page.id === id)!;
+      }),
   });
-  return { context: yield* Layer.build(layer), pages: Ref.get(pages) };
+  return {
+    context: yield* Layer.build(layer),
+    pages: Ref.get(pages),
+    failDiscard: (fail: boolean) => Ref.set(failing, fail),
+    setState,
+  };
 });
 
 it.effect("a context file waits while the knowledge plugin is off, then becomes a draft page", () =>
@@ -389,7 +415,15 @@ it.effect("a context file waits while the knowledge plugin is off, then becomes 
         source: { kind: "agent", threadId: ThreadId.make("thread:example") },
       });
       const [pending] = yield* world.store.list({ projectId: projectA.id });
-      assert.deepInclude(pending, { state: "pending", draft: { kind: "knowledge", pageId: 1 } });
+      assert.deepInclude(pending, {
+        state: "pending",
+        draft: {
+          kind: "knowledge",
+          pageId: 1,
+          key: "repeated-c0de000000000001",
+          title: "What runs read first: Read docs/arch.md",
+        },
+      });
     }),
   ),
 );
@@ -414,7 +448,12 @@ it.effect("a scheduled task is a paused draft on the project's default model", (
         modelSelection: MODEL,
         runtimeMode: "approval-required",
       });
-      assert.deepEqual(proposal?.draft, { kind: "scheduled_task", taskId: task!.id });
+      assert.deepEqual(proposal?.draft, {
+        kind: "scheduled_task",
+        taskId: task!.id,
+        title: task!.title,
+        prompt: task!.prompt,
+      });
       // A project without a default model has nothing for the task to run on.
       const [waiting] = yield* world.store.list({ projectId: modelless.id });
       assert.deepInclude(waiting, {
@@ -509,6 +548,26 @@ it.effect(
         assert.include(card!.description, "a hook the provider runs after an edit");
 
         const [proposal] = yield* world.store.list({ projectId: projectA.id });
+        assert.deepEqual(proposal?.draft, {
+          kind: "kanban",
+          issueId: card!.id,
+          title: "Could be deterministic: vp fmt <path>",
+        });
+
+        // With the board off the card cannot be archived, so the proposal stays undecided.
+        const off = yield* Effect.flip(
+          world.store.dismiss({ id: proposal!.id, reason: "We format on save." }, "user"),
+        );
+        assert.deepEqual(
+          [off.code, off.message],
+          ["inactive", "The kanban plugin is off; turn it on so the card can be archived."],
+        );
+        assert.strictEqual(
+          (yield* world.store.list({ projectId: projectA.id }))[0]?.state,
+          "pending",
+        );
+        assert.isNull((yield* kanban.issues)[0]?.archivedAt);
+
         yield* world.store
           .dismiss({ id: proposal!.id, reason: "We format on save." }, "user")
           .pipe(Effect.provide(kanban.context));
@@ -517,33 +576,91 @@ it.effect(
     ),
 );
 
-it.effect("accepting a draft script adds it to the project's scripts, once", () =>
-  Effect.scoped(
-    Effect.gen(function* () {
-      const world = yield* setup();
-      world.weeks.set(WEEK_1, [candidate("acce970000000001")]);
-      yield* world.tick();
-      const [proposal] = yield* world.store.list({ projectId: projectA.id });
-      const settings = yield* Layer.build(ServerSettings.layerTest());
+it.effect(
+  "a dismissal fails while its draft cannot be withdrawn, and goes through once a person acted on it",
+  () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const world = yield* setup();
+        const knowledge = yield* fakeKnowledge;
+        world.weeks.set(WEEK_1, [
+          candidate("d15c000000000001", { steps: ["Read docs/arch.md"], form: "context_file" }),
+        ]);
+        yield* world.tick(knowledge.context);
+        const [proposal] = yield* world.store.list({ projectId: projectA.id });
+        const dismiss = world.store
+          .dismiss({ id: proposal!.id, reason: "Already in AGENTS.md." }, "user")
+          .pipe(Effect.provide(knowledge.context));
 
-      const accepted = yield* world.store.accept(proposal!.id).pipe(Effect.provide(settings));
-      assert.deepInclude(accepted, { state: "accepted", decidedBy: "user" });
-      const saved = yield* Effect.provide(
-        ServerSettings.ServerSettingsService.pipe(Effect.flatMap((s) => s.getSettings)),
-        settings,
-      );
-      assert.deepEqual(
-        saved.projectSettingsOverrides[projectA.id]?.defaultProjectScripts?.map((s) => s.id),
-        ["repeated-acce97000000"],
-      );
-      // Accepted once: a second accept is refused, and the flag clears on the next tick.
-      const again = yield* Effect.flip(
-        world.store.accept(proposal!.id).pipe(Effect.provide(settings)),
-      );
-      assert.strictEqual(again.code, "invalid");
-      assert.deepEqual(yield* world.tick(), { examined: 0, acted: 1, flags: 0 });
-    }),
-  ),
+        // The draft page cannot be discarded: nothing is recorded, and a retry can follow.
+        yield* knowledge.failDiscard(true);
+        const failed = yield* Effect.flip(dismiss);
+        assert.deepEqual([failed.code, failed.message], ["io", "Could not discard the draft."]);
+        assert.strictEqual(
+          (yield* world.store.list({ projectId: projectA.id }))[0]?.state,
+          "pending",
+        );
+
+        // A person accepted the page on its own screen: nothing is left to withdraw, and the page stays.
+        yield* knowledge.setState(1, "accepted");
+        assert.deepInclude(yield* dismiss, {
+          state: "dismissed",
+          dismissReason: "Already in AGENTS.md.",
+        });
+        assert.strictEqual((yield* knowledge.pages)[0]?.state, "accepted");
+      }),
+    ),
+);
+
+it.effect(
+  "accepting a draft script adds it to the project's scripts, once, keeping an edit made meanwhile",
+  () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const world = yield* setup();
+        world.weeks.set(WEEK_1, [candidate("acce970000000001")]);
+        yield* world.tick();
+        const [proposal] = yield* world.store.list({ projectId: projectA.id });
+        const real = Context.get(
+          yield* Layer.build(ServerSettings.layerTest()),
+          ServerSettings.ServerSettingsService,
+        );
+        // A person saves the project's actions and its thread mode just before the accept's write
+        // takes the settings lock, after anything the accept could have read.
+        const lint = {
+          id: "lint",
+          name: "Lint",
+          command: "vp lint",
+          icon: "lint",
+          runOnWorktreeCreate: false,
+        } as const;
+        const edit = real.updateSettings({
+          projectSettingsOverrides: {
+            [projectA.id]: { defaultThreadEnvMode: "worktree", defaultProjectScripts: [lint] },
+          },
+        });
+        const settings = Context.make(ServerSettings.ServerSettingsService, {
+          ...real,
+          getSettings: real.getSettings.pipe(Effect.tap(() => edit)),
+          modifySettings: (patch) => edit.pipe(Effect.andThen(real.modifySettings!(patch))),
+        });
+
+        const accepted = yield* world.store.accept(proposal!.id).pipe(Effect.provide(settings));
+        assert.deepInclude(accepted, { state: "accepted", decidedBy: "user" });
+        const saved = (yield* real.getSettings).projectSettingsOverrides[projectA.id];
+        assert.strictEqual(saved?.defaultThreadEnvMode, "worktree");
+        assert.deepEqual(
+          saved?.defaultProjectScripts?.map((s) => s.id),
+          ["lint", "repeated-acce97000000"],
+        );
+        // Accepted once: a second accept is refused, and the flag clears on the next tick.
+        const again = yield* Effect.flip(
+          world.store.accept(proposal!.id).pipe(Effect.provide(settings)),
+        );
+        assert.strictEqual(again.code, "invalid");
+        assert.deepEqual(yield* world.tick(), { examined: 0, acted: 1, flags: 0 });
+      }),
+    ),
 );
 
 it.effect("every undecided proposal is listed first, however many were decided after it", () =>

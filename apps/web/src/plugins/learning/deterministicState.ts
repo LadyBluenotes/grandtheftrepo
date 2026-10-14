@@ -80,21 +80,14 @@ export const FORM_LABEL: Record<TelemetryExtractionForm, string> = {
   hook: "Hook",
 };
 
-/** Where a draft waits, and what accepting it does there. */
-export function draftPlace(draft: DeterministicDraft): string {
-  switch (draft.kind) {
-    case "script":
-      return "Accepting adds this script to the project's actions.";
-    case "prompt":
-      return `Prompt ${draft.promptId} in the Prompts tab, proposed. Accepting makes it active.`;
-    case "knowledge":
-      return `A draft page in Project knowledge. Accepting writes it into the project.`;
-    case "scheduled_task":
-      return "A paused scheduled task. Accepting turns it on.";
-    case "kanban":
-      return `Card ${draft.issueId} in the board's Triage column. Accepting moves it to Todo.`;
-  }
-}
+/** What accepting a draft does in its target. */
+export const ACCEPT_EFFECT: Record<DeterministicDraft["kind"], string> = {
+  script: "Accepting adds this action to the project.",
+  prompt: "Accepting makes this proposed prompt active in the library.",
+  knowledge: "Accepting writes this page into the project and lists it for agents.",
+  scheduled_task: "Accepting turns this paused task on.",
+  kanban: "Accepting moves this card from Triage to Todo.",
+};
 
 /** A step as a person reads it: a command without its `command:` prefix. */
 export const stepText = (step: string) =>

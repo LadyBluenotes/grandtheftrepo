@@ -112,7 +112,8 @@ export class ProposalStore extends Context.Service<
     readonly accept: (id: number) => Effect.Effect<DeterministicProposal, LearningError>;
     /**
      * Dismisses a `waiting` or `pending` proposal with a reason, as `by` (`user` or `thread:<id>`),
-     * and withdraws its draft where the target still holds it undecided.
+     * and withdraws its draft where the target still holds it undecided. While that target is off,
+     * or the withdrawal fails, nothing is recorded and the call fails, so the person can retry.
      */
     readonly dismiss: (
       input: DeterministicDismissInput,

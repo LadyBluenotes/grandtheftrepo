@@ -44,8 +44,9 @@ const isTab = (value: unknown): value is Tab => (TABS as ReadonlyArray<unknown>)
 /**
  * `/plugins/learning`: one project's learning items, the corrections behind them, its prompt
  * library, its proposals to do repeated work without a model and, while the review plugin runs,
- * one thread's verdicts and requests. The tab and the open item, by `recordId`, are in the URL; on
- * the Deterministic tab the record is the project, which is how its attention flag opens it. The
+ * one thread's verdicts and requests. The tab and the open item, by `recordId`, are in the URL; a
+ * prompt's id opens it on the Prompts tab, and on the Deterministic tab the record is the project,
+ * which is how its attention flag opens it. The
  * project is the environment's first until a person picks another, or the record the URL opens
  * selects its own; picking one resets the tabs' filters and the open record.
  */
@@ -143,6 +144,7 @@ export function LearningScreen() {
                   key={`${environmentId}:${selected.id}`}
                   environmentId={environmentId}
                   projectId={selected.id}
+                  initialOpen={learningItemId(search.recordId)}
                 />
               ) : view === "deterministic" ? (
                 <DeterministicTable
