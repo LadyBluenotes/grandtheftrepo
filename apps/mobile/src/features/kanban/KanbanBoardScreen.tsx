@@ -6,11 +6,11 @@ import type { EnvironmentId, KanbanBoard, ProjectId, ThreadId } from "@t3tools/c
 import { memo, useCallback, useMemo, useState } from "react";
 import { Platform, RefreshControl, View } from "react-native";
 
-import { AppActivityIndicator } from "../../components/AppActivityIndicator";
-import { AppText as Text } from "../../components/AppText";
-import { EmptyState } from "../../components/EmptyState";
-import { RowPressable } from "../../components/RowPressable";
-import { ScreenHeader } from "../../components/ScreenHeader";
+import { AppActivityIndicator } from "../../components/ui/AppActivityIndicator";
+import { AppText as Text } from "../../components/ui/AppText";
+import { EmptyState } from "../../components/ui/EmptyState";
+import { RowPressable } from "../../components/ui/RowPressable";
+import { AppBar } from "../../components/ui/AppBar";
 import { useThreadShells } from "../../state/entities";
 import { useEnvironmentQuery } from "../../state/query";
 import { useAdaptiveWorkspaceLayout } from "../layout/AdaptiveWorkspaceLayout";
@@ -158,7 +158,7 @@ function BoardList(props: {
 
   return (
     <View collapsable={false} className="flex-1 bg-sheet">
-      <ScreenHeader title="Board" sidebar={false} onBack={() => navigation.goBack()} />
+      <AppBar title="Board" sidebar={false} onBack={() => navigation.goBack()} />
       <SettingsScreenContent>
         {state.kind === "unavailable" ? (
           <View className="px-4 pt-4">
