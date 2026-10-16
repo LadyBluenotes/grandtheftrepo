@@ -1,0 +1,94 @@
+import { assert, describe, it } from "@effect/vitest";
+import * as HostProcess from "@t3tools/shared/HostProcess";
+import * as Context from "effect/Context";
+import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
+import * as NodeNet from "node:net";
+
+import * as Checks from "./readiness.ts";
+
+describe("proxyCheck", () => {
+  it("is ready when the proxy answers, or lives on another machine", () => {
+    assert.strictEqual(Checks.proxyCheck("http://127.0.0.1:8787", true).status, "ready");
+    assert.strictEqual(Checks.proxyCheck("https://gateway.example.com", null).status, "ready");
+  });
+
+  it("needs the proxy started when nothing answers on its loopback port", () => {
+    const check = Checks.proxyCheck("http://127.0.0.1:8787", false);
+    assert.strictEqual(check.status, "attention");
+    assert.strictEqual(check.target, "plugins");
+  });
+
+  it("tells a malformed gateway URL from one on another machine, though neither is probed", () => {
+    for (const origin of ["not a url", "localhost:8787", "ftp://127.0.0.1:8787"]) {
+      const check = Checks.proxyCheck(origin, null);
+      assert.strictEqual(check.status, "attention", origin);
+      assert.include(check.sentence, "is not a valid origin");
+    }
+    const remote = Checks.proxyCheck("https://gateway.example.com", null);
+    assert.strictEqual(remote.status, "ready");
+    assert.include(remote.sentence, "is not on this machine");
+  });
+});
+
+it.effect("reads a malformed CAVE_GATEWAY_URL as a setting to fix, without probing it", () =>
+  Effect.gen(function* () {
+    const probed: Array<string> = [];
+    const readiness = Checks.make((origin) =>
+      Effect.sync(() => {
+        probed.push(origin);
+        return true;
+      }),
+    );
+    const read = (gateway: string) =>
+      readiness
+        .checks(null)
+        .pipe(Effect.provideService(HostProcess.Environment, { CAVE_GATEWAY_URL: gateway }));
+
+    for (const gateway of ["not a url", "ftp://127.0.0.1:8787"]) {
+      assert.deepEqual(
+        (yield* read(gateway)).map((check) => check.status),
+        ["attention"],
+        gateway,
+      );
+    }
+    assert.deepEqual(probed, []);
+
+    assert.deepEqual(
+      (yield* read("http://127.0.0.1:8787")).map((check) => check.status),
+      ["ready"],
+    );
+    assert.deepEqual(probed, ["http://127.0.0.1:8787"]);
+  }),
+);
+
+it.effect("probes the proxy's loopback port once per request", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const server = NodeNet.createServer();
+      yield* Effect.callback<void>((resume) => {
+        server.listen(0, "127.0.0.1", () => resume(Effect.void));
+      });
+      const { port } = server.address() as NodeNet.AddressInfo;
+      const readiness = Context.get(yield* Layer.build(Checks.layer), Checks.CavemanReadiness)
+        .checks(null)
+        .pipe(
+          Effect.provideService(HostProcess.Environment, {
+            CAVE_GATEWAY_URL: `http://127.0.0.1:${port}`,
+          }),
+        );
+
+      assert.deepEqual(
+        (yield* readiness).map((check) => [check.status, check.sentence]),
+        [["ready", `The proxy answers at http://127.0.0.1:${port}.`]],
+      );
+      yield* Effect.callback<void>((resume) => {
+        server.close(() => resume(Effect.void));
+      });
+      assert.deepEqual(
+        (yield* readiness).map((check) => check.status),
+        ["attention"],
+      );
+    }),
+  ),
+);

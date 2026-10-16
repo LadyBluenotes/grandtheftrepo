@@ -243,6 +243,7 @@ describe("provider compatibility", () => {
       "claudeAgent",
       "cursor",
       "grok",
+      "copilot",
       "opencode",
       "antigravity",
       "customDriver",

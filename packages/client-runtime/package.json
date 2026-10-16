@@ -422,6 +422,14 @@
     "./pull-request-markdown": {
       "types": "./src/pullRequestMarkdown.ts",
       "default": "./src/pullRequestMarkdown.ts"
+    },
+    "./plugins/rpc": {
+      "types": "./src/plugins/rpc.ts",
+      "default": "./src/plugins/rpc.ts"
+    },
+    "./plugins/kanban": {
+      "types": "./src/plugins/kanban.ts",
+      "default": "./src/plugins/kanban.ts"
     }
   },
   "scripts": {

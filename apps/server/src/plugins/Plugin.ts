@@ -1,0 +1,58 @@
+import type { ProjectId, ReadinessCheck } from "@t3tools/contracts";
+import type * as Effect from "effect/Effect";
+import type * as Layer from "effect/Layer";
+import type * as SqlClient from "effect/sql/SqlClient";
+import type * as SqlError from "effect/sql/SqlError";
+import type { toolkitRegistration } from "../mcp/McpHttpServer.ts";
+import type * as EventSink from "../orchestration-v2/EventSink.ts";
+
+/**
+ * One numbered change to a plugin's schema, in the shape of the core `migrationEntries`.
+ * A shipped migration is never edited: the migrator skips ids it has recorded, so a fix is a
+ * new, higher id.
+ */
+export type PluginMigration = readonly [
+  id: number,
+  name: string,
+  up: Effect.Effect<void, SqlError.SqlError, SqlClient.SqlClient>,
+];
+
+/**
+ * What a plugin contributes to the server. The host decides whether it runs
+ * and wires it in; a plugin never edits an upstream file. `layer` builds in
+ * the server's runtime chain and `mcp` in the `/mcp` server's layer, which has
+ * fewer services, so each names its own requirements.
+ */
+export interface ServerPlugin<R = never, RMcp = R> {
+  readonly id: string;
+  /** Ids of plugins that must run for this one to run. */
+  readonly dependsOn: ReadonlyArray<string>;
+  /**
+   * Schema of the plugin's own SQLite file, `<stateDir>/plugins/<id>.sqlite`, applied before the
+   * plugin starts. Without it the plugin's `SqlClient` is in memory and empty at every start.
+   */
+  readonly migrations?: ReadonlyArray<PluginMigration>;
+  /**
+   * Services, reactors and sweeps. Built only when the plugin is active, with
+   * `SqlClient.SqlClient` bound to the plugin's own database, never the core one, and
+   * `EventSinkV2` the orchestrator's committed events, for `PluginReactor.start`.
+   */
+  readonly layer: Layer.Layer<never, never, R | SqlClient.SqlClient | EventSink.EventSinkV2>;
+  /**
+   * MCP tools. `register` is `McpHttpServer.toolkitRegistration`, handed in because that module
+   * imports the host: importing it from a plugin would make a cycle.
+   */
+  readonly mcp?: (
+    register: typeof toolkitRegistration,
+  ) => Layer.Layer<never, never, RMcp | SqlClient.SqlClient>;
+  /**
+   * What the plugin needs to do its work, for the checklist on the Plugins page and the
+   * `plugins_readiness` tool. The host calls it only while the plugin runs, in the caller's fiber,
+   * which holds every active plugin's services, so it reads its own with `Effect.serviceOption`
+   * (see `Readiness.fromService`). A check reads and never writes: no model, no install, no network
+   * beyond a loopback probe. With a null project, checks that need one are left out.
+   */
+  readonly readiness?: (
+    projectId: ProjectId | null,
+  ) => Effect.Effect<ReadonlyArray<ReadinessCheck>>;
+}

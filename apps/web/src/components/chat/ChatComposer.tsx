@@ -360,6 +360,11 @@ import {
 } from "./composerScrollGesture";
 import { prepareVideoFirstFrame } from "../../lib/videoFirstFrame";
 import { observeResize } from "~/lib/observeResize";
+import {
+  countSavedPromptUses,
+  pickSavedPrompt,
+  useSavedPromptMenuItems,
+} from "~/plugins/learning/composerPrompts";
 
 function ComposerVideoThumbnail({ file }: { file: File }) {
   const setVideo = useCallback(
@@ -2721,7 +2726,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     [pullRequestProjectId, threadPullRequests],
   );
 
-  const composerMenuItems = useMemo<ComposerCommandItem[]>(() => {
+  const builtInComposerMenuItems = useMemo<ComposerCommandItem[]>(() => {
     if (!composerTrigger) return [];
     if (composerTrigger.kind === "path") {
       // Threads only surface for a typed query so `@` alone stays a file picker. A title match
@@ -2896,6 +2901,11 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     settings.showSkillsInSlashMenu,
     workspaceEntries.entries,
   ]);
+  const composerMenuItems = useSavedPromptMenuItems(builtInComposerMenuItems, {
+    environmentId,
+    projectId: activeProjectId,
+    trigger: composerTrigger,
+  });
 
   const composerMenuOpen = Boolean(composerTrigger);
   const composerMenuSearchKey = composerTrigger
@@ -4077,6 +4087,30 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       }
       return;
     }
+    if (item.type === "saved-prompt") {
+      const pickKey = attachmentTargetKey;
+      void pickSavedPrompt(item, pickKey, (body) => {
+        // The body loads asynchronously; a draft switched to meanwhile is not the one picked in.
+        if (attachmentTargetKeyRef.current !== pickKey) return false;
+        const replacement = `${body} `;
+        const replacementRangeEnd = extendReplacementRangeForTrailingSpace(
+          snapshot.value,
+          trigger.rangeEnd,
+          replacement,
+        );
+        const applied = applyPromptReplacement(
+          trigger.rangeStart,
+          replacementRangeEnd,
+          replacement,
+          {
+            expectedText: snapshot.value.slice(trigger.rangeStart, replacementRangeEnd),
+          },
+        );
+        if (applied) setComposerHighlightedItemId(null);
+        return applied;
+      });
+      return;
+    }
     if (item.type === "pull-request") {
       if (
         trigger.kind !== "pull-request" ||
@@ -4216,6 +4250,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       });
       return;
     }
+    const sentPrompt = promptRef.current;
     const submission = submitComposerDraft({
       prompt: promptRef.current,
       submissionTarget: activePendingProgress ? "pending-user-input" : "provider-turn",
@@ -4239,6 +4274,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     });
     setComposerSubmissionError(submission.validationMessage);
     if (!submission.didDispatch) return;
+    countSavedPromptUses(attachmentTargetKey, sentPrompt);
     onTypingGuardSend();
     if (shouldBlurMobileComposerOnSubmit()) {
       blurMobileComposerAfterSend();

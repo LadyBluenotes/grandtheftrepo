@@ -352,7 +352,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
         "mac",
         "dmg",
         "0.0.33",
-        false,
+        true,
         false,
         undefined,
         undefined,
@@ -382,6 +382,80 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
       Effect.provide(
         ConfigProvider.layer(
           ConfigProvider.fromEnv({ env: { GITHUB_REPOSITORY: "pingdotgg/t3code" } }),
+        ),
+      ),
+    ),
+  );
+
+  it.effect("omits the release feed only from unsigned macOS builds", () =>
+    Effect.gen(function* () {
+      const version = "0.0.33-nightly.20260815.1";
+      const nightlyFeed = [
+        {
+          provider: "github",
+          owner: "LadyBluenotes",
+          repo: "t3code",
+          releaseType: "prerelease",
+          channel: "nightly",
+        },
+      ];
+      const unsignedMac = yield* createBuildConfig(
+        "mac",
+        "dmg",
+        version,
+        false,
+        false,
+        undefined,
+        undefined,
+      );
+      const unsignedMacWithMockUpdates = yield* createBuildConfig(
+        "mac",
+        "dmg",
+        version,
+        false,
+        true,
+        4123,
+        undefined,
+      );
+      const signedMac = yield* createBuildConfig(
+        "mac",
+        "dmg",
+        version,
+        true,
+        false,
+        undefined,
+        undefined,
+      );
+      const unsignedWindows = yield* createBuildConfig(
+        "win",
+        "nsis",
+        version,
+        false,
+        false,
+        undefined,
+        undefined,
+      );
+      const unsignedLinux = yield* createBuildConfig(
+        "linux",
+        "AppImage",
+        version,
+        false,
+        false,
+        undefined,
+        undefined,
+      );
+
+      assert.notProperty(unsignedMac, "publish");
+      assert.deepStrictEqual(unsignedMacWithMockUpdates.publish, [
+        { provider: "generic", url: "http://localhost:4123" },
+      ]);
+      assert.deepStrictEqual(signedMac.publish, nightlyFeed);
+      assert.deepStrictEqual(unsignedWindows.publish, nightlyFeed);
+      assert.deepStrictEqual(unsignedLinux.publish, nightlyFeed);
+    }).pipe(
+      Effect.provide(
+        ConfigProvider.layer(
+          ConfigProvider.fromEnv({ env: { GITHUB_REPOSITORY: "LadyBluenotes/t3code" } }),
         ),
       ),
     ),
@@ -2140,10 +2214,31 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
       assert.equal(mac.entitlements, "/tmp/entitlements.mac.plist");
       assert.equal(mac.provisioningProfile, "/tmp/t3code.provisionprofile");
       assert.match(String(mac.sign), /[\\/]scripts[\\/]sign-macos\.ts$/);
+      assert.notProperty(mac, "identity");
+      assert.notProperty(mac, "hardenedRuntime");
       assert.deepStrictEqual(mac.protocols, [
         { name: "T3 Code", schemes: ["t3code", "t3code-dev"] },
         { name: "Web site URL", schemes: ["http", "https"], role: "Viewer" },
       ]);
+    }).pipe(Effect.provide(ConfigProvider.layer(ConfigProvider.fromEnv({ env: {} })))),
+  );
+
+  it.effect("signs unsigned macOS builds ad hoc so Apple silicon can open them", () =>
+    Effect.gen(function* () {
+      const config = yield* createBuildConfig(
+        "mac",
+        "dmg",
+        "1.2.3-nightly.20260815.1",
+        false,
+        false,
+        undefined,
+        undefined,
+      );
+
+      const mac = config.mac as Record<string, unknown>;
+      assert.equal(mac.identity, "-");
+      assert.equal(mac.hardenedRuntime, false);
+      assert.notProperty(mac, "sign");
     }).pipe(Effect.provide(ConfigProvider.layer(ConfigProvider.fromEnv({ env: {} })))),
   );
 
