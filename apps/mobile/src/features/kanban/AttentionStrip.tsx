@@ -7,8 +7,8 @@ import type { EnvironmentId, ProjectId, ThreadId } from "@t3tools/contracts";
 import { memo, useCallback, useMemo, useRef } from "react";
 import { Platform, View } from "react-native";
 
-import { AppText as Text } from "../../components/AppText";
-import { RowPressable } from "../../components/RowPressable";
+import { AppText as Text } from "../../components/ui/AppText";
+import { RowPressable } from "../../components/ui/RowPressable";
 import { useEnvironmentQuery } from "../../state/query";
 import { attentionRowThread } from "./attentionTarget";
 import { kanbanAttention } from "./state";
