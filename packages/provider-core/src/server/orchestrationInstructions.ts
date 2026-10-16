@@ -1,6 +1,6 @@
 import type { ProviderInteractionMode } from "@t3tools/contracts";
 
-export const T3_CODE_ORCHESTRATION_INSTRUCTIONS = `
+export let T3_CODE_ORCHESTRATION_INSTRUCTIONS = `
 
 ## T3 Code orchestration
 
@@ -113,3 +113,9 @@ export function t3OrchestrationPromptForFirstRun(input: {
 export function t3OrchestrationSystemPrompt(hasT3Mcp: boolean): string | undefined {
   return hasT3Mcp ? T3_CODE_ORCHESTRATION_INSTRUCTIONS : undefined;
 }
+
+// Fork seam (docs/fork.md): the plugin host sets what its running plugins add to the text above.
+const UPSTREAM_ORCHESTRATION_INSTRUCTIONS = T3_CODE_ORCHESTRATION_INSTRUCTIONS;
+export const setPluginOrchestrationInstructions = (addition: string) => {
+  T3_CODE_ORCHESTRATION_INSTRUCTIONS = UPSTREAM_ORCHESTRATION_INSTRUCTIONS + addition;
+};

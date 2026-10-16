@@ -1,0 +1,120 @@
+/**
+ * The default body below is adapted from the ponytail skill (the "smallest complete change" list in
+ * skills/ponytail/SKILL.md in https://github.com/DietrichGebert/ponytail), Copyright (c) 2026
+ * DietrichGebert, licensed under the MIT License. Changes: the six questions are reworded and
+ * condensed into one block for an instruction file, each gets a short id, and the skill's
+ * activation, levels and other rules are left out. The license text and this notice are the
+ * "Ponytail ladder" entry of `third-party-licenses.config.json`, which the app lists under Open
+ * source licenses.
+ */
+import {
+  POLICY_ENVIRONMENT_PROJECT_ID,
+  PONYTAIL_RUNG_IDS,
+  type PolicyError,
+  type PonytailRungId,
+} from "@t3tools/contracts";
+import * as Context from "effect/Context";
+import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
+import * as SqlClient from "effect/sql/SqlClient";
+
+import * as PolicyService from "./PolicyService.ts";
+
+/** The built-in environment-wide policy (`*` / `ponytail`) that states the ladder to every agent. */
+export const PONYTAIL_KEY = "ponytail";
+
+/** The heading the ladder sits under, in the instruction files and at the top of a composed brief. */
+export const PONYTAIL_HEADING = "## Before you add anything";
+
+const RUNGS: Record<PonytailRungId, { readonly question: string; readonly action: string }> = {
+  needed: { question: "Does it need to exist?", action: "If not, do not add it." },
+  existing: { question: "Is it already in this codebase?", action: "Reuse it." },
+  platform: { question: "Does the standard library or platform do it?", action: "Use that." },
+  dependency: {
+    question: "Does an installed dependency do it?",
+    action: "Use that. Add no dependency for a few lines.",
+  },
+  one_line: { question: "Can it be one line?", action: "Write the line." },
+  minimum: { question: "None of the above?", action: "Write the minimum that works." },
+};
+
+/** The ladder in the order of `PONYTAIL_RUNG_IDS`, one line per rung with its id in code. */
+export const PONYTAIL_TEXT = [
+  PONYTAIL_HEADING,
+  "",
+  "Ask these in order, and use the first rung that applies.",
+  "",
+  ...PONYTAIL_RUNG_IDS.map(
+    (id, index) => `${index + 1}. \`${id}\`: ${RUNGS[id].question} ${RUNGS[id].action}`,
+  ),
+  "",
+  "Source: https://github.com/DietrichGebert/ponytail",
+].join("\n");
+
+/**
+ * Creates version 1 of the `ponytail` policy from `PONYTAIL_TEXT` and accepts it, unless a
+ * `*` / `ponytail` policy already exists in any state: an edited or replaced ladder is the user's
+ * and is never overwritten. The check, the create and the accept share one transaction (the
+ * service's own transactions nest in it), so a failed accept leaves no draft behind for the next
+ * start to mistake for the user's. The delivery sweep then writes the policy into the agents'
+ * instruction files like any accepted policy. A failure is logged and the next start tries again.
+ */
+export const seed = Effect.fn("Ponytail.seed")(
+  function* () {
+    const sql = yield* SqlClient.SqlClient;
+    const policies = yield* PolicyService.PolicyService;
+    const projectId = POLICY_ENVIRONMENT_PROJECT_ID;
+    yield* sql.withTransaction(
+      Effect.gen(function* () {
+        const existing = yield* policies.list(projectId);
+        if (existing.some((policy) => policy.key === PONYTAIL_KEY)) return;
+        const { version } = yield* policies.create({
+          projectId,
+          key: PONYTAIL_KEY,
+          title: "Ponytail ladder",
+          body: PONYTAIL_TEXT,
+        });
+        yield* policies.accept({ projectId, key: PONYTAIL_KEY, version });
+      }),
+    );
+  },
+  Effect.catchTags({
+    PolicyError: (error) =>
+      Effect.logWarning("policy: could not seed the ponytail policy", { message: error.message }),
+    SqlError: (error) =>
+      Effect.logWarning("policy: could not seed the ponytail policy", { cause: error }),
+  }),
+);
+
+/**
+ * The accepted ladder for a server-written brief. The policy plugin's layer provides it, so a
+ * composer reads it with `Effect.serviceOption` and gets nothing while `policy` is off.
+ */
+export class Ponytail extends Context.Service<
+  Ponytail,
+  {
+    /**
+     * The body of the accepted `*` / `ponytail` version, trimmed, or none while no version is
+     * accepted or the accepted body is blank. It reads the database on every run, so a version
+     * accepted since the last brief is in the next one.
+     */
+    readonly current: Effect.Effect<Option.Option<string>, PolicyError>;
+  }
+>()("t3/plugins/policy/ponytail") {}
+
+export const layer = Layer.effect(
+  Ponytail,
+  Effect.gen(function* () {
+    const policies = yield* PolicyService.PolicyService;
+    return Ponytail.of({
+      current: Effect.map(policies.list(POLICY_ENVIRONMENT_PROJECT_ID), (listed) => {
+        // `list` shows a policy's accepted version, else its latest draft, so state tells which.
+        const body = listed
+          .find((policy) => policy.key === PONYTAIL_KEY && policy.state === "accepted")
+          ?.body.trim();
+        return body === undefined || body === "" ? Option.none() : Option.some(body);
+      }),
+    });
+  }),
+);

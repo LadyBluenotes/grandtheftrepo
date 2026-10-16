@@ -93,6 +93,13 @@ export default mergeConfig(
       },
       define: {
         __T3CODE_BUILD_CHANNEL__: JSON.stringify(cliBuildChannel),
+        // The repository `t3 update` follows. CI sets GITHUB_REPOSITORY, so a
+        // fork's build updates from the fork; empty means upstream.
+        __T3CODE_BUILD_RELEASE_REPOSITORY__: JSON.stringify(
+          process.env.T3CODE_RELEASE_REPOSITORY?.trim() ||
+            process.env.GITHUB_REPOSITORY?.trim() ||
+            "",
+        ),
         __T3CODE_BUILD_RELAY_URL__: JSON.stringify(repoEnv.T3CODE_RELAY_URL?.trim() ?? ""),
         __T3CODE_BUILD_CLERK_PUBLISHABLE_KEY__: JSON.stringify(
           repoEnv.T3CODE_CLERK_PUBLISHABLE_KEY?.trim() ?? "",

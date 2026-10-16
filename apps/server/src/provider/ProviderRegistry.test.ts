@@ -2783,7 +2783,7 @@ it.layer(
           decodeServerSettings(
             deepMerge(encodedDefaultServerSettings, {
               providerInstances: {
-                ...disabledDefaultSlots("claudeAgent", "cursor", "grok", "opencode"),
+                ...disabledDefaultSlots("claudeAgent", "copilot", "cursor", "grok", "opencode"),
                 [ProviderInstanceId.make("codex")]: {
                   driver: ProviderDriverKind.make("codex"),
                   enabled: true,
@@ -2876,7 +2876,7 @@ it.layer(
           );
           yield* serverSettings.updateSettings({
             providerInstances: {
-              ...disabledDefaultSlots("claudeAgent", "cursor", "grok", "opencode"),
+              ...disabledDefaultSlots("claudeAgent", "copilot", "cursor", "grok", "opencode"),
               [ProviderInstanceId.make("codex")]: {
                 driver: ProviderDriverKind.make("codex"),
                 enabled: true,
@@ -2906,7 +2906,14 @@ it.layer(
           decodeServerSettings(
             deepMerge(encodedDefaultServerSettings, {
               providerInstances: {
-                ...disabledDefaultSlots("codex", "claudeAgent", "cursor", "grok", "opencode"),
+                ...disabledDefaultSlots(
+                  "codex",
+                  "claudeAgent",
+                  "copilot",
+                  "cursor",
+                  "grok",
+                  "opencode",
+                ),
                 ghost_main: {
                   driver: "ghostDriver",
                   displayName: "A fork-only driver we don't ship",
@@ -2972,7 +2979,7 @@ it.layer(
           const serverSettings = yield* makeMutableServerSettingsService(
             decodeServerSettings(
               deepMerge(encodedDefaultServerSettings, {
-                providerInstances: disabledDefaultSlots("codex", "grok"),
+                providerInstances: disabledDefaultSlots("codex", "copilot", "grok"),
               }),
             ),
           );
@@ -3048,6 +3055,7 @@ it.layer(
               "antigravity",
               "claudeAgent",
               "codex",
+              "copilot",
               "cursor",
               "grok",
               "muse",

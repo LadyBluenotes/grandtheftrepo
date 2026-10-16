@@ -5,11 +5,13 @@ import {
   type ServerProvider,
   type ServerSettings,
 } from "@t3tools/contracts";
+import { CopilotSettings } from "@t3tools/provider-copilot/settings";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 
 const decodeClaudeSettings = Schema.decodeUnknownOption(ClaudeSettings);
 const decodeCodexSettings = Schema.decodeUnknownOption(CodexSettings);
+const decodeCopilotSettings = Schema.decodeUnknownOption(CopilotSettings);
 const SAFE_SHELL_BINARY_PATTERN = /^[A-Za-z0-9_./:\\-]+$/;
 
 function quoteProviderBinary(
@@ -86,6 +88,10 @@ const NATIVE_INSTALL_COMMANDS = {
     windows: "irm https://chatgpt.com/codex/install.ps1 | iex",
     posix: "curl -fsSL https://chatgpt.com/codex/install.sh | sh",
   },
+  copilot: {
+    windows: "winget install GitHub.Copilot",
+    posix: "curl -fsSL https://gh.io/copilot-install | bash",
+  },
 } as const;
 
 export function resolveOnboardingProviderInstallCommand(
@@ -113,6 +119,12 @@ export function resolveOnboardingProviderLoginCommand(
     const config = decodeCodexSettings(instance?.config ?? {});
     const binaryPath = Option.isSome(config) ? config.value.binaryPath : "codex";
     return `${quoteProviderBinary(binaryPath, "codex", platform)} login`;
+  }
+
+  if (provider.driver === "copilot") {
+    const config = decodeCopilotSettings(instance?.config ?? {});
+    const binaryPath = Option.isSome(config) ? config.value.binaryPath : "copilot";
+    return `${quoteProviderBinary(binaryPath, "copilot", platform)} login`;
   }
 
   return provider.driver;
