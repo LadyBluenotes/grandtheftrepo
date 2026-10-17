@@ -1,0 +1,461 @@
+import {
+  DETERMINISTIC_METHODS,
+  DETERMINISTIC_PROPOSALS_LIMIT,
+  deterministicGateway,
+  DeterministicDraft,
+  type DeterministicDismissInput,
+  type DeterministicProposal,
+  type DeterministicProposalsInput,
+  type DeterministicProposalState,
+  LearningError,
+  type ProjectId,
+  TelemetryExtractionCandidate,
+  type TelemetryExtractionForm,
+} from "@t3tools/contracts";
+import * as Context from "effect/Context";
+import * as DateTime from "effect/DateTime";
+import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
+import * as Result from "effect/Result";
+import * as Schema from "effect/Schema";
+import * as Semaphore from "effect/Semaphore";
+import * as SqlClient from "effect/sql/SqlClient";
+import type * as SqlError from "effect/sql/SqlError";
+
+import { proposalTitle, shownSteps } from "./drafts.ts";
+import * as Targets from "./targets.ts";
+
+/** The grant a decision on a proposal arrived with: its gateway's. */
+type DeterministicGrant = ReturnType<typeof deterministicGateway>;
+
+/** A candidate the weekly review proposes: most occurrences identical, in at least three threads. */
+const MIN_DETERMINISTIC_RATIO = 0.8;
+const MIN_THREADS = 3;
+/** The most proposals a project gets in one week. */
+const WEEKLY_LIMIT = 5;
+
+interface Row {
+  readonly id: number;
+  readonly project_id: ProjectId;
+  readonly candidate_id: string;
+  readonly form: TelemetryExtractionForm;
+  readonly candidate: string;
+  readonly estimated_tokens: number;
+  readonly window_from: string;
+  readonly state: DeterministicProposalState;
+  readonly draft: string | null;
+  readonly waiting_reason: string | null;
+  readonly decided_by: string | null;
+  readonly decided_at: string | null;
+  readonly dismiss_reason: string | null;
+  readonly created_at: string;
+}
+
+const CandidateJson = Schema.fromJsonString(TelemetryExtractionCandidate);
+const DraftJson = Schema.fromJsonString(DeterministicDraft);
+const decodeCandidate = Schema.decodeUnknownEffect(CandidateJson);
+const encodeCandidate = Schema.encodeEffect(CandidateJson);
+const decodeDraft = Schema.decodeUnknownEffect(DraftJson);
+const encodeDraft = Schema.encodeEffect(DraftJson);
+
+/** A proposal's latest row for its candidate, as the choice reads it. */
+interface Previous {
+  readonly state: DeterministicProposalState;
+  readonly estimatedTokens: number;
+}
+
+/**
+ * The candidates to propose, costliest first, at most `room`: those with a deterministic ratio of
+ * at least 0.8 in at least three threads that were never proposed, or whose latest proposal was
+ * dismissed and that now cost at least twice what they did then.
+ */
+const choose = (
+  candidates: ReadonlyArray<TelemetryExtractionCandidate>,
+  previous: ReadonlyMap<string, Previous>,
+  room: number,
+) =>
+  candidates
+    .filter((candidate) => {
+      if (candidate.deterministicRatio < MIN_DETERMINISTIC_RATIO) return false;
+      if (candidate.threads < MIN_THREADS) return false;
+      const last = previous.get(candidate.id);
+      return (
+        last === undefined ||
+        (last.state === "dismissed" &&
+          candidate.estimatedTokens >= 2 * Math.max(1, last.estimatedTokens))
+      );
+    })
+    .toSorted((a, b) => b.estimatedTokens - a.estimatedTokens)
+    .slice(0, Math.max(0, room));
+
+/**
+ * The weekly review of repeated work: proposals made from telemetry's extraction candidates, each
+ * with a draft in its form's target, which a person accepts or dismisses. Every change to a
+ * proposal and its draft runs under one lock, so the sweep drafting a proposal and a person
+ * deciding it never interleave.
+ */
+export class ProposalStore extends Context.Service<
+  ProposalStore,
+  {
+    /**
+     * A project's proposals: every undecided one, newest first, then the newest decided ones while
+     * the list holds fewer than `DETERMINISTIC_PROPOSALS_LIMIT`, so whatever the flag counts is
+     * listed however many were decided before it.
+     */
+    readonly list: (
+      input: DeterministicProposalsInput,
+    ) => Effect.Effect<ReadonlyArray<DeterministicProposal>, LearningError>;
+    /**
+     * A project's proposals decided in `[from, to)`, and the undecided ones found in a week that
+     * starts before `to`, so a report on a week lists what its review proposed after it ended.
+     */
+    readonly inRange: (input: {
+      readonly projectId: ProjectId;
+      readonly from: string;
+      readonly to: string;
+    }) => Effect.Effect<ReadonlyArray<DeterministicProposal>, LearningError>;
+    /**
+     * A person accepts a `pending` proposal: its draft is applied in its target, then recorded.
+     * `grant` is the one the caller was authorized with; a draft whose target asks for the other,
+     * as `deterministicGateway` says, is refused.
+     */
+    readonly accept: (
+      id: number,
+      grant: DeterministicGrant,
+    ) => Effect.Effect<DeterministicProposal, LearningError>;
+    /**
+     * Dismisses a `waiting` or `pending` proposal with a reason, as `by` (`user` or `thread:<id>`),
+     * and withdraws its draft where the target still holds it undecided. While that target is off,
+     * or the withdrawal fails, nothing is recorded and the call fails, so the person can retry.
+     * `grant` is checked as for `accept`.
+     */
+    readonly dismiss: (
+      input: DeterministicDismissInput,
+      by: string,
+      grant: DeterministicGrant,
+    ) => Effect.Effect<DeterministicProposal, LearningError>;
+    /**
+     * Records this week's proposals for a project from its candidates, as `waiting` until drafted,
+     * and answers how many. The week's earlier proposals count against `WEEKLY_LIMIT`, so a week
+     * run twice proposes nothing more. A dry run counts and writes nothing.
+     */
+    readonly propose: (input: {
+      readonly projectId: ProjectId;
+      readonly windowFrom: string;
+      readonly candidates: ReadonlyArray<TelemetryExtractionCandidate>;
+      readonly dryRun: boolean;
+    }) => Effect.Effect<number, LearningError>;
+    /**
+     * Saves a draft for each `waiting` proposal of the projects named; one whose target is still
+     * unavailable keeps waiting with the reason. A dry run counts and writes nothing.
+     */
+    readonly draftWaiting: (input: {
+      readonly projectIds: ReadonlySet<ProjectId>;
+      readonly dryRun: boolean;
+    }) => Effect.Effect<{ readonly waiting: number; readonly drafted: number }, LearningError>;
+    /** How many `waiting` and `pending` proposals each project has; a project with none is absent. */
+    readonly undecided: Effect.Effect<ReadonlyMap<ProjectId, number>, LearningError>;
+  }
+>()("t3/plugins/learning/deterministic/ProposalStore") {}
+
+const make = Effect.gen(function* () {
+  const sql = yield* SqlClient.SqlClient;
+  const targets = yield* Targets.make;
+  const lock = yield* Semaphore.make(1);
+
+  const failed = (cause: SqlError.SqlError | Schema.SchemaError) =>
+    Effect.logWarning("learning: deterministic proposals could not be read or written", {
+      cause,
+    }).pipe(
+      Effect.andThen(
+        Effect.fail(
+          new LearningError({
+            code: "io",
+            message: "The deterministic proposals could not be read or written.",
+          }),
+        ),
+      ),
+    );
+  const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
+
+  const read = (row: Row) =>
+    Effect.gen(function* () {
+      const candidate = yield* decodeCandidate(row.candidate);
+      return {
+        proposal: {
+          id: row.id,
+          projectId: row.project_id,
+          candidateId: row.candidate_id,
+          form: row.form,
+          title: proposalTitle(candidate),
+          ...shownSteps(candidate),
+          threads: candidate.threads,
+          occurrences: candidate.occurrences,
+          deterministicRatio: candidate.deterministicRatio,
+          estimatedTokens: row.estimated_tokens,
+          windowFrom: row.window_from,
+          state: row.state,
+          draft: row.draft === null ? null : yield* decodeDraft(row.draft),
+          waitingReason: row.waiting_reason,
+          decidedBy: row.decided_by,
+          decidedAt: row.decided_at,
+          dismissReason: row.dismiss_reason,
+          createdAt: row.created_at,
+        } satisfies DeterministicProposal,
+        candidate,
+      };
+    });
+  const toProposal = (row: Row) => Effect.map(read(row), ({ proposal }) => proposal);
+
+  const existing = (id: number) =>
+    sql<Row>`SELECT * FROM deterministic_proposals WHERE id = ${id}`.pipe(
+      Effect.flatMap(([row]) =>
+        row === undefined
+          ? Effect.fail(new LearningError({ code: "not_found", message: `No proposal ${id}.` }))
+          : Effect.succeed(row),
+      ),
+    );
+
+  const list: ProposalStore["Service"]["list"] = ({ projectId, state }) =>
+    Effect.gen(function* () {
+      const undecided =
+        state === "accepted" || state === "dismissed"
+          ? []
+          : yield* sql<Row>`SELECT * FROM deterministic_proposals
+              WHERE ${sql.and([
+                sql`project_id = ${projectId}`,
+                state === undefined ? sql`state IN ('waiting', 'pending')` : sql`state = ${state}`,
+              ])}
+              ORDER BY id DESC`;
+      const room = DETERMINISTIC_PROPOSALS_LIMIT - undecided.length;
+      const decided =
+        state === "waiting" || state === "pending" || room <= 0
+          ? []
+          : yield* sql<Row>`SELECT * FROM deterministic_proposals
+              WHERE ${sql.and([
+                sql`project_id = ${projectId}`,
+                state === undefined
+                  ? sql`state IN ('accepted', 'dismissed')`
+                  : sql`state = ${state}`,
+              ])}
+              ORDER BY id DESC
+              LIMIT ${room}`;
+      return yield* Effect.forEach([...undecided, ...decided], toProposal);
+      // Under the lock decisions take, so a row decided between the two reads is not listed twice.
+    }).pipe(lock.withPermits(1), Effect.catchTags({ SqlError: failed, SchemaError: failed }));
+
+  const inRange: ProposalStore["Service"]["inRange"] = ({ projectId, from, to }) =>
+    sql<Row>`SELECT * FROM deterministic_proposals
+      WHERE project_id = ${projectId}
+        AND ((decided_at >= ${from} AND decided_at < ${to})
+          OR (state IN ('waiting', 'pending')
+            AND strftime('%Y-%m-%dT%H:%M:%fZ', window_from, '+7 days') <= ${to}))
+      ORDER BY id`.pipe(
+      Effect.flatMap((rows) => Effect.forEach(rows, toProposal)),
+      Effect.catchTags({ SqlError: failed, SchemaError: failed }),
+    );
+
+  /**
+   * Refuses a decision made with a grant other than the one its draft's target asks for, naming
+   * the method that has it.
+   */
+  const granted = (
+    proposal: DeterministicProposal,
+    decision: "accept" | "dismiss",
+    grant: DeterministicGrant,
+  ) => {
+    const needed = deterministicGateway(decision, proposal.draft);
+    if (needed === grant) return Effect.void;
+    const method =
+      decision === "accept"
+        ? needed === "settingsWrite"
+          ? DETERMINISTIC_METHODS.acceptSettings.method
+          : DETERMINISTIC_METHODS.accept.method
+        : needed === "settingsWrite"
+          ? DETERMINISTIC_METHODS.dismissSettings.method
+          : DETERMINISTIC_METHODS.dismiss.method;
+    return Effect.fail(
+      new LearningError({
+        code: "invalid",
+        message: `Proposal ${proposal.id} is decided with ${method}, which needs the ${needed} grant.`,
+      }),
+    );
+  };
+
+  const accept: ProposalStore["Service"]["accept"] = (id, grant) =>
+    Effect.gen(function* () {
+      const row = yield* existing(id);
+      const { proposal } = yield* read(row);
+      if (proposal.state !== "pending" || proposal.draft === null) {
+        return yield* new LearningError({
+          code: "invalid",
+          message: `Proposal ${id} is ${proposal.state}; only a pending one is accepted.`,
+        });
+      }
+      yield* granted(proposal, "accept", grant);
+      yield* targets.accept(proposal.projectId, proposal.draft);
+      const at = yield* nowIso;
+      const [moved] = yield* sql<Row>`UPDATE deterministic_proposals
+        SET state = 'accepted', decided_by = 'user', decided_at = ${at}, updated_at = ${at}
+        WHERE id = ${id} AND state = 'pending'
+        RETURNING *`;
+      return yield* toProposal(moved!);
+    }).pipe(lock.withPermits(1), Effect.catchTags({ SqlError: failed, SchemaError: failed }));
+
+  const dismiss: ProposalStore["Service"]["dismiss"] = ({ id, reason }, by, grant) =>
+    Effect.gen(function* () {
+      const row = yield* existing(id);
+      const { proposal } = yield* read(row);
+      if (proposal.state !== "waiting" && proposal.state !== "pending") {
+        return yield* new LearningError({
+          code: "invalid",
+          message: `Proposal ${id} is ${proposal.state}; only a waiting or pending one is dismissed.`,
+        });
+      }
+      yield* granted(proposal, "dismiss", grant);
+      if (proposal.draft !== null) yield* targets.withdraw(proposal.projectId, proposal.draft, by);
+      const at = yield* nowIso;
+      const [moved] = yield* sql<Row>`UPDATE deterministic_proposals
+        SET state = 'dismissed', decided_by = ${by}, decided_at = ${at},
+          dismiss_reason = ${reason}, waiting_reason = NULL, updated_at = ${at}
+        WHERE id = ${id} AND state IN ('waiting', 'pending')
+        RETURNING *`;
+      return yield* toProposal(moved!);
+    }).pipe(lock.withPermits(1), Effect.catchTags({ SqlError: failed, SchemaError: failed }));
+
+  const propose: ProposalStore["Service"]["propose"] = ({
+    projectId,
+    windowFrom,
+    candidates,
+    dryRun,
+  }) =>
+    Effect.gen(function* () {
+      // The latest proposal of each candidate, by id: a dismissed one returns once its cost doubles.
+      const history = yield* sql<{
+        readonly candidate_id: string;
+        readonly state: DeterministicProposalState;
+        readonly estimated_tokens: number;
+      }>`SELECT candidate_id, state, estimated_tokens FROM deterministic_proposals
+        WHERE project_id = ${projectId} ORDER BY id`;
+      const previous = new Map(
+        history.map((row) => [
+          row.candidate_id,
+          { state: row.state, estimatedTokens: row.estimated_tokens },
+        ]),
+      );
+      const [made] = yield* sql<{ readonly count: number }>`SELECT count(*) AS count
+        FROM deterministic_proposals
+        WHERE project_id = ${projectId} AND window_from = ${windowFrom}`;
+      const chosen = choose(candidates, previous, WEEKLY_LIMIT - (made?.count ?? 0));
+      if (dryRun) return chosen.length;
+      const at = yield* nowIso;
+      for (const candidate of chosen) {
+        yield* sql`INSERT INTO deterministic_proposals ${sql.insert({
+          project_id: projectId,
+          candidate_id: candidate.id,
+          form: candidate.form,
+          candidate: yield* encodeCandidate(candidate),
+          estimated_tokens: candidate.estimatedTokens,
+          window_from: windowFrom,
+          state: "waiting",
+          draft: null,
+          waiting_reason: "The draft has not been saved yet.",
+          decided_by: null,
+          decided_at: null,
+          dismiss_reason: null,
+          created_at: at,
+          updated_at: at,
+        })} ON CONFLICT (project_id, candidate_id, window_from) DO NOTHING`;
+      }
+      return chosen.length;
+    }).pipe(lock.withPermits(1), Effect.catchTags({ SqlError: failed, SchemaError: failed }));
+
+  /**
+   * Dismisses a waiting proposal whose draft cannot be made, as `supervisor`, so it leaves the
+   * flag and the sweep instead of waiting for good. Its candidate returns once its cost doubles.
+   */
+  const refuse = (id: number, reason: string, at: string) =>
+    sql`UPDATE deterministic_proposals
+      SET state = 'dismissed', decided_by = 'supervisor', decided_at = ${at},
+        dismiss_reason = ${`The draft could not be saved: ${reason}`}, waiting_reason = NULL,
+        updated_at = ${at}
+      WHERE id = ${id} AND state = 'waiting'`;
+
+  /**
+   * Drafts one waiting proposal, unless a person decided it since it was read. A draft its target
+   * refuses, or that does not fit the draft contract, is refused for good rather than retried.
+   */
+  const draftOne = (id: number) =>
+    Effect.gen(function* () {
+      const [row] = yield* sql<Row>`SELECT * FROM deterministic_proposals
+        WHERE id = ${id} AND state = 'waiting'`;
+      if (row === undefined) return false;
+      const at = yield* nowIso;
+      const stored = yield* Effect.result(read(row));
+      if (Result.isFailure(stored)) {
+        yield* Effect.logWarning("learning: a proposal's candidate could not be read", {
+          proposalId: id,
+          cause: stored.failure,
+        });
+        yield* refuse(id, "its candidate could not be read.", at);
+        return false;
+      }
+      const result = yield* targets.draft({
+        id: row.id,
+        projectId: row.project_id,
+        candidate: stored.success.candidate,
+        windowFrom: row.window_from,
+      });
+      if (result._tag === "rejected") {
+        yield* refuse(id, result.reason, at);
+        return false;
+      }
+      if (result._tag === "waiting") {
+        // Every tick tries again; only a new reason is written.
+        if (result.reason !== row.waiting_reason) {
+          yield* sql`UPDATE deterministic_proposals
+            SET waiting_reason = ${result.reason}, updated_at = ${at} WHERE id = ${id}`;
+        }
+        return false;
+      }
+      const encoded = yield* Effect.result(encodeDraft(result.draft));
+      if (Result.isFailure(encoded)) {
+        yield* Effect.logWarning("learning: a proposal's draft does not fit its contract", {
+          proposalId: id,
+          cause: encoded.failure,
+        });
+        yield* refuse(id, "it does not fit what its target accepts.", at);
+        return false;
+      }
+      yield* sql`UPDATE deterministic_proposals
+        SET state = 'pending', draft = ${encoded.success}, waiting_reason = NULL,
+          updated_at = ${at}
+        WHERE id = ${id}`;
+      return true;
+    }).pipe(lock.withPermits(1));
+
+  const draftWaiting: ProposalStore["Service"]["draftWaiting"] = ({ projectIds, dryRun }) =>
+    Effect.gen(function* () {
+      const rows = (yield* sql<{ readonly id: number; readonly project_id: ProjectId }>`
+        SELECT id, project_id FROM deterministic_proposals WHERE state = 'waiting' ORDER BY id`).filter(
+        (row) => projectIds.has(row.project_id),
+      );
+      if (dryRun) return { waiting: rows.length, drafted: 0 };
+      let drafted = 0;
+      for (const row of rows) if (yield* draftOne(row.id)) drafted += 1;
+      return { waiting: rows.length, drafted };
+    }).pipe(Effect.catchTags({ SqlError: failed }));
+
+  const undecided: ProposalStore["Service"]["undecided"] = sql<{
+    readonly project_id: ProjectId;
+    readonly count: number;
+  }>`SELECT project_id, count(*) AS count FROM deterministic_proposals
+    WHERE state IN ('waiting', 'pending') GROUP BY project_id`.pipe(
+    Effect.map((rows) => new Map(rows.map((row) => [row.project_id, row.count]))),
+    Effect.catchTags({ SqlError: failed }),
+  );
+
+  return ProposalStore.of({ list, inRange, accept, dismiss, propose, draftWaiting, undecided });
+});
+
+export const layer = Layer.effect(ProposalStore, make);

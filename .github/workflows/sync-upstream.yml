@@ -1,0 +1,150 @@
+name: Sync upstream
+
+# Nightly: merge pingdotgg/t3code main into this fork.
+# - A clean merge is pushed straight to TARGET_BRANCH.
+# - A conflicting merge pushes upstream's head to SYNC_BRANCH, opens (or
+#   refreshes) a pull request into TARGET_BRANCH, and asks the Copilot cloud
+#   agent to resolve it with one @copilot comment when SYNC_TOKEN is set.
+#   Copilot answers mentions only from a person with write access and only
+#   while the agent is enabled for that account. The next clean run closes the
+#   pull request.
+#
+# Pushes made with the default GITHUB_TOKEN do not start other workflows, so CI
+# will not run on a nightly merge, and a comment by the bot does not reach
+# Copilot. Add a repository secret SYNC_TOKEN (a fine-grained PAT with
+# contents: write and pull-requests: write) to turn both on; the job falls back
+# to GITHUB_TOKEN when the secret is absent.
+
+on:
+  schedule:
+    - cron: "23 4 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: sync-upstream
+  cancel-in-progress: false
+
+env:
+  UPSTREAM_REPO: pingdotgg/t3code
+  UPSTREAM_BRANCH: main
+  TARGET_BRANCH: main
+  SYNC_BRANCH: sync/upstream
+
+jobs:
+  sync:
+    if: github.repository_owner != 'pingdotgg'
+    runs-on: ubuntu-24.04
+    env:
+      SYNC_TOKEN: ${{ secrets.SYNC_TOKEN }}
+      # The checkout gains an `upstream` remote, and gh would otherwise resolve
+      # the parent repository as the base for every pr and issue command.
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ env.TARGET_BRANCH }}
+          fetch-depth: 0
+          token: ${{ secrets.SYNC_TOKEN || github.token }}
+
+      - name: Configure git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Fetch upstream
+        run: |
+          git remote add upstream "https://github.com/${UPSTREAM_REPO}.git"
+          git fetch --no-tags upstream "${UPSTREAM_BRANCH}"
+
+      - name: Merge
+        id: merge
+        run: |
+          upstream_sha="$(git rev-parse "upstream/${UPSTREAM_BRANCH}")"
+          echo "upstream_sha=${upstream_sha}" >> "$GITHUB_OUTPUT"
+          if git merge-base --is-ancestor "${upstream_sha}" HEAD; then
+            echo "result=up-to-date" >> "$GITHUB_OUTPUT"
+            echo "Already contains ${UPSTREAM_REPO}@${upstream_sha}"
+            exit 0
+          fi
+          if git merge --no-edit "upstream/${UPSTREAM_BRANCH}" \
+              -m "chore: sync upstream ${UPSTREAM_REPO}@${upstream_sha:0:12}"; then
+            echo "result=merged" >> "$GITHUB_OUTPUT"
+          else
+            git diff --name-only --diff-filter=U | sort > "${RUNNER_TEMP}/conflicts.txt"
+            git merge --abort
+            echo "result=conflict" >> "$GITHUB_OUTPUT"
+            echo "Conflicts:"
+            cat "${RUNNER_TEMP}/conflicts.txt"
+          fi
+
+      - name: Push merge
+        if: steps.merge.outputs.result == 'merged'
+        run: git push origin "HEAD:${TARGET_BRANCH}"
+
+      - name: Open or refresh conflict pull request
+        if: steps.merge.outputs.result == 'conflict'
+        env:
+          GH_TOKEN: ${{ secrets.SYNC_TOKEN || github.token }}
+        run: |
+          # Never force: once Copilot or a person has pushed a resolution to the
+          # branch, a non-fast-forward push is rejected and that work survives.
+          git push origin "upstream/${UPSTREAM_BRANCH}:refs/heads/${SYNC_BRANCH}" \
+            || echo "${SYNC_BRANCH} carries commits beyond upstream; left as is."
+          {
+            echo "Nightly sync of \`${UPSTREAM_REPO}\` at \`${{ steps.merge.outputs.upstream_sha }}\` did not merge automatically."
+            echo
+            echo "Conflicting files:"
+            echo
+            sed 's/^/- `/; s/$/`/' "${RUNNER_TEMP}/conflicts.txt"
+            echo
+            echo "Resolve the conflicts on this pull request, or merge \`${SYNC_BRANCH}\` into \`${TARGET_BRANCH}\` locally and push. The next nightly run closes this once \`${TARGET_BRANCH}\` contains upstream."
+          } > "${RUNNER_TEMP}/body.md"
+          number="$(gh pr list --head "${SYNC_BRANCH}" --base "${TARGET_BRANCH}" --state open --json number --jq '.[0].number // empty')"
+          if [ -z "${number}" ]; then
+            gh pr create --head "${SYNC_BRANCH}" --base "${TARGET_BRANCH}" \
+              --title "chore: sync upstream ${UPSTREAM_REPO} (conflicts)" \
+              --body-file "${RUNNER_TEMP}/body.md"
+          else
+            gh pr edit "${number}" --body-file "${RUNNER_TEMP}/body.md"
+          fi
+
+      - name: Ask Copilot to resolve the conflicts
+        if: steps.merge.outputs.result == 'conflict' && env.SYNC_TOKEN != ''
+        env:
+          GH_TOKEN: ${{ secrets.SYNC_TOKEN }}
+        run: |
+          number="$(gh pr list --head "${SYNC_BRANCH}" --base "${TARGET_BRANCH}" --state open --json number --jq '.[0].number')"
+          if gh pr view "${number}" --json comments --jq '.comments[].body' | grep -q '^@copilot'; then
+            echo "Copilot was already asked on #${number}."
+            exit 0
+          fi
+          {
+            echo "@copilot resolve the merge conflicts on this pull request by merging \`${TARGET_BRANCH}\` into \`${SYNC_BRANCH}\` and pushing the result to this branch."
+            echo
+            echo "Rules:"
+            echo "- Keep every line listed in \`docs/fork.md\` under \"Upstream seams\"; those lines are this fork's."
+            echo "- Everywhere else take upstream's side."
+            echo "- Regenerate \`apps/web/src/routeTree.gen.ts\` by running the web build instead of editing it."
+            echo "- Typecheck \`apps/server\`, \`packages/contracts\` and \`apps/web\` before you finish."
+            echo
+            echo "Conflicting files:"
+            echo
+            sed 's/^/- `/; s/$/`/' "${RUNNER_TEMP}/conflicts.txt"
+          } > "${RUNNER_TEMP}/ask.md"
+          gh pr comment "${number}" --body-file "${RUNNER_TEMP}/ask.md"
+          echo "Asked Copilot on #${number}."
+
+      - name: Close stale conflict pull request
+        if: steps.merge.outputs.result != 'conflict'
+        env:
+          GH_TOKEN: ${{ secrets.SYNC_TOKEN || github.token }}
+        run: |
+          number="$(gh pr list --head "${SYNC_BRANCH}" --base "${TARGET_BRANCH}" --state open --json number --jq '.[0].number // empty')"
+          if [ -n "${number}" ]; then
+            gh pr close "${number}" --delete-branch \
+              --comment "Upstream now merges cleanly into \`${TARGET_BRANCH}\`. Closing."
+          fi

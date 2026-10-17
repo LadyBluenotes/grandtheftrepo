@@ -42,6 +42,20 @@ function base64DecodedLength(encoded: string): number {
   return Math.floor((length * 3) / 4);
 }
 
+/**
+ * Whether `record`, found under `key`, is where a tool output keeps an image: it still holds a
+ * base64 body, or holds the `sizeBytes` this module left in the body's place. Image placeholders
+ * of every shape stripping produces answer true, with or without the bytes, so a reader can count
+ * the images of a stored output without the eight the asset route serves.
+ */
+export function carriesImage(record: Record<string, unknown>, key: string | undefined): boolean {
+  if (!isImageBody(record, key)) return false;
+  return (
+    typeof record.sizeBytes === "number" ||
+    Array.from(IMAGE_BODY_KEYS).some((bodyKey) => isBase64Body(record[bodyKey]))
+  );
+}
+
 interface StripContext {
   readonly output: unknown;
   served: ReadonlyArray<unknown> | undefined;

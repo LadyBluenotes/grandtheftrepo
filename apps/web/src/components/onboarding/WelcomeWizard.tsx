@@ -639,7 +639,7 @@ function PairingForm({
   );
 }
 
-const PRIMARY_AGENT_DRIVERS = ["codex", "claudeAgent"] as const;
+const PRIMARY_AGENT_DRIVERS = ["codex", "claudeAgent", "copilot"] as const;
 type OnboardingAgentDriver = (typeof PRIMARY_AGENT_DRIVERS)[number];
 
 interface AgentTerminalSession {

@@ -176,6 +176,7 @@ import { ProposedPlanCard } from "./ProposedPlanCard";
 import { HtmlRenderFrame } from "./HtmlRenderFrame";
 import { McpAppFrame } from "./McpAppFrame";
 import { ChangedFilesCard } from "./ChangedFilesTree";
+import { RecordedThisTurnCard } from "../../plugins/recorded/RecordedThisTurnCard";
 import { useFileContextMenuHandler } from "../../fileContextMenu";
 import { useProject, useThreadShell } from "../../state/entities";
 import {
@@ -2613,6 +2614,12 @@ function AssistantTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "mess
           routeThreadKey={ctx.routeThreadKey}
           resolvedTheme={ctx.resolvedTheme}
           onOpenTurnDiff={ctx.onOpenTurnDiff}
+        />
+        <RecordedThisTurnCard
+          records={row.capturedRecords}
+          runId={row.message.runId ?? null}
+          threadRef={ctx.threadRef}
+          routeThreadKey={ctx.routeThreadKey}
         />
         {row.showAssistantMeta ? (
           <AssistantMessageMeta
