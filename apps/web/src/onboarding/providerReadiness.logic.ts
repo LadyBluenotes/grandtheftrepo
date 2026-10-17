@@ -75,7 +75,7 @@ export function selectOnboardingProvidersByDriver(
 }
 
 /**
- * Neither needs Node or npm, and both land in the paths the server's provider
+ * None needs Node or npm, and each lands in the paths the server's provider
  * maintenance recognizes as native, so the one-click updater in Settings keeps
  * working after install.
  */
