@@ -149,6 +149,7 @@ import { nativeHeaderScrollEdgeEffects } from "./native/StackHeader";
 import { FORM_SHEET_PRESENTATION_OPTIONS } from "./native/sheet-surface";
 import { useThreadOutboxDrain } from "./state/use-thread-outbox-drain";
 import { useComposerAttachmentUploadWorker } from "./state/composer-attachment-uploads";
+import { KanbanBoardScreen } from "./features/kanban/KanbanBoardScreen";
 
 const HEADER_SCROLL_EDGE_EFFECTS = nativeHeaderScrollEdgeEffects(Platform.OS, Platform.Version);
 
@@ -409,6 +410,12 @@ const SettingsContentStack = createV5SheetStackNavigator({
       options: {
         title: "Usage",
       },
+    }),
+    // Fork seam: the kanban plugin's board, reached from the project overview.
+    SettingsKanbanBoard: createNativeStackScreen({
+      screen: KanbanBoardScreen,
+      linking: "board/:environmentId/:projectId",
+      options: { title: "Board" },
     }),
   },
 });

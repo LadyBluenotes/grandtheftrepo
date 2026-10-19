@@ -74,6 +74,7 @@ import {
   PaletteIcon,
   RotateCcwIcon,
   SettingsIcon,
+  SquareKanbanIcon,
   SquarePenIcon,
   SunIcon,
   TextSearchIcon,
@@ -249,6 +250,7 @@ import {
 import type { Project } from "../types";
 import { PullRequestGlyph } from "~/components/pullRequest/pullRequestIcons";
 import { readPullRequestListPreferences } from "~/components/pullRequest/pullRequestListPreferences";
+import { findDecisionSearch, kanbanSupportedAtom } from "~/plugins/kanban/state";
 import { useThreadRouteTarget } from "../hooks/useThreadRouteTarget";
 
 const EMPTY_BROWSE_ENTRIES: FilesystemBrowseResult["entries"] = [];
@@ -2023,6 +2025,33 @@ function OpenCommandPaletteDialog(props: {
       icon: <PullRequestGlyph.pullRequest className={ITEM_ICON_CLASS} />,
       run: async () => {
         await navigate({ to: "/pull-requests", search: readPullRequestListPreferences() });
+      },
+    });
+  }
+
+  const kanbanSupported = useAtomValue(kanbanSupportedAtom);
+  if (kanbanSupported) {
+    actionItems.push({
+      kind: "action",
+      value: "action:board",
+      searchTerms: ["board", "kanban", "issues", "tickets", "tasks", "decisions"],
+      title: "Open board",
+      icon: <SquareKanbanIcon className={ITEM_ICON_CLASS} />,
+      run: async () => {
+        await navigate({ to: "/board", search: {} });
+      },
+    });
+    actionItems.push({
+      kind: "action",
+      value: "action:find-decision",
+      searchTerms: ["find decision", "decisions", "search", "why", "alternatives", "kanban"],
+      title: "Find decision",
+      icon: <TextSearchIcon className={ITEM_ICON_CLASS} />,
+      run: async () => {
+        await navigate({
+          to: "/board",
+          search: (previous) => findDecisionSearch(previous, activeThread ?? activeDraftThread),
+        });
       },
     });
   }

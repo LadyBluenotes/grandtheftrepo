@@ -430,6 +430,14 @@
     "./pull-request-query": {
       "types": "./src/pullRequestQuery.ts",
       "default": "./src/pullRequestQuery.ts"
+    },
+    "./plugins/rpc": {
+      "types": "./src/plugins/rpc.ts",
+      "default": "./src/plugins/rpc.ts"
+    },
+    "./plugins/kanban": {
+      "types": "./src/plugins/kanban.ts",
+      "default": "./src/plugins/kanban.ts"
     }
   },
   "scripts": {

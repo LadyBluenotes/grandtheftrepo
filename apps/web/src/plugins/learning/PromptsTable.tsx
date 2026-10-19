@@ -1,0 +1,187 @@
+import { PROMPT_QUERY_MAX_LENGTH, PROMPTS_LIST_LIMIT, type PromptState } from "@t3tools/contracts";
+import { PlusIcon } from "lucide-react";
+import { useState } from "react";
+
+import { Badge } from "~/components/ui/badge";
+import { Button, InlineButton } from "~/components/ui/button";
+import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "~/components/ui/empty";
+import { Input } from "~/components/ui/input";
+import {
+  Select,
+  SelectItem,
+  SelectPopup,
+  SelectTrigger,
+  SelectValue,
+} from "~/components/ui/select";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "~/components/ui/table";
+import { useDebouncedValue } from "~/state/queries";
+import { PromptDrawer } from "./PromptDrawer";
+import {
+  PROMPT_KIND_LABEL,
+  PROMPT_ORIGIN_LABEL,
+  PROMPT_STATE_LABEL,
+  PROMPT_STATE_VARIANT,
+  PROMPT_STATES,
+  isPromptState,
+  refreshPromptLists,
+  usePromptCommands,
+  usePrompts,
+} from "./promptState";
+import type { LearningScope } from "./state";
+import { When } from "./When";
+
+/**
+ * A project's prompt library, narrowed by state and by the words of a search, both on the server;
+ * the search waits for typing to pause. A row's title opens the drawer on `openId`, the URL's
+ * record, through `onOpen`, so a link, the browser's history and a reload show the same prompt;
+ * New prompt opens the form, which is not in the URL. Whatever the drawer changes refetches the
+ * list.
+ */
+export function PromptsTable({
+  environmentId,
+  projectId,
+  openId,
+  onOpen,
+}: LearningScope & {
+  readonly openId: number | null;
+  readonly onOpen: (id: number | null) => void;
+}) {
+  const [state, setState] = useState<PromptState | null>(null);
+  const [query, setQuery] = useState("");
+  const [creating, setCreating] = useState(false);
+  const show = (id: number | null) => {
+    setCreating(false);
+    if (id !== openId) onOpen(id);
+  };
+  const search = useDebouncedValue(query, 250);
+  const prompts = usePrompts({ environmentId, projectId }, { state, query: search });
+  const { canWrite } = usePromptCommands(environmentId);
+  const rows = prompts.data ?? [];
+  const filtered = state !== null || search.trim() !== "";
+
+  return (
+    <div className="flex flex-col gap-3">
+      <div className="flex flex-wrap items-center gap-2">
+        <div className="w-56">
+          <Input
+            size="sm"
+            type="search"
+            aria-label="Search prompts"
+            placeholder="Search titles and bodies"
+            maxLength={PROMPT_QUERY_MAX_LENGTH}
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+          />
+        </div>
+        <div className="w-36">
+          <Select<string>
+            value={state ?? "all"}
+            onValueChange={(value) => setState(isPromptState(value) ? value : null)}
+          >
+            <SelectTrigger size="sm" aria-label="State">
+              <SelectValue>{state === null ? "All states" : PROMPT_STATE_LABEL[state]}</SelectValue>
+            </SelectTrigger>
+            <SelectPopup>
+              <SelectItem value="all">All states</SelectItem>
+              {PROMPT_STATES.map((candidate) => (
+                <SelectItem key={candidate} value={candidate}>
+                  {PROMPT_STATE_LABEL[candidate]}
+                </SelectItem>
+              ))}
+            </SelectPopup>
+          </Select>
+        </div>
+        <span className="text-xs text-muted-foreground">
+          {rows.length === PROMPTS_LIST_LIMIT
+            ? `The ${PROMPTS_LIST_LIMIT} most recently updated; search to narrow`
+            : rows.length === 1
+              ? "1 prompt"
+              : `${rows.length} prompts`}
+        </span>
+        <div className="ml-auto">
+          <Button
+            size="sm"
+            disabled={!canWrite}
+            onClick={() => {
+              show(null);
+              setCreating(true);
+            }}
+          >
+            <PlusIcon />
+            New prompt
+          </Button>
+        </div>
+      </div>
+      {prompts.error !== null ? (
+        <p className="text-sm text-muted-foreground">{prompts.error}</p>
+      ) : prompts.data !== null && rows.length === 0 ? (
+        <Empty>
+          <EmptyHeader>
+            <EmptyTitle>No prompts</EmptyTitle>
+            <EmptyDescription>
+              {!filtered
+                ? "Save a prompt or workflow you reuse. Agents propose them with the prompt_save tool, and a learning item for a prompt arrives here as a proposal."
+                : "Nothing matches the search and state."}
+            </EmptyDescription>
+          </EmptyHeader>
+        </Empty>
+      ) : (
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead>Title</TableHead>
+              <TableHead>Kind</TableHead>
+              <TableHead>State</TableHead>
+              <TableHead>Origin</TableHead>
+              <TableHead>Uses</TableHead>
+              <TableHead>Last used</TableHead>
+              <TableHead>Updated</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {rows.map((row) => (
+              <TableRow key={row.id}>
+                <TableCell>
+                  <InlineButton onClick={() => show(row.id)}>{row.title}</InlineButton>
+                </TableCell>
+                <TableCell>{PROMPT_KIND_LABEL[row.kind]}</TableCell>
+                <TableCell>
+                  <Badge size="sm" variant={PROMPT_STATE_VARIANT[row.state]}>
+                    {PROMPT_STATE_LABEL[row.state]}
+                  </Badge>
+                </TableCell>
+                <TableCell>{PROMPT_ORIGIN_LABEL[row.origin]}</TableCell>
+                <TableCell>{row.useCount}</TableCell>
+                <TableCell>
+                  <When at={row.lastUsedAt} />
+                </TableCell>
+                <TableCell>
+                  <When at={row.updatedAt} />
+                </TableCell>
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
+      )}
+      <PromptDrawer
+        environmentId={environmentId}
+        projectId={projectId}
+        open={creating ? "new" : openId}
+        onOpen={show}
+        onClose={() => show(null)}
+        onChanged={() => {
+          prompts.refresh();
+          // The composer's `/` menu lists the active prompts from a list of its own.
+          refreshPromptLists({ environmentId, projectId });
+        }}
+      />
+    </div>
+  );
+}
