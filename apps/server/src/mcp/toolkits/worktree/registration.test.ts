@@ -5,7 +5,8 @@ import * as ServerConfig from "../../../config.ts";
 import { expect, it } from "@effect/vitest";
 import { NodeHttpServer } from "@effect/platform-node";
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import { ProviderInstanceId, ThreadId } from "@t3tools/contracts";
+import { EnvironmentId, ProviderInstanceId, ThreadId } from "@t3tools/contracts";
+import * as McpProviderSessions from "@t3tools/provider-core/server/McpProviderSessions";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
@@ -33,6 +34,7 @@ import * as PreviewManager from "../../../preview/Manager.ts";
 import * as SourceControlRepositoryService from "../../../sourceControl/SourceControlRepositoryService.ts";
 import * as GitVcsDriver from "../../../vcs/GitVcsDriver.ts";
 import * as McpHttpServer from "../../McpHttpServer.ts";
+import * as McpInvocationContext from "../../McpInvocationContext.ts";
 import * as McpSessionRegistry from "../../McpSessionRegistry.ts";
 import * as PreviewAutomationBroker from "../../PreviewAutomationBroker.ts";
 import * as PreviewBrowser from "../../../preview/PreviewBrowser.ts";
@@ -87,7 +89,27 @@ const decodeToolsListPayload = Schema.decodeUnknownEffect(ToolsListPayload);
 it.effect("production mcp layer lists worktree tools over http", () =>
   Effect.scoped(
     Effect.gen(function* () {
-      const layerRoutes = McpHttpServer.layer.pipe(Layer.provide(McpSessionRegistry.layer));
+      const authToken = "worktree-registration-test";
+      const authorizationHeader = ["Bearer", authToken].join(" ");
+      const scope: McpInvocationContext.McpThreadInvocationScope = {
+        environmentId: EnvironmentId.make("environment-scratch"),
+        requestNamespace: "worktree-registration-test",
+        thread: {
+          threadId: ThreadId.make("thread-scratch"),
+          providerSessionId: "worktree-registration-test",
+          providerInstanceId: ProviderInstanceId.make("claudeAgent"),
+        },
+        client: undefined,
+        capabilities: new Set(["orchestration", "worktree", "pull-requests", "preview"]),
+        issuedAt: 0,
+      };
+      const layerRoutes = McpHttpServer.layer.pipe(
+        Layer.provide(
+          Layer.mock(McpSessionRegistry.McpSessionRegistry)({
+            resolve: (token) => Effect.succeed(token === authToken ? scope : undefined),
+          }),
+        ),
+      );
       yield* HttpRouter.serve(layerRoutes, {
         disableListenLog: true,
         disableLogger: true,
@@ -99,23 +121,16 @@ it.effect("production mcp layer lists worktree tools over http", () =>
         ),
         Layer.provide(PreviewAutomationBroker.layer),
         Layer.provide(PreviewBrowser.layer),
+        Layer.provide(McpProviderSessions.layer),
         Layer.provide(layerStubServices),
         Layer.build,
       );
 
-      const registry = McpSessionRegistry.issueActiveMcpCredential({
-        threadId: ThreadId.make("thread-scratch"),
-        providerInstanceId: ProviderInstanceId.make("claudeAgent"),
-      });
-      const credential = yield* registry;
-      expect(credential).toBeDefined();
-
       const httpClient = yield* HttpClient.HttpClient;
-      const auth = credential!.config.authorizationHeader;
       const initResponse = yield* httpClient.post("/mcp", {
         headers: {
           accept: "application/json, text/event-stream",
-          authorization: auth,
+          authorization: authorizationHeader,
         },
         body: HttpBody.text(
           `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"scratch","version":"1.0.0"}}}`,
@@ -128,7 +143,7 @@ it.effect("production mcp layer lists worktree tools over http", () =>
       const listResponse = yield* httpClient.post("/mcp", {
         headers: {
           accept: "application/json, text/event-stream",
-          authorization: auth,
+          authorization: authorizationHeader,
           "mcp-protocol-version": "2025-06-18",
           ...(sessionId ? { "mcp-session-id": sessionId } : {}),
         },

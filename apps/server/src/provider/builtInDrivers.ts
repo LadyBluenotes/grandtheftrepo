@@ -45,11 +45,12 @@ export type BuiltInUsageReadersEnv =
   | ProviderUsageReaderEnv<typeof ClaudeDriver>
   | ProviderUsageReaderEnv<typeof CodexDriver>
   | ProviderUsageReaderEnv<typeof GrokDriver>
+  | ProviderUsageReaderEnv<typeof CopilotDriver>
   | ProviderUsageReaderEnv<typeof OpenCodeDriver>
   | ProviderUsageReaderEnv<typeof AntigravityDriver>
   | ProviderUsageReaderEnv<typeof CursorDriver>
   | ProviderUsageReaderEnv<typeof PiDriver>
-  | ProviderUsageReaderEnv<typeof CopilotDriver>;
+  | ProviderUsageReaderEnv<typeof MuseDriver>;
 
 /**
  * Aggregation keeps the first copy of a duplicate record, so the order is part
@@ -61,9 +62,10 @@ export const BUILT_IN_USAGE_DRIVERS: ReadonlyArray<
   ClaudeDriver,
   CodexDriver,
   GrokDriver,
-  PiDriver,
   CopilotDriver,
+  PiDriver,
   OpenCodeDriver,
+  MuseDriver,
   AntigravityDriver,
   CursorDriver,
 ];

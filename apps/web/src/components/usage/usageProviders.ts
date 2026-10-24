@@ -19,6 +19,11 @@ export const PROVIDER_PRESENTATION = {
     color: "#d97757",
     driverKind: ProviderDriverKind.make("claudeAgent"),
   },
+  copilot: {
+    label: "GitHub Copilot",
+    color: "#6e40c9",
+    driverKind: ProviderDriverKind.make("copilot"),
+  },
   grok: {
     label: "Grok Build",
     color: "color-mix(in oklab, var(--contrast-foreground) 72%, var(--background))",
@@ -40,10 +45,10 @@ export const PROVIDER_PRESENTATION = {
     color: "#4d9f8a",
     driverKind: ProviderDriverKind.make("pi"),
   },
-  copilot: {
-    label: "Copilot",
-    color: "#2da44e",
-    driverKind: ProviderDriverKind.make("copilot"),
+  muse: {
+    label: "Muse Code",
+    color: "#0866ff",
+    driverKind: ProviderDriverKind.make("muse"),
   },
 } satisfies Record<UsageProviderKind, UsageProviderPresentation>;
 

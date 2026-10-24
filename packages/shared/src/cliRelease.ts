@@ -2,13 +2,6 @@ declare const __T3CODE_BUILD_RELEASE_REPOSITORY__: string | undefined;
 
 const UPSTREAM_RELEASE_REPOSITORY = "pingdotgg/t3code";
 
-/**
- * The GitHub repository releases are listed and downloaded from. A CLI bundle
- * carries the repository that built it (the `define` block in
- * apps/server/vite.config.ts), so `t3 update` on a fork follows that fork's
- * releases. Anything that is not `owner/name`, including no value at all for
- * source checkouts, means upstream.
- */
 export function cliReleaseRepository(built: string | undefined): string {
   const value = built?.trim() ?? "";
   return /^[\w.-]+\/[\w.-]+$/.test(value) ? value : UPSTREAM_RELEASE_REPOSITORY;
@@ -19,6 +12,7 @@ const CLI_RELEASE_REPOSITORY = cliReleaseRepository(
     ? undefined
     : __T3CODE_BUILD_RELEASE_REPOSITORY__,
 );
+export const CLI_RELEASES_PAGE_URL = `https://github.com/${CLI_RELEASE_REPOSITORY}/releases`;
 export const CLI_RELEASE_CHECKSUMS_FILE = "SHA256SUMS";
 export const CLI_RELEASE_BASE_URL_ENV = "T3CODE_RELEASE_BASE_URL";
 

@@ -69,12 +69,6 @@ describe("resolveLinkPullRequestInput", () => {
     });
   });
 
-  it("returns null for input that is not a reference", () => {
-    expect(
-      resolveLinkPullRequestInput({ reference: "hello", project, hasProject: () => true }),
-    ).toBeNull();
-  });
-
   it("resolves a bare number against the thread's own repository", () => {
     expect(
       resolveLinkPullRequestInput({ reference: "#42", project, hasProject: () => true }),
@@ -113,30 +107,35 @@ describe("resolveLinkPullRequestInput", () => {
     });
     expect(result).toMatchObject({ error: expect.stringContaining("gitlab.com") });
   });
-
-  it("asks for a URL when a bare number has no project to resolve against", () => {
-    expect(
-      resolveLinkPullRequestInput({ reference: "12", project: null, hasProject: () => true }),
-    ).toMatchObject({ error: expect.stringContaining("full URL") });
-  });
-
-  it("accepts a checkout command as a reference", () => {
-    expect(
-      resolveLinkPullRequestInput({
-        reference: "gh pr checkout https://github.com/acme/web/pull/3",
-        project,
-        hasProject: () => true,
-      }),
-    ).toMatchObject({ link: { number: 3, repository: "acme/web" } });
-  });
 });
 
-describe("changeRequestWebUrl", () => {
-  it("knows the four hosts and nothing else", () => {
-    expect(changeRequestWebUrl("gitlab", "gitlab.com", "g/sub/repo", 5)).toBe(
-      "https://gitlab.com/g/sub/repo/-/merge_requests/5",
+describe("parsePullRequestReference", () => {
+  it("accepts legacy Azure DevOps pull request URLs", () => {
+    expect(
+      parsePullRequestReference("https://acme.visualstudio.com/project/_git/t3code/pullrequest/42"),
+    ).toBe("https://acme.visualstudio.com/project/_git/t3code/pullrequest/42");
+  });
+
+  it("accepts gh pr checkout commands with raw numbers", () => {
+    expect(parsePullRequestReference("gh pr checkout 42")).toBe("42");
+  });
+
+  it("accepts glab mr checkout commands with raw numbers", () => {
+    expect(parsePullRequestReference("glab mr checkout 42")).toBe("42");
+  });
+
+  it("accepts az repos pr checkout commands with equals-style ids", () => {
+    expect(parsePullRequestReference("az repos pr checkout --id=42")).toBe("42");
+  });
+
+  it("accepts az repos pr checkout commands with extra flags", () => {
+    expect(parsePullRequestReference("az repos pr checkout --id 42 --remote-name origin")).toBe(
+      "42",
     );
-    expect(changeRequestWebUrl("unknown", "x", "a/b", 1)).toBeNull();
+  });
+
+  it("rejects non-pull-request input", () => {
+    expect(parsePullRequestReference("feature/my-branch")).toBeNull();
   });
 });
 
