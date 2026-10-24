@@ -16,6 +16,7 @@ import { useEffect, useRef, useState } from "react";
 import { Platform, Pressable, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
+import { KanbanBoardEntries } from "../kanban/KanbanBoardEntry";
 import { projectEnvironment } from "../../state/projects";
 import { useThreadShells } from "../../state/entities";
 import { appAtomRegistry } from "../../state/atom-registry";
@@ -283,6 +284,8 @@ function ProjectOverviewContent(props: {
           </View>
         </View>
       </SettingsSection>
+
+      <KanbanBoardEntries members={props.members} environments={props.environments} />
 
       <SettingsSection title="Checkouts">
         {props.members.map((member, index) => {

@@ -1,0 +1,399 @@
+import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/models";
+import {
+  LearningFailureKind,
+  ProjectId,
+  ThreadId,
+  type LearningCorrection,
+  type LearningItem,
+  type LearningItemDetail,
+  type LearningPromotion,
+  type PluginStatus,
+} from "@t3tools/contracts";
+import { describe, expect, it } from "vite-plus/test";
+
+import {
+  correctionsWindow,
+  FAILURE_KINDS,
+  failureModeLabel,
+  filterCorrections,
+  followOpenItem,
+  itemRows,
+  learningItemId,
+  NO_PROJECT_CHOICE,
+  pluginActive,
+  promotionChain,
+  threadLabel,
+  threadsByActivity,
+} from "./state";
+
+const projectId = ProjectId.make("project-1");
+
+const item = (patch: Partial<LearningItem>): LearningItem => ({
+  id: 1,
+  projectId,
+  failureMode: "defect",
+  occurrences: 1,
+  state: "open",
+  ownerKind: null,
+  dispositionBy: "rule",
+  dispositionAt: null,
+  reason: "Opened by a rule.",
+  createdAt: "2026-10-01T00:00:00.000Z",
+  updatedAt: "2026-10-01T00:00:00.000Z",
+  ...patch,
+});
+
+const correction = (patch: Partial<LearningCorrection>): LearningCorrection => ({
+  id: 1,
+  projectId,
+  threadId: ThreadId.make("thread-1"),
+  failureKind: "review_verdict",
+  causeClass: "defect",
+  declaredMode: "defect",
+  description: "The redirect loops.",
+  sourceEventIds: [],
+  sourceKey: null,
+  classifiedAt: null,
+  classificationReason: null,
+  createdAt: "2026-10-01T00:00:00.000Z",
+  updatedAt: "2026-10-01T00:00:00.000Z",
+  ...patch,
+});
+
+describe("itemRows", () => {
+  const items = [
+    item({ id: 1, updatedAt: "2026-10-01T00:00:00.000Z" }),
+    item({
+      id: 2,
+      state: "closed",
+      ownerKind: "policy",
+      dispositionBy: "person",
+      dispositionAt: "2026-10-03T00:00:00.000Z",
+      updatedAt: "2026-10-03T00:00:00.000Z",
+    }),
+    item({ id: 3, updatedAt: "2026-10-02T00:00:00.000Z" }),
+  ];
+
+  it("puts the most recently updated first and carries who set the disposition", () => {
+    const rows = itemRows(items, null);
+    expect(rows.map((row) => row.id)).toEqual([2, 3, 1]);
+    expect(rows[0]).toMatchObject({
+      state: "closed",
+      ownerKind: "policy",
+      setBy: "person",
+      setAt: "2026-10-03T00:00:00.000Z",
+    });
+    expect(rows[1]).toMatchObject({ setBy: "rule", setAt: null });
+  });
+
+  it("keeps only the state asked for", () => {
+    expect(itemRows(items, "open").map((row) => row.id)).toEqual([3, 1]);
+    expect(itemRows(items, "closed").map((row) => row.id)).toEqual([2]);
+    expect(itemRows(items, "promoted")).toEqual([]);
+  });
+});
+
+describe("failureModeLabel", () => {
+  it("names a declared mode and spaces any other", () => {
+    expect(failureModeLabel("missing_verification")).toBe("Missing verification");
+    expect(failureModeLabel("efficiency_regression")).toBe("Efficiency regression");
+  });
+});
+
+describe("filterCorrections", () => {
+  const rows = [
+    correction({
+      id: 1,
+      failureKind: "provider_turn_failed",
+      declaredMode: null,
+      createdAt: "2026-10-01T00:00:00.000Z",
+    }),
+    correction({ id: 2, declaredMode: "defect", createdAt: "2026-10-02T00:00:00.000Z" }),
+    correction({ id: 3, declaredMode: "convention", createdAt: "2026-10-03T00:00:00.000Z" }),
+  ];
+  const ids = (filter: Parameters<typeof filterCorrections>[1]) =>
+    filterCorrections(rows, filter).map((row) => row.id);
+
+  it("lists everything newest first without a filter", () => {
+    expect(ids({ kind: null, mode: null })).toEqual([3, 2, 1]);
+  });
+
+  it("narrows by kind, by declared mode, and by having none", () => {
+    expect(ids({ kind: "review_verdict", mode: null })).toEqual([3, 2]);
+    expect(ids({ kind: null, mode: "defect" })).toEqual([2]);
+    expect(ids({ kind: null, mode: "none" })).toEqual([1]);
+    expect(ids({ kind: "review_verdict", mode: "none" })).toEqual([]);
+  });
+});
+
+describe("FAILURE_KINDS", () => {
+  it("offers every kind of correction the server records as a filter", () => {
+    expect([...FAILURE_KINDS].toSorted()).toEqual([...LearningFailureKind.literals].toSorted());
+  });
+});
+
+describe("correctionsWindow", () => {
+  const now = Date.parse("2026-10-13T03:17:45.000Z");
+
+  it("ends at the end of the current hour and holds still until then", () => {
+    expect(correctionsWindow(7, now)).toEqual({
+      from: "2026-10-06T04:00:00.000Z",
+      to: "2026-10-13T04:00:00.000Z",
+    });
+    expect(correctionsWindow(7, now + 40 * 60_000)).toEqual(correctionsWindow(7, now));
+    expect(correctionsWindow(7, now + 60 * 60_000).to).toBe("2026-10-13T05:00:00.000Z");
+  });
+
+  it("reaches back the number of days asked for", () => {
+    expect(correctionsWindow(30, now).from).toBe("2026-09-13T04:00:00.000Z");
+    expect(correctionsWindow(90, now).from).toBe("2026-07-15T04:00:00.000Z");
+  });
+});
+
+describe("pluginActive", () => {
+  const status = (patch: Partial<PluginStatus>): PluginStatus => ({
+    id: "review",
+    dependsOn: ["learning"],
+    enabled: true,
+    active: true,
+    missing: [],
+    startError: null,
+    ...patch,
+  });
+
+  it("is true only for a plugin that runs now", () => {
+    expect(pluginActive(null, "review")).toBe(false);
+    expect(pluginActive([status({ active: false })], "review")).toBe(false);
+    expect(pluginActive([status({})], "review")).toBe(true);
+    expect(pluginActive([status({})], "learning")).toBe(false);
+  });
+});
+
+describe("threadsByActivity", () => {
+  const thread = (id: string, title: string, latestUserMessageAt: string | null) =>
+    ({ id: ThreadId.make(id), title, latestUserMessageAt }) as EnvironmentThreadShell;
+
+  it("puts the threads written to most recently first, then the untouched ones by title", () => {
+    const sorted = threadsByActivity([
+      thread("a", "Zeta", null),
+      thread("b", "Alpha", "2026-10-01T00:00:00.000Z"),
+      thread("c", "Beta", null),
+      thread("d", "Gamma", "2026-10-02T00:00:00.000Z"),
+    ]);
+    expect(sorted.map((candidate) => candidate.id)).toEqual(["d", "b", "c", "a"]);
+  });
+
+  it("labels a thread without a title", () => {
+    expect(threadLabel({ title: "  " })).toBe("Untitled thread");
+    expect(threadLabel({ title: "Fix login" })).toBe("Fix login");
+  });
+});
+
+describe("learningItemId", () => {
+  it("reads a link's record as an item id, and nothing else as one", () => {
+    expect(learningItemId("12")).toBe(12);
+    for (const recordId of [undefined, "", "0", "-3", "1.5", "12abc", "9007199254740993"]) {
+      expect(learningItemId(recordId)).toBeNull();
+    }
+  });
+});
+
+describe("followOpenItem", () => {
+  // Each step is the open item's project as the screen sees it: undefined while none is open or
+  // it is loading, or a person's pick.
+  type Step = { readonly item: string | undefined } | { readonly pick: string };
+  const projectAfter = (steps: ReadonlyArray<Step>, start = NO_PROJECT_CHOICE) => {
+    let choice = start;
+    for (const step of steps) {
+      choice =
+        "pick" in step ? { ...choice, projectId: step.pick } : followOpenItem(choice, step.item);
+    }
+    return choice.projectId;
+  };
+
+  it("selects the project of the item a link opens, and keeps it once the item closes", () => {
+    expect(projectAfter([{ item: undefined }, { item: "b" }, { item: undefined }])).toBe("b");
+  });
+
+  it("selects the item's project again when history reopens it after another pick", () => {
+    expect(
+      projectAfter([
+        { item: "a" },
+        { item: undefined },
+        { pick: "b" },
+        // Back to the item's URL: loading, then loaded.
+        { item: undefined },
+        { item: "a" },
+      ]),
+    ).toBe("a");
+  });
+
+  it("keeps a pick made while the item is still open, as the item closes", () => {
+    expect(projectAfter([{ item: "a" }, { pick: "b" }, { item: "a" }, { item: undefined }])).toBe(
+      "b",
+    );
+  });
+
+  it("leaves the environment's first project with no item and no pick", () => {
+    expect(projectAfter([{ item: undefined }])).toBeNull();
+  });
+
+  it("starts on the URL's project, and an item the URL opens selects its own over it", () => {
+    const fromLink = { ...NO_PROJECT_CHOICE, projectId: "board" };
+    expect(projectAfter([{ item: undefined }], fromLink)).toBe("board");
+    expect(projectAfter([{ item: undefined }, { item: "a" }], fromLink)).toBe("a");
+  });
+});
+
+describe("promotionChain", () => {
+  const promotion = (patch: Partial<LearningPromotion>): LearningPromotion => ({
+    id: 1,
+    itemId: 1,
+    projectId,
+    failureMode: "scope_drift",
+    ownerKind: "policy",
+    state: "proposed",
+    proposedBy: "supervisor",
+    attempts: 0,
+    nextAttemptAt: null,
+    lastError: null,
+    deliveredAt: null,
+    adoptedAt: null,
+    rolledBackAt: null,
+    rolledBackBy: null,
+    createdAt: "2026-10-01T00:00:00.000Z",
+    updatedAt: "2026-10-01T00:00:00.000Z",
+    ...patch,
+  });
+  const detail = (patch: Partial<LearningItemDetail>): LearningItemDetail => ({
+    item: item({ failureMode: "scope_drift", ownerKind: "policy", state: "candidate" }),
+    evidence: [],
+    promotions: [],
+    reviews: [],
+    outcomes: [],
+    ...patch,
+  });
+  /** Each step as `label:state`. */
+  const steps = (input: LearningItemDetail) =>
+    promotionChain(input).steps.map((step) => `${step.label}:${step.state}`);
+  const delivered = { deliveredAt: "2026-10-02T00:00:00.000Z" };
+  const adopted = { ...delivered, adoptedAt: "2026-10-03T00:00:00.000Z" };
+
+  it("is on the corrections until a handover is proposed", () => {
+    expect(steps(detail({}))).toEqual([
+      "Corrections:current",
+      "Proposed:upcoming",
+      "In review:upcoming",
+      "Adopted:upcoming",
+      "Outcome:upcoming",
+    ]);
+  });
+
+  it("marks the review as current, with the latest revision asked", () => {
+    const chain = promotionChain(
+      detail({
+        promotions: [promotion({ state: "in_review", ...delivered })],
+        reviews: [
+          {
+            id: 1,
+            promotionId: 1,
+            verdict: "revise",
+            reviewer: "thread:reviewer",
+            note: "Narrow it.",
+            createdAt: "2026-10-02T06:00:00.000Z",
+          },
+        ],
+      }),
+    );
+    expect(chain.steps.map((step) => step.state)).toEqual([
+      "done",
+      "done",
+      "current",
+      "upcoming",
+      "upcoming",
+    ]);
+    expect(chain.steps[1]).toMatchObject({ by: "supervisor", at: "2026-10-01T00:00:00.000Z" });
+    expect(chain.steps[2]?.detail).toBe("Revision asked by an agent: Narrow it.");
+  });
+
+  it("watches the outcome once adopted, and shows the verdict once judged", () => {
+    const review = {
+      id: 1,
+      promotionId: 1,
+      verdict: "adopt" as const,
+      reviewer: "user",
+      note: null,
+      createdAt: adopted.adoptedAt,
+    };
+    const watching = detail({
+      promotions: [promotion({ state: "adopted", ...adopted })],
+      reviews: [review],
+    });
+    expect(steps(watching)).toEqual([
+      "Corrections:done",
+      "Proposed:done",
+      "In review:done",
+      "Adopted:done",
+      "Outcome:current",
+    ]);
+    expect(promotionChain(watching).steps[3]).toMatchObject({
+      by: "user",
+      at: adopted.adoptedAt,
+    });
+    expect(promotionChain(watching).steps[4]?.detail).toBe("Judged four weeks after adoption.");
+    const judged = promotionChain({
+      ...watching,
+      outcomes: [{ promotionId: 1, verdict: "settled", judgedAt: "2026-10-31T00:00:00.000Z" }],
+    });
+    expect(judged.steps[4]).toMatchObject({
+      state: "current",
+      detail: "Settled: the mode did not recur.",
+    });
+  });
+
+  it("ends on a rejection, and puts a rollback in the outcome's place", () => {
+    expect(
+      steps(
+        detail({
+          item: item({ ownerKind: "policy", state: "open" }),
+          promotions: [promotion({ state: "rejected", ...delivered })],
+        }),
+      ),
+    ).toEqual(["Corrections:done", "Proposed:done", "In review:done", "Rejected:current"]);
+    expect(
+      steps(
+        detail({
+          promotions: [
+            promotion({
+              state: "rolled_back",
+              ...adopted,
+              rolledBackAt: "2026-10-05T00:00:00.000Z",
+              rolledBackBy: "user",
+            }),
+          ],
+        }),
+      ),
+    ).toEqual([
+      "Corrections:done",
+      "Proposed:done",
+      "In review:done",
+      "Adopted:done",
+      "Rolled back:current",
+    ]);
+  });
+
+  it("follows the handover for the item's owner kind, else its latest", () => {
+    const promotions = [
+      promotion({ id: 1, ownerKind: "project_knowledge", state: "adopted", ...adopted }),
+      promotion({ id: 2, ownerKind: "policy", state: "proposed" }),
+    ];
+    expect(promotionChain(detail({ promotions })).promotion?.id).toBe(2);
+    expect(
+      promotionChain(detail({ item: item({ ownerKind: "local_only" }), promotions })).promotion?.id,
+    ).toBe(2);
+    expect(
+      promotionChain(detail({ item: item({ ownerKind: "project_knowledge" }), promotions }))
+        .promotion?.id,
+    ).toBe(1);
+  });
+});

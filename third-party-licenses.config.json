@@ -729,6 +729,36 @@
         "licenseId": "MIT",
         "copyrights": ["Copyright (c) 2019-present Fabio Spampinato, Andrew Maney"]
       }
+    },
+    {
+      "bundles": ["server"],
+      "license": "Apache-2.0",
+      "name": "Caveman reply rules",
+      "sourceUrl": "https://github.com/JuliusBrussee/caveman",
+      "generatedNotices": [
+        {
+          "licenseId": "Apache-2.0",
+          "copyrights": ["Copyright 2026 Julius Brussee"],
+          "preamble": [
+            "The default body of the built-in caveman policy (apps/server/src/plugins/policy/caveman.ts) is adapted from the Caveman skill, skills/caveman/SKILL.md:\nhttps://github.com/JuliusBrussee/caveman\n\nChanges: the reply rules are rewritten and condensed into one block for an agent's instruction file. The skill's activation, persistence and intensity modes are left out, and no Caveman code is included."
+          ]
+        }
+      ]
+    },
+    {
+      "bundles": ["server"],
+      "license": "MIT",
+      "name": "Ponytail ladder",
+      "sourceUrl": "https://github.com/DietrichGebert/ponytail",
+      "generatedNotices": [
+        {
+          "licenseId": "MIT",
+          "copyrights": ["Copyright (c) 2026 DietrichGebert"],
+          "preamble": [
+            "The default body of the built-in ponytail policy (apps/server/src/plugins/policy/ponytail.ts) is adapted from the ponytail skill, the numbered \"smallest complete change\" list in skills/ponytail/SKILL.md:\nhttps://github.com/DietrichGebert/ponytail\n\nChanges: the six questions are reworded and condensed into one block for an agent's instruction file, and each gets a short id. The skill's activation, levels and other rules are left out, and no ponytail code is included."
+          ]
+        }
+      ]
     }
   ]
 }

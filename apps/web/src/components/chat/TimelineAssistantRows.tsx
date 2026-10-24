@@ -22,6 +22,7 @@ import { formatChatTimestampTooltip, formatDayAwareTimestamp } from "../../times
 import { useV2ItemSupport } from "../../state/v2ItemSupport";
 import { TimelineRowCtx, TimelineRowActivityCtx, type TimelineRow } from "./timelineRowContext";
 import { MESSAGE_HEADING_LEVEL, MessageAuthorHeading } from "./TimelineRowParts";
+import { RecordedThisTurnCard } from "~/plugins/recorded/RecordedThisTurnCard";
 
 export function AssistantTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" }> }) {
   const ctx = use(TimelineRowCtx);
@@ -58,6 +59,12 @@ export function AssistantTimelineRow({ row }: { row: Extract<TimelineRow, { kind
           routeThreadKey={ctx.routeThreadKey}
           resolvedTheme={ctx.resolvedTheme}
           onOpenTurnDiff={ctx.onOpenTurnDiff}
+        />
+        <RecordedThisTurnCard
+          records={row.capturedRecords}
+          runId={row.message.runId ?? null}
+          threadRef={ctx.threadRef}
+          routeThreadKey={ctx.routeThreadKey}
         />
         {row.showAssistantMeta ? (
           <AssistantMessageMeta

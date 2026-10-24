@@ -493,6 +493,15 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
         undefined,
         undefined,
       );
+      const signedRelease = yield* createBuildConfig(
+        "mac",
+        "dmg",
+        "0.0.33",
+        true,
+        false,
+        undefined,
+        undefined,
+      );
 
       const previewChannel = yield* createBuildConfig(
         "mac",
@@ -506,7 +515,11 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
 
       assert.isNull(preview.publish);
       assert.isNull(previewChannel.publish);
-      assert.deepStrictEqual(release.publish, [
+      assert.isNull(release.publish);
+      const macConfig = release.mac as Record<string, unknown>;
+      assert.strictEqual(macConfig.identity, "-");
+      assert.strictEqual(macConfig.hardenedRuntime, false);
+      assert.deepStrictEqual(signedRelease.publish, [
         {
           provider: "github",
           owner: "pingdotgg",

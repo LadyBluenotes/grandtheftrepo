@@ -442,6 +442,14 @@
     "./model-traits": {
       "types": "./src/modelTraits.ts",
       "default": "./src/modelTraits.ts"
+    },
+    "./plugins/rpc": {
+      "types": "./src/plugins/rpc.ts",
+      "default": "./src/plugins/rpc.ts"
+    },
+    "./plugins/kanban": {
+      "types": "./src/plugins/kanban.ts",
+      "default": "./src/plugins/kanban.ts"
     }
   },
   "scripts": {

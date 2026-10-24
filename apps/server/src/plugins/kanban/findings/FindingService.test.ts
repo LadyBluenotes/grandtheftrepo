@@ -1,0 +1,432 @@
+import * as NodeServices from "@effect/platform-node/NodeServices";
+import { assert, describe, it } from "@effect/vitest";
+import { ProjectId, ThreadId, type KanbanError, type Project } from "@t3tools/contracts";
+import * as Context from "effect/Context";
+import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
+import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
+import * as Path from "effect/Path";
+import * as PlatformError from "effect/PlatformError";
+import * as TestClock from "effect/testing/TestClock";
+
+import * as ServerConfig from "../../../config.ts";
+import * as ProjectService from "../../../project/ProjectService.ts";
+import * as KanbanStore from "../KanbanStore.ts";
+import * as FindingService from "./FindingService.ts";
+
+const projectId = ProjectId.make("project-1");
+const project: Project = {
+  id: projectId,
+  title: "Grand Theft Repo",
+  workspaceRoot: "/unused",
+  defaultModelSelection: null,
+  scripts: [],
+  createdAt: "2026-10-01T00:00:00.000Z",
+  updatedAt: "2026-10-01T00:00:00.000Z",
+  deletedAt: null,
+};
+const finder = ThreadId.make("thr_finder");
+const other = ThreadId.make("thr_other");
+
+/** Issue file names whose writes fail while they are in the set, to stop a change halfway. */
+class FailingWrites extends Context.Service<FailingWrites, Set<string>>()(
+  "t3/plugins/kanban/findings/FindingService.test/FailingWrites",
+) {}
+
+const layerFailingWrites = Layer.unwrap(
+  Effect.sync(() => {
+    const failing = new Set<string>();
+    return Layer.merge(
+      Layer.succeed(FailingWrites, failing),
+      Layer.effect(
+        FileSystem.FileSystem,
+        Effect.map(FileSystem.FileSystem, (real) =>
+          FileSystem.FileSystem.of({
+            ...real,
+            rename: (from, to) =>
+              [...failing].some((name) => to.endsWith(`/${name}`))
+                ? Effect.fail(
+                    PlatformError.systemError({
+                      _tag: "Unknown",
+                      module: "FileSystem",
+                      method: "rename",
+                      description: "EIO: i/o error",
+                    }),
+                  )
+                : real.rename(from, to),
+          }),
+        ),
+      ),
+    );
+  }),
+);
+
+/** A fresh board folder per test. */
+const layerTest = FindingService.layer.pipe(
+  Layer.provideMerge(KanbanStore.layer),
+  Layer.provideMerge(layerFailingWrites),
+  Layer.provideMerge(
+    Layer.mock(ProjectService.ProjectService)({
+      getById: (id) => Effect.succeed(id === projectId ? Option.some(project) : Option.none()),
+    }),
+  ),
+  Layer.provideMerge(
+    Layer.fresh(ServerConfig.layerTest(process.cwd(), { prefix: "t3code-findings-test-" })),
+  ),
+  Layer.provideMerge(NodeServices.layer),
+);
+
+const failure = <A, R>(effect: Effect.Effect<A, KanbanError, R>) =>
+  effect.pipe(
+    Effect.map(() => "ok"),
+    Effect.catch((error) => Effect.succeed(`${error.code}: ${error.message}`)),
+  );
+
+const capture = (searchId: string, fields: { title?: string; issueId?: string } = {}) =>
+  Effect.flatMap(FindingService.FindingService, (findings) =>
+    findings.capture({
+      projectId,
+      threadId: finder,
+      searchId,
+      title: fields.title ?? "Retry loop has no backoff",
+      evidence: "apps/server/src/retry.ts:12 retries in a tight loop.",
+      truthStatus: "reproduced",
+      scopeRelation: "pre_existing",
+      issueId: fields.issueId,
+    }),
+  );
+
+const search = (threadId: ThreadId, query = "retry backoff") =>
+  Effect.flatMap(FindingService.FindingService, (findings) =>
+    findings.search({ projectId, threadId, query }),
+  );
+
+describe("FindingService", () => {
+  it.effect("refuses a capture without a recent search from the same thread", () =>
+    Effect.gen(function* () {
+      assert.include(yield* failure(capture("s99")), "invalid: Search first");
+
+      const theirs = yield* search(other);
+      assert.include(yield* failure(capture(theirs.searchId)), "invalid: Search first");
+
+      const stale = yield* search(finder);
+      yield* TestClock.adjust(`${FindingService.SEARCH_WINDOW_MINUTES + 1} minutes`);
+      assert.include(yield* failure(capture(stale.searchId)), "invalid: Search first");
+
+      // A failed capture leaves the search usable; a capture that lands uses it up.
+      const fresh = yield* search(finder);
+      assert.strictEqual(
+        yield* failure(capture(fresh.searchId, { issueId: "nope" })),
+        'not_found: No issue "nope".',
+      );
+      const landed = yield* capture(fresh.searchId);
+      assert.include(yield* failure(capture(fresh.searchId)), "invalid: Search first");
+
+      // A write that failed may have landed, so it uses the search up too.
+      const failing = yield* FailingWrites;
+      const once = yield* search(finder);
+      failing.add(`${landed.issueId}-2.md`);
+      assert.include(yield* failure(capture(once.searchId)), "io:");
+      failing.clear();
+      assert.include(yield* failure(capture(once.searchId)), "invalid: Search first");
+    }).pipe(Effect.provide(layerTest)),
+  );
+
+  it.effect("attaches to the issue named, or opens one Triage issue labeled finding", () =>
+    Effect.gen(function* () {
+      const store = yield* KanbanStore.KanbanStore;
+      const { id: issueId } = yield* store.write(projectId, "user", {
+        action: "issue.create",
+        title: "Harden the retry helper",
+      });
+
+      const attached = yield* capture((yield* search(finder)).searchId, { issueId });
+      assert.strictEqual(attached.issueId, issueId);
+      assert.strictEqual((yield* store.board(projectId)).issues.length, 1);
+      const holder = yield* store.getIssue({ projectId, id: issueId });
+      assert.deepStrictEqual(holder.findings, [attached.finding]);
+      assert.include(attached.finding, {
+        id: "retry-loop-has-no-backoff",
+        disposition: "open",
+        proposedBy: `thread:${finder}`,
+        threadId: finder,
+        review: null,
+      });
+      assert.deepStrictEqual(
+        [holder.log.at(-1)?.kind, holder.log.at(-1)?.text.startsWith("finding ")],
+        ["note", true],
+      );
+
+      const opened = yield* capture((yield* search(finder)).searchId);
+      const board = yield* store.board(projectId);
+      assert.strictEqual(board.issues.length, 2);
+      // The same title gets its own finding id, and its own card.
+      assert.strictEqual(opened.finding.id, "retry-loop-has-no-backoff-2");
+      const card = yield* store.getIssue({ projectId, id: opened.issueId });
+      assert.include(card, {
+        title: "Retry loop has no backoff",
+        status: "triage",
+        verification: "verified",
+        description: "apps/server/src/retry.ts:12 retries in a tight loop.",
+      });
+      assert.deepStrictEqual(card.labels, ["finding"]);
+      assert.deepStrictEqual(card.findings, [opened.finding]);
+
+      // The finding is in the issue file, the only copy.
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const file = yield* fs.readFileString(
+        path.join(board.directory, "issues", `${opened.issueId}.md`),
+      );
+      assert.include(file, "id: retry-loop-has-no-backoff-2");
+    }).pipe(Effect.provide(layerTest)),
+  );
+
+  it.effect("finds findings and issues by the words of the query, best first", () =>
+    Effect.gen(function* () {
+      const store = yield* KanbanStore.KanbanStore;
+      yield* store.write(projectId, "user", { action: "issue.create", title: "Retry flakes" });
+      yield* store.write(projectId, "user", { action: "issue.create", title: "Unrelated" });
+      const captured = yield* capture((yield* search(finder)).searchId);
+
+      // A word matches the words it starts, so "back" finds "backoff".
+      const found = yield* search(other, "retry back");
+      assert.deepStrictEqual(
+        found.findings.map(({ finding }) => finding.id),
+        [captured.finding.id],
+      );
+      // The finding's own card matches both words, the other card only one.
+      assert.deepStrictEqual(
+        found.issues.map((issue) => issue.id),
+        [captured.issueId, "retry-flakes"],
+      );
+      const none = yield* search(other, "unknown words");
+      assert.deepStrictEqual([none.findings, none.issues], [[], []]);
+
+      // Words in any script count, whatever their case.
+      yield* store.write(projectId, "user", {
+        action: "issue.create",
+        title: "Повтор без задержки",
+      });
+      yield* store.write(projectId, "user", { action: "issue.create", title: "重试 没有 退避" });
+      const titles = (query: string) =>
+        Effect.map(search(other, query), (result) => result.issues.map((issue) => issue.title));
+      assert.deepStrictEqual(yield* titles("ЗАДЕРЖКИ"), ["Повтор без задержки"]);
+      assert.deepStrictEqual(yield* titles("退避"), ["重试 没有 退避"]);
+    }).pipe(Effect.provide(layerTest)),
+  );
+
+  it.effect("refuses the proposer's review; a rejected finding can be reopened", () =>
+    Effect.gen(function* () {
+      const findings = yield* FindingService.FindingService;
+      const store = yield* KanbanStore.KanbanStore;
+      const { finding, issueId } = yield* capture((yield* search(finder)).searchId);
+      const review = (by: string, disposition: "rejected" | "open") =>
+        findings.review({ projectId, id: finding.id, disposition, reason: `${by} says so` }, by);
+
+      assert.include(yield* failure(review(`thread:${finder}`, "rejected")), "gated:");
+      // Open is no decision on an open finding, and must not give it an owner.
+      assert.include(
+        yield* failure(review("user", "open")),
+        `invalid: Finding "${finding.id}" is already open`,
+      );
+      assert.isNull((yield* store.getIssue({ projectId, id: issueId })).findings[0]?.review);
+      const rejected = yield* review("user", "rejected");
+      assert.strictEqual(rejected.finding.disposition, "rejected");
+      assert.deepStrictEqual(rejected.finding.review, {
+        by: "user",
+        at: "1970-01-01T00:00:00.000Z",
+        reason: "user says so",
+      });
+
+      const reopened = yield* review(`thread:${other}`, "open");
+      assert.strictEqual(reopened.finding.disposition, "open");
+      assert.strictEqual(reopened.finding.review?.by, `thread:${other}`);
+      const issue = yield* store.getIssue({ projectId, id: issueId });
+      assert.deepStrictEqual(issue.findings, [reopened.finding]);
+      assert.deepStrictEqual(
+        issue.log
+          .filter((entry) => entry.kind === "note" && entry.text.startsWith("finding "))
+          .map((entry) => entry.text),
+        [
+          `finding ${finding.id} added: ${finding.title}`,
+          `finding ${finding.id} rejected: user says so`,
+          `finding ${finding.id} open: thread:${other} says so`,
+        ],
+      );
+    }).pipe(Effect.provide(layerTest)),
+  );
+
+  it.effect("a move tried again after its second write failed leaves one copy, reviewed", () =>
+    Effect.gen(function* () {
+      const findings = yield* FindingService.FindingService;
+      const store = yield* KanbanStore.KanbanStore;
+      const failing = yield* FailingWrites;
+      // Created first, so the destination comes before the source when the store looks.
+      const { id: right } = yield* store.write(projectId, "user", {
+        action: "issue.create",
+        title: "Right ticket",
+      });
+      const { id: wrong } = yield* store.write(projectId, "user", {
+        action: "issue.create",
+        title: "Wrong ticket",
+      });
+      const { finding } = yield* capture((yield* search(finder)).searchId, { issueId: wrong });
+
+      failing.add(`${wrong}.md`);
+      assert.include(
+        yield* failure(findings.move({ projectId, id: finding.id, issueId: right }, "user")),
+        "io:",
+      );
+      failing.clear();
+      const holders = Effect.map(store.board(projectId), (board) =>
+        board.issues.map((issue) => issue.id),
+      ).pipe(
+        Effect.flatMap((ids) => Effect.forEach(ids, (id) => store.getIssue({ projectId, id }))),
+        Effect.map((issues) =>
+          issues.filter((issue) => issue.findings.length > 0).map((issue) => issue.id),
+        ),
+      );
+      assert.deepStrictEqual(yield* holders, [right, wrong]);
+
+      // A review meanwhile reaches both copies, so the one kept has it.
+      const reviewed = yield* findings.review(
+        { projectId, id: finding.id, disposition: "ticketed", reason: "Filed upstream." },
+        "user",
+      );
+      const retried = yield* findings.move({ projectId, id: finding.id, issueId: right }, "user");
+      assert.deepStrictEqual(retried, { projectId, issueId: right, finding: reviewed.finding });
+      assert.deepStrictEqual(yield* holders, [right]);
+      assert.deepStrictEqual((yield* store.getIssue({ projectId, id: right })).findings, [
+        reviewed.finding,
+      ]);
+      assert.include(
+        yield* failure(findings.move({ projectId, id: finding.id, issueId: right }, "user")),
+        "invalid: Finding",
+      );
+    }).pipe(Effect.provide(layerTest)),
+  );
+
+  it.effect("a move tried again gives the destination the latest review before the rest go", () =>
+    Effect.gen(function* () {
+      const findings = yield* FindingService.FindingService;
+      const store = yield* KanbanStore.KanbanStore;
+      const failing = yield* FailingWrites;
+      // Created first, so a review writes the source's copy before the destination's.
+      const { id: wrong } = yield* store.write(projectId, "user", {
+        action: "issue.create",
+        title: "Wrong ticket",
+      });
+      const { id: right } = yield* store.write(projectId, "user", {
+        action: "issue.create",
+        title: "Right ticket",
+      });
+      const { finding } = yield* capture((yield* search(finder)).searchId, { issueId: wrong });
+      const moveRight = findings.move({ projectId, id: finding.id, issueId: right }, "user");
+
+      // The move adds it to the destination, then fails to take it off the source.
+      failing.add(`${wrong}.md`);
+      assert.include(yield* failure(moveRight), "io:");
+      // A review updates the source's copy, then fails on the destination's.
+      failing.clear();
+      failing.add(`${right}.md`);
+      assert.include(
+        yield* failure(
+          findings.review(
+            { projectId, id: finding.id, disposition: "ticketed", reason: "Filed upstream." },
+            "user",
+          ),
+        ),
+        "io:",
+      );
+      failing.clear();
+      assert.isNull((yield* store.getIssue({ projectId, id: right })).findings[0]?.review);
+
+      const retried = yield* moveRight;
+      assert.strictEqual(retried.finding.disposition, "ticketed");
+      assert.deepStrictEqual((yield* store.getIssue({ projectId, id: right })).findings, [
+        retried.finding,
+      ]);
+      assert.deepStrictEqual((yield* store.getIssue({ projectId, id: wrong })).findings, []);
+    }).pipe(Effect.provide(layerTest)),
+  );
+
+  it.effect("a move to a card of its own tried again reuses the card the first one opened", () =>
+    Effect.gen(function* () {
+      const findings = yield* FindingService.FindingService;
+      const store = yield* KanbanStore.KanbanStore;
+      const failing = yield* FailingWrites;
+      const { id: wrong } = yield* store.write(projectId, "user", {
+        action: "issue.create",
+        title: "Wrong ticket",
+      });
+      const { finding } = yield* capture((yield* search(finder)).searchId, { issueId: wrong });
+
+      failing.add(`${wrong}.md`);
+      assert.include(yield* failure(findings.move({ projectId, id: finding.id }, "user")), "io:");
+      failing.clear();
+      const cards = Effect.map(store.board(projectId), (board) =>
+        board.issues.map((issue) => issue.id),
+      );
+      const [, opened] = yield* cards;
+
+      const retried = yield* findings.move({ projectId, id: finding.id }, "user");
+      assert.strictEqual(retried.issueId, opened);
+      assert.deepStrictEqual(yield* cards, [wrong, opened]);
+      assert.deepStrictEqual((yield* store.getIssue({ projectId, id: wrong })).findings, []);
+      assert.deepStrictEqual((yield* store.getIssue({ projectId, id: opened! })).findings, [
+        finding,
+      ]);
+      assert.include(
+        yield* failure(findings.move({ projectId, id: finding.id }, "user")),
+        `invalid: Finding "${finding.id}" already has a card of its own, ${opened}.`,
+      );
+    }).pipe(Effect.provide(layerTest)),
+  );
+
+  it.effect("moves a finding to the right issue, or to a new Triage issue, as it was", () =>
+    Effect.gen(function* () {
+      const findings = yield* FindingService.FindingService;
+      const store = yield* KanbanStore.KanbanStore;
+      const { id: wrong } = yield* store.write(projectId, "user", {
+        action: "issue.create",
+        title: "Wrong ticket",
+      });
+      const { id: right } = yield* store.write(projectId, "user", {
+        action: "issue.create",
+        title: "Right ticket",
+      });
+      const { finding } = yield* capture((yield* search(finder)).searchId, { issueId: wrong });
+
+      const moved = yield* findings.move({ projectId, id: finding.id, issueId: right }, "user");
+      assert.deepStrictEqual(moved, { projectId, issueId: right, finding });
+      assert.deepStrictEqual((yield* store.getIssue({ projectId, id: wrong })).findings, []);
+      assert.deepStrictEqual((yield* store.getIssue({ projectId, id: right })).findings, [finding]);
+      assert.strictEqual(
+        (yield* store.getIssue({ projectId, id: wrong })).log.at(-1)?.text,
+        `finding ${finding.id} moved to ${right}`,
+      );
+      assert.include(
+        yield* failure(findings.move({ projectId, id: finding.id, issueId: right }, "user")),
+        "invalid:",
+      );
+      assert.include(
+        yield* failure(findings.move({ projectId, id: finding.id, issueId: "nope" }, "user")),
+        "not_found:",
+      );
+
+      const detached = yield* findings.move({ projectId, id: finding.id }, `thread:${finder}`);
+      const card = yield* store.getIssue({ projectId, id: detached.issueId });
+      assert.strictEqual(card.status, "triage");
+      assert.deepStrictEqual(card.labels, ["finding"]);
+      assert.deepStrictEqual(card.findings, [finding]);
+      assert.include(
+        yield* failure(
+          findings.review({ projectId, id: "nope", disposition: "open", reason: "x" }, "user"),
+        ),
+        "not_found:",
+      );
+    }).pipe(Effect.provide(layerTest)),
+  );
+});

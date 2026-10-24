@@ -36,6 +36,7 @@ describe("buildPeriodColumns", () => {
     expect(first?.bands).toEqual([
       { provider: "codex", value: 10 },
       { provider: "claude", value: 20 },
+      { provider: "copilot", value: 0 },
       { provider: "grok", value: 0 },
       { provider: "cursor", value: 0 },
       { provider: "opencode", value: 0 },

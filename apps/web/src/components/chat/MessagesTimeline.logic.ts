@@ -69,6 +69,8 @@ import {
   formatSearchToolLabel,
 } from "@t3tools/shared/toolActivity";
 import { isWindowsAbsolutePath } from "@t3tools/shared/path";
+import type { CapturedRecord } from "@t3tools/contracts";
+import { capturedRecordsByRun } from "../../plugins/recorded/logic";
 
 function timelineEntryRunId(entry: TimelineEntry): RunId | null {
   if (entry.kind === "message") {
@@ -600,6 +602,7 @@ type MessagesTimelineRowContent =
       assistantCopyStreaming: boolean;
       assistantTurnDiffSummary?: TurnDiffSummary | undefined;
       revertTurnCount?: number | undefined;
+      capturedRecords?: ReadonlyArray<CapturedRecord> | undefined;
     }
   | {
       kind: "assistant-meta";
@@ -1422,6 +1425,7 @@ export function deriveMessagesTimelineRows(input: {
   worktreeSetup?: WorktreeSetupSnapshot | null;
 }): MessagesTimelineRow[] {
   const timelineEntries = timelineRowEntries(input.timelineEntries);
+  const capturedRecordsByRunId = capturedRecordsByRun(timelineEntries);
   const turnDiffSummaryByAssistantMessageId = new Map<MessageId, TurnDiffSummary>();
   for (const summary of input.turnDiffSummaries) {
     if (summary.assistantMessageId) {
@@ -1914,6 +1918,10 @@ export function deriveMessagesTimelineRows(input: {
         timelineEntry.message.role === "user"
           ? revertTurnCountByUserMessageId.get(timelineEntry.message.id)
           : undefined,
+      capturedRecords:
+        showAssistantMeta && timelineEntry.message.runId
+          ? capturedRecordsByRunId.get(timelineEntry.message.runId)
+          : undefined,
     });
   }
 
@@ -2344,7 +2352,8 @@ function isRowUnchanged(a: MessagesTimelineRow, b: MessagesTimelineRow): boolean
         a.showAssistantCopyButton === bm.showAssistantCopyButton &&
         a.assistantCopyStreaming === bm.assistantCopyStreaming &&
         a.assistantTurnDiffSummary === bm.assistantTurnDiffSummary &&
-        a.revertTurnCount === bm.revertTurnCount
+        a.revertTurnCount === bm.revertTurnCount &&
+        Equal.equals(a.capturedRecords, bm.capturedRecords)
       );
     }
   }

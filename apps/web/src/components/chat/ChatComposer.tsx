@@ -233,6 +233,11 @@ import { pendingDraftWork } from "./pendingDraftWork";
 import { importComposerThreadAttachment } from "./composerThreadImport";
 import { isTimelineScrollTarget } from "./timelineScrollTarget";
 import {
+  countSavedPromptUses,
+  pickSavedPrompt,
+  useSavedPromptMenuItems,
+} from "~/plugins/learning/composerPrompts";
+import {
   createComposerScrollGestureState,
   recordComposerScrollGestureEvent,
   shouldCollapseComposerForScrollKey,
@@ -1196,7 +1201,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     composerPreviewAnnotations.length === 0 &&
     composerReviewComments.length === 0;
   const {
-    items: composerMenuItems,
+    items: builtInComposerMenuItems,
     isLoading: isComposerMenuLoading,
     emptyState: composerMenuEmptyState,
   } = useComposerMenuItems({
@@ -1213,6 +1218,11 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     selectedProviderSkills,
     selectedProviderSlashCommands,
     showSkillsInSlashMenu: settings.showSkillsInSlashMenu,
+  });
+  const composerMenuItems = useSavedPromptMenuItems(builtInComposerMenuItems, {
+    environmentId,
+    projectId: activeProjectId,
+    trigger: composerTrigger,
   });
 
   const composerMenuOpen = Boolean(composerTrigger);
@@ -2008,6 +2018,29 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       }
       return;
     }
+    if (item.type === "saved-prompt") {
+      const pickKey = attachmentTargetKey;
+      void pickSavedPrompt(item, pickKey, (body) => {
+        if (attachmentTargetKeyRef.current !== pickKey) return false;
+        const replacement = `${body} `;
+        const replacementRangeEnd = extendReplacementRangeForTrailingSpace(
+          snapshot.value,
+          trigger.rangeEnd,
+          replacement,
+        );
+        const applied = applyPromptReplacement(
+          trigger.rangeStart,
+          replacementRangeEnd,
+          replacement,
+          {
+            expectedText: snapshot.value.slice(trigger.rangeStart, replacementRangeEnd),
+          },
+        );
+        if (applied) setComposerHighlightedItemId(null);
+        return applied;
+      });
+      return;
+    }
     if (item.type === "pull-request") {
       if (
         trigger.kind !== "pull-request" ||
@@ -2144,6 +2177,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       });
       return;
     }
+    const sentPrompt = promptRef.current;
     const submission = submitComposerDraft({
       prompt: promptRef.current,
       submissionTarget: activePendingProgress ? "pending-user-input" : "provider-turn",
@@ -2166,6 +2200,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     });
     setComposerSubmissionError(submission.validationMessage);
     if (!submission.didDispatch) return;
+    countSavedPromptUses(attachmentTargetKey, sentPrompt);
     onTypingGuardSend();
     if (shouldBlurMobileComposerOnSubmit()) {
       blurMobileComposerAfterSend();

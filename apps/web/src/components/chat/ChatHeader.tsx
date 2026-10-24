@@ -37,6 +37,7 @@ import { observeResize } from "~/lib/observeResize";
 import { cn } from "~/lib/utils";
 import { textDirection } from "~/textDirection";
 import { useClientSettings } from "../../hooks/useSettings";
+import { ThreadDecisions } from "~/plugins/kanban/ThreadDecisions";
 
 interface ChatHeaderProps {
   activeThreadEnvironmentId: EnvironmentId;
@@ -406,6 +407,7 @@ export const ChatHeader = memo(function ChatHeader({
           )}
         </WorkspaceBreadcrumbItem>
       </WorkspaceBreadcrumb>
+      <ThreadDecisions thread={isServerThread ? activeThreadRef : null} project={activeProject} />
     </div>
   );
 });

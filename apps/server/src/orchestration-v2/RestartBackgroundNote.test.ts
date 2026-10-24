@@ -127,6 +127,47 @@ it("names a lost subagent by the id the agent resumes it with", () => {
   );
 });
 
+it("names a lost subagent by the id the agent resumes it with", () => {
+  const ownShell = cancelledRosterTaskWork({
+    kind: "command",
+    taskId: "shell-1",
+    description: "sleep 150",
+    parentTaskId: "agent-1",
+  });
+  // The agent waits on the subagent, which waits on its shell.
+  assert.deepEqual(ownShell, {
+    kind: "subagent",
+    label: "sleep 150 (subagent agent-1)",
+    id: "agent-1",
+  });
+  assert.isTrue(isAwaitedWork(ownShell));
+  const long = cancelledRosterTaskWork({
+    kind: "command",
+    taskId: "shell-1",
+    description: "d".repeat(400),
+    parentTaskId: "agent-1",
+  }).label;
+  assert.lengthOf(long, 160);
+  assert.isTrue(long.endsWith("(subagent agent-1)"));
+  const longId = cancelledRosterTaskWork({
+    kind: "command",
+    taskId: "shell-1",
+    parentTaskId: "a".repeat(400),
+  }).label;
+  assert.lengthOf(longId, 160);
+  assert.isFalse(isAwaitedWork(cancelledRosterTaskWork({ kind: "command", taskId: "shell-2" })));
+  assert.equal(
+    cancelledTurnItemWork({
+      id: "item-1",
+      type: "subagent",
+      origin: "provider_native",
+      title: "Review",
+      nativeItemRef: { driver: "claudeAgent", nativeId: "agent-1", strength: "strong" },
+    } as never)?.label,
+    "Review (id agent-1)",
+  );
+});
+
 it("keeps separate cancelled tasks that share a kind and label", () => {
   const first = { kind: "shell" as const, label: "sleep 20", id: "item-1" };
   const second = { kind: "shell" as const, label: "sleep 20", id: "item-2" };

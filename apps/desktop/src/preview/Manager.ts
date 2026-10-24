@@ -2429,6 +2429,30 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
     (recover) => Effect.ignore(recover),
   );
 
+  // Only the session that saw the detach is replaced: by the time the event is
+  // handled the guest may already hold a newer one, which must stay.
+  const recoverDetachedControlSession = Effect.fn("PreviewManager.recoverDetachedControlSession")(
+    function* (wc: Electron.WebContents, detached: BrowserControlSession) {
+      const removed = yield* SynchronizedRef.modify(controlSessionsRef, (sessions) =>
+        sessions.get(wc.id) === detached
+          ? ([
+              true,
+              replaceMap(sessions, (copy) => {
+                copy.delete(wc.id);
+              }),
+            ] as const)
+          : ([false, sessions] as const),
+      );
+      if (!removed) return;
+      yield* releaseControlSession(detached);
+      if (wc.isDestroyed()) return;
+      const tabId = yield* tabIdForWebContents(wc.id);
+      if (tabId === null) return;
+      yield* restoreControlSession(tabId, wc);
+    },
+    (recover) => Effect.ignore(recover),
+  );
+
   const setColorScheme = Effect.fn("PreviewManager.setColorScheme")(function* (
     tabId: string,
     colorScheme: DesktopPreviewColorScheme,

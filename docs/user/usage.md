@@ -146,6 +146,53 @@ This connection supplies usage information; configure
 the provider separately to send agent requests through the hub. Remove the hub from the same
 settings section when you no longer need it.
 
+## Token budgets
+
+A budget is a limit on one efficiency measure for one model tier, judged in each project over
+the last seven whole days (UTC). By default each tier caps its output tokens per turn: 800 for
+cheap, 1,500 for standard and 3,000 for strong, judged once a project has at least 20 turns on
+that tier's model in the week. Going over raises an attention flag; coming back under clears it.
+Tiers come from the routing plugin, so the tier budgets judge nothing while it is off.
+
+A fourth budget caps the largest single tool result at 8,000 estimated tokens, judged once a
+project has at least 20 tool calls in the week. It counts every run, whatever its tier, and the
+tool calls a subagent makes, and works with the routing plugin off. Its flag names the tool and the
+thread, with a hint such as reading a line range or paginating. Sizes are estimates, not a
+tokenizer's counts: characters over four, with an inline image as 1,500. Shell commands group by the
+program they run, such as `command:git`; a Windows `cmd` or PowerShell wrapper groups under the
+wrapper (`command:cmd`, `command:pwsh`), and a heredoc or an alias under its first word.
+
+Edit each budget's threshold, minimum sample and on/off switch under **Plugins → Telemetry**.
+Turn a budget off to pause it; **Remove** deletes it and its history.
+
+Knowledge reuse, one of the telemetry measures, is the share of a project's runs that edited a file
+and first read a page under `.knowledge/`. It tells you whether the index in the instruction files
+is getting agents to read the pages, so it needs the knowledge plugin and at least one accepted
+page. Reads of the instruction files themselves do not count, since an agent loads those without a
+tool call.
+
+Two more measures look for work your agents keep doing by hand across a project's threads: the same
+commands in the same order, the same files read at the start of a thread, a search and then a read
+with a different pattern and file each time. Anything seen in at least three threads is a candidate,
+ranked by the estimated tokens it cost, with where it could live instead: a script in the
+repository, a hook that runs after edits, an MCP tool, a scheduled task, a few lines in the
+project's instruction file, or a skill. A single read, search or command that only changes its file
+or pattern is not a candidate, even when it runs several times in a row or right before a repeated
+command: choosing what to read is the agent's job, and those reads would outweigh every real
+procedure.
+
+Deterministic work share is the part of the tool calls' estimated tokens, output and input, spent on
+calls a candidate covers, each call counted once: steps repeated with the same files and patterns,
+alone or in a sequence, and sequences of different steps whose files or patterns change together.
+Everyday reads and searches of different files count only inside such a sequence. Lower is better.
+
+The weekly report lists the top five candidates under Efficiency, and an agent can list up to
+twenty, each with an example thread, with the `telemetry_extraction_candidates` tool. A window with
+fewer than three threads has no candidates. With the learning plugin on, a weekly review turns up to
+five of them into drafts you accept or dismiss on its **Deterministic** tab (see
+[Learning](./learning.md#deterministic)); nothing runs or turns on until you accept it, though a
+draft for new code is filed at once as a Triage card, which writes its file to the board's folder.
+
 ## Subscription usage widget
 
 Add **Subscription usage** from your iOS or Android widget gallery to see remaining Codex and

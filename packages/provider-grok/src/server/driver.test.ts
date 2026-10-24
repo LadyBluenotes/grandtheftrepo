@@ -170,6 +170,101 @@ it.layer(layerTest)("GrokDriver", (it) => {
     });
   }
 
+  // Each case puts a stub `brew` at `<prefix>/bin/brew` beside the Grok binary.
+  const homebrewCases = [
+    {
+      name: "upgrades a Homebrew grok-build cask through brew",
+      binary: ["Caskroom", "grok-build", "1.2.3,456", "grok"],
+      reportedPrefix: "own",
+      brewArgs: [["--prefix"], ["info", "--json=v2", "grok-build"]],
+      latestVersion: "1.2.4",
+      update: (brewPath: string, _binaryPath: string) => ({
+        command: "brew upgrade --cask grok-build",
+        executable: brewPath,
+        args: ["upgrade", "--cask", "grok-build"],
+        lockKey: "homebrew",
+      }),
+    },
+    {
+      // `grok update` would install a second copy beside the cask.
+      name: "stays manual-only for a cask another brew prefix owns",
+      binary: ["Caskroom", "grok-build", "1.2.3", "grok"],
+      reportedPrefix: "/opt/homebrew",
+      brewArgs: [["--prefix"]],
+      latestVersion: undefined,
+      update: () => null,
+    },
+    {
+      // A formula keg such as `node` holding an npm global is not Grok's owner.
+      name: "keeps grok update for an npm global inside a Homebrew node keg",
+      binary: [
+        "Cellar",
+        "node",
+        "22",
+        "lib",
+        "node_modules",
+        "@xai-official",
+        "grok",
+        "bin",
+        "grok",
+      ],
+      reportedPrefix: "own",
+      brewArgs: [],
+      latestVersion: undefined,
+      update: (_brewPath: string, binaryPath: string) => ({
+        executable: binaryPath,
+        args: ["update"],
+        lockKey: "grok",
+      }),
+    },
+  ] as const;
+
+  for (const testCase of homebrewCases) {
+    it.effect.skipIf(windowsHost)(testCase.name, () => {
+      const brewArgs: Array<ReadonlyArray<string>> = [];
+      let prefix = "";
+      return Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        prefix = yield* fs.realPath(yield* fs.makeTempDirectoryScoped({ prefix: "t3-grok-brew-" }));
+        const brewPath = path.join(prefix, "bin", "brew");
+        const binaryPath = path.join(prefix, ...testCase.binary);
+        for (const executable of [brewPath, binaryPath]) {
+          yield* fs.makeDirectory(path.dirname(executable), { recursive: true });
+          yield* fs.writeFileString(executable, "#!/bin/sh\n");
+          yield* fs.chmod(executable, 0o755);
+        }
+
+        const instance = yield* GrokDriver.create({
+          instanceId: ProviderInstanceId.make("grok-homebrew"),
+          displayName: "Grok test",
+          enabled: false,
+          environment: [],
+          config: { ...GrokDriver.defaultConfig(), binaryPath },
+        });
+        const capabilities = yield* instance.snapshot.resolveMaintenance();
+
+        const update = testCase.update(brewPath, binaryPath);
+        expect(brewArgs).toEqual(testCase.brewArgs);
+        expect(capabilities.latestVersion).toBe(testCase.latestVersion);
+        expect(capabilities.update).toEqual(update && expect.objectContaining(update));
+      }).pipe(
+        Effect.provideService(
+          ChildProcessSpawner.ChildProcessSpawner,
+          stdoutSpawner((command, args) => {
+            expect(command).toBe(`${prefix}/bin/brew`);
+            brewArgs.push(args);
+            if (args[0] === "--prefix") {
+              return `${testCase.reportedPrefix === "own" ? prefix : testCase.reportedPrefix}\n`;
+            }
+            return JSON.stringify({ casks: [{ version: "1.2.4,789" }] });
+          }),
+        ),
+        Effect.scoped,
+      );
+    });
+  }
+
   it.effect("stays manual-only when the configured executable does not exist", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;

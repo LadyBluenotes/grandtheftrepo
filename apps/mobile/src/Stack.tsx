@@ -119,6 +119,7 @@ import {
 } from "./features/settings/SettingsOpenSourceLicensesRouteScreen";
 import { SettingsProjectGroupingRouteScreen } from "./features/settings/SettingsProjectGroupingRouteScreen";
 import { SettingsProjectOverviewRouteScreen } from "./features/settings/SettingsProjectOverviewRouteScreen";
+import { KanbanBoardScreen } from "./features/kanban/KanbanBoardScreen";
 import { UsageLimitAccountScreen } from "./features/usage/UsageLimitsPooled";
 import { UsageRouteScreen } from "./features/usage/UsageRouteScreen";
 import { SettingsAboutRouteScreen } from "./features/settings/SettingsAboutRouteScreen";
@@ -434,6 +435,11 @@ const SettingsContentStack = createV5SheetStackNavigator({
       options: {
         title: "Usage",
       },
+    }),
+    SettingsKanbanBoard: createNativeStackScreen({
+      screen: KanbanBoardScreen,
+      linking: "board/:environmentId/:projectId",
+      options: { title: "Board" },
     }),
   },
 });

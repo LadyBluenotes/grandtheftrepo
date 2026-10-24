@@ -2864,7 +2864,12 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
   // against, so writing update manifests then crashes on a null config.
   buildConfig.publish = null;
   if (!isDesktopPreviewVersion(version)) {
-    const publishConfig = yield* resolveGitHubPublishConfig(updateChannel);
+    // Squirrel.Mac only installs an update signed to match the running app,
+    // which a later ad hoc signed build never is. An unsigned Mac build gets
+    // no release feed, so it ships without app-update.yml and never polls.
+    // An explicit mock-updates build still gets its local feed.
+    const publishConfig =
+      platform === "mac" && !signed ? undefined : yield* resolveGitHubPublishConfig(updateChannel);
     if (publishConfig) {
       buildConfig.publish = [publishConfig];
     } else if (mockUpdates) {
@@ -2917,7 +2922,14 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
           role: "Viewer",
         },
       ],
-      ...(signed ? { sign: path.join(repoRoot, "scripts/sign-macos.ts") } : {}),
+      // Without an identity electron-builder skips signing, so the app keeps
+      // Electron's linker signatures with no sealed bundle, which Gatekeeper
+      // reports as damaged once downloaded. Unsigned builds are signed ad hoc
+      // instead. Hardened runtime only serves notarization, and its library
+      // validation rejects ad hoc signed frameworks.
+      ...(signed
+        ? { sign: path.join(repoRoot, "scripts/sign-macos.ts") }
+        : { identity: "-", hardenedRuntime: false }),
       ...(macPasskeySigning
         ? {
             entitlements: macPasskeySigning.entitlementsPath,

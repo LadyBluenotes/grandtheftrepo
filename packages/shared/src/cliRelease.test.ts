@@ -1,8 +1,21 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import { cliArchiveTarCommand, newestCliReleaseVersion, parseChecksums } from "./cliRelease.ts";
+import {
+  cliArchiveTarCommand,
+  cliReleaseRepository,
+  newestCliReleaseVersion,
+  parseChecksums,
+} from "./cliRelease.ts";
 
 describe("cliRelease", () => {
+  it("uses a valid build release repository and otherwise falls back to upstream", () => {
+    expect(cliReleaseRepository(" LadyBluenotes/grandtheftrepo ")).toBe(
+      "LadyBluenotes/grandtheftrepo",
+    );
+    expect(cliReleaseRepository("invalid/repository/path")).toBe("pingdotgg/t3code");
+    expect(cliReleaseRepository(undefined)).toBe("pingdotgg/t3code");
+  });
+
   it("parses sha256sum output including binary-mode markers", () => {
     const checksums = parseChecksums(
       [

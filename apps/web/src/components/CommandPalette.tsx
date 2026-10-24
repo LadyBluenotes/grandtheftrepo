@@ -62,6 +62,7 @@ import {
   PaletteIcon,
   RotateCcwIcon,
   SettingsIcon,
+  SquareKanbanIcon,
   SquarePenIcon,
   TextSearchIcon,
 } from "lucide-react";
@@ -230,6 +231,7 @@ import { ComposerHandleContext, useComposerHandleContext } from "../composerHand
 import type { ChatComposerHandle } from "./chat/ChatComposer";
 import { buildSidebarProjectPickerEntries } from "../sidebarProjectGrouping";
 import { PullRequestGlyph } from "~/components/pullRequest/pullRequestIcons";
+import { findDecisionSearch, kanbanSupportedAtom } from "~/plugins/kanban/state";
 import { readPullRequestListPreferences } from "~/components/pullRequest/pullRequestListPreferences";
 import { useThreadRouteTarget } from "../hooks/useThreadRouteTarget";
 
@@ -1183,6 +1185,7 @@ function OpenCommandPaletteDialog(props: {
     if (firstOption) startNewProject(firstOption.environmentId, null);
   };
 
+  const kanbanSupported = useAtomValue(kanbanSupportedAtom);
   const actionItems: Array<CommandPaletteActionItem | CommandPaletteSubmenuItem> = [];
 
   if (projects.length > 0) {
@@ -1524,6 +1527,32 @@ function OpenCommandPaletteDialog(props: {
       icon: <PullRequestGlyph.pullRequest className={ITEM_ICON_CLASS} />,
       run: async () => {
         await navigate({ to: "/pull-requests", search: readPullRequestListPreferences() });
+      },
+    });
+  }
+
+  if (kanbanSupported) {
+    actionItems.push({
+      kind: "action",
+      value: "action:board",
+      searchTerms: ["board", "kanban", "issues", "tickets", "tasks", "decisions"],
+      title: "Open board",
+      icon: <SquareKanbanIcon className={ITEM_ICON_CLASS} />,
+      run: async () => {
+        await navigate({ to: "/board", search: {} });
+      },
+    });
+    actionItems.push({
+      kind: "action",
+      value: "action:find-decision",
+      searchTerms: ["find decision", "decisions", "search", "why", "alternatives", "kanban"],
+      title: "Find decision",
+      icon: <TextSearchIcon className={ITEM_ICON_CLASS} />,
+      run: async () => {
+        await navigate({
+          to: "/board",
+          search: (previous) => findDecisionSearch(previous, activeThread ?? activeDraftThread),
+        });
       },
     });
   }
