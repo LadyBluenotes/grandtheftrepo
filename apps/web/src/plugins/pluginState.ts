@@ -12,7 +12,7 @@ import { createContext, useContext } from "react";
 
 import { connectionAtomRuntime } from "~/connection/runtime";
 import { useServerConfigs } from "~/state/entities";
-import { usePrimaryEnvironmentId } from "~/state/environments";
+import { useEnvironmentProviders, usePrimaryEnvironmentId } from "~/state/environments";
 import { useEnvironmentQuery } from "~/state/query";
 
 const pluginStatuses = createPluginRpcQueryAtomFamily(connectionAtomRuntime, {
@@ -41,9 +41,12 @@ const NO_PROVIDERS: ReadonlyArray<ServerProvider> = [];
 export function usePluginServerConfig() {
   const environmentId = usePluginEnvironmentId();
   const configs = useServerConfigs();
+  const providersByEnvironment = useEnvironmentProviders();
   const config = environmentId === null ? undefined : configs.get(environmentId);
   return {
-    providers: config?.providers ?? NO_PROVIDERS,
+    providers:
+      (environmentId === null ? undefined : providersByEnvironment.get(environmentId)) ??
+      NO_PROVIDERS,
     settings: config?.settings ?? DEFAULT_SERVER_SETTINGS,
   };
 }
